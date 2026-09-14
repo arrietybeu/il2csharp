@@ -1,0 +1,478 @@
+from il2cpp.prelude import *  # noqa: F401,F403
+from il2cpp.cfg import LBL
+
+class _StructureMixin:
+    def _structure(self, blocks, bmap, m) -> List[str]:
+        # reachable blocks only (dead chunks after ret/jmp poison dominators);
+        # switch targets are already wired by _prewire_switches.
+        self.ip2bid = {b.insns[0].ip: b.bid for b in blocks if b.insns}
+        self._forward_empty(blocks)
+        reach = set()
+        stack = [0]
+        while stack:
+            x = stack.pop()
+            if x in reach:
+                continue
+            reach.add(x)
+            for sx in blocks[x].succs:
+                if sx >= 0 and sx not in reach:
+                    stack.append(sx)
+        self.reach = reach
+        rblocks = [blocks[i] for i in sorted(reach)]
+        rrpo = [b for b in self.rpo if b in reach]
+        dom = self._dominators(blocks, rrpo, reach)
+        pdom = self._postdominators(blocks, rrpo, reach)
+        self.pdom = {k: v for k, v in pdom.items()}
+        self.loop_of_hdr = self._loops(blocks, dom, reach)
+        self._sw_depth = 0
+        self._seh_regions = []
+        self._bstack = []
+        self._pclose = []
+        if getattr(self, 'eh', None) and self.eh.get('pads'):
+            self._seh_prepare(blocks, bmap, dom, reach)
+        raw: List[str] = []
+        self._seq(blocks, 0, set(), set(), raw, 0)
+        # any goto target that never got inlined gets its body appended
+        for _round in range(64):
+            have = set()
+            want = set()
+            for st in raw:
+                if st.startswith(LBL) and st.endswith(':'):
+                    have.add(st[len(LBL):-1])
+                elif 'goto L_' in st:
+                    want.update(re.findall(r'goto (L_[0-9a-f]+);', st))
+            todo = []
+            for lab in sorted(want - have):
+                bid = self.ip2bid.get(int(lab[2:], 16), -1)
+                if bid >= 0 and not blocks[bid].consumed:
+                    todo.append(bid)
+            if not todo:
+                break
+            for bid in todo:
+                if blocks[bid].consumed:
+                    continue
+                sub: List[str] = []
+                self._seq(blocks, bid, set(), set(), sub, 0)
+                self._seh_close_sublist(sub, blocks, 0)
+                if sub:
+                    raw.append('')
+                    raw.extend(sub)
+        if self._seh_regions:
+            # the walk may have abandoned one or more regions without
+            # reaching their close point (early returns inside loops/
+            # switches); drop each orphaned `try {` rather than ship
+            # unbalanced braces. Highest try_idx first, so an earlier
+            # region's recorded index isn't shifted by a later removal.
+            orphans = sorted((s for s in self._seh_regions
+                               if s.get('opened') and not s.get('closed')
+                               and s.get('try_idx') is not None and s.get('try_out') is raw),
+                              key=lambda s: s['try_idx'], reverse=True)
+            for seh in orphans:
+                ti = seh['try_idx']
+                if ti < len(raw) and raw[ti] == 'try' and raw[ti + 1] == '{':
+                    raw = raw[:ti] + raw[ti + 2:]
+                    seh['closed'] = True
+                    seh.setdefault('orphaned', True)
+            # deferred closes that never got a brace-pop flush: emit into
+            # the list where their try-brace lives so the braces stay paired
+            while self._pclose:
+                seh = self._pclose.pop(0)
+                lst = seh.get('try_out') or raw
+                if not seh.get('clause_end'):
+                    self._seh_emit_clause(blocks, lst, 0, seh)
+            if any(s.get('clause_end') for s in self._seh_regions):
+                raw = self._seh_dedupe(raw)
+        if self.phi_alias:
+            al = self.phi_alias
+            raw = [self._TOKRX.sub(lambda mm: al.get(mm.group(1), mm.group(1)), s)
+                   for s in raw]
+        raw = self._resolve_labels(raw)
+        raw = self._tidy_gotos(raw)
+        raw = self._drop_redundant_gotos(raw)
+        raw = self._resolve_labels(raw)
+        raw = self._hoist_shared_tails(raw)
+        raw = self._resolve_labels(raw)
+        raw = self._drop_dead_copies(raw)
+        raw = self._drop_dead_temps(raw)
+        raw = [self._fold_consts(x) for x in raw]
+        raw = self._for_sugar(raw)
+        raw = self._foreach_sugar(raw)
+        # fix 50: a for-head cond re-rendering a call a preceding
+        # decl holds folds to the token (probe_b41_forhead.py proved
+        # the native loop does not re-call); after _foreach_sugar so
+        # the foreach matcher sees the input it always did
+        raw = self._forhead_call_fold(raw)
+        raw = self._switch_to_if(raw)
+        raw = self._rename_locals(raw)
+        raw = self._bool_sugar(raw, m)
+        raw = self._flag_inline(raw)
+        raw = self._compound_assign(raw)
+        raw = self._ternary(raw)
+        raw = self._null_conditional(raw)
+        raw = self._null_ternary_sugar(raw)
+        raw = self._redundant_else(raw)
+        raw = self._lock_sugar(raw)
+        raw = self._using_sugar(raw)
+        raw = self._is_sugar(raw)
+        raw = self._image_table_fold(raw)
+        raw = self._sfblob_dedupe(raw)
+        raw = self._class_init_strip(raw)
+        raw = self._member_fold(raw)
+        # fix 72c: again, after the fold -- the byte-cast store twin
+        # and the named spelling _fold_static_addrs just minted only
+        # coexist from here on (at the call above neither exists).
+        raw = self._sfblob_dedupe(raw)
+        # after _member_fold so the RHS reads the folded `.Instance`, not
+        # the raw `.<Instance>k__BackingField` -- see _singleton_cse.
+        raw = self._singleton_cse(raw)
+        raw = self._value_cse(raw)
+        raw = self._copy_prop(raw)
+        # fix 49: bare self-copies are no-ops even loop-carried;
+        # _copy_prop's substitution MINTS them (backedge phi copy
+        # whose source resolves to the same local), so the drop
+        # runs right after it (probe_b41_stages.py: 0->12 there,
+        # 12->12 everywhere later)
+        raw = self._selfcopy_drop(raw)
+        raw = self._drop_dead_locals(raw)
+        # fix 51b: later passes MINT shapes the early run (before
+        # _drop_dead_temps) can never see -- dead-store drops empty the
+        # arms around gotos, _redundant_else restructures siblings --
+        # so the hoist runs once more on the final shapes
+        # (classify_into2 SOUND=47 at b41_out1 is this residue)
+        raw = self._hoist_shared_tails(raw)
+        # fix 45: later passes unblock pairs the first run (after
+        # _bool_sugar) refused -- _copy_prop substitutes flag-to-flag
+        # copies and _drop_dead_locals deletes dead flag decls, so a
+        # multi-mention pair can be single-use by the pipeline end
+        # (193 adjacent pairs in AC at b39_out1). Same guards; loop
+        # heads still never match (exact if-head shapes only).
+        raw = self._flag_inline(raw)
+        raw = self._elseif_flatten(raw)
+        # fix 72e: the flat chains the flattener just produced are
+        # the switch-synthesis input; nothing after this point
+        # restructures them
+        raw = self._switch_synth(raw)
+        # fix 55: LAST -- `_drop_dead_locals` (flow-insensitive) and
+        # `_copy_prop`'s sweep (blocked by any later goto) both run
+        # before the late `_hoist_shared_tails` mints more dead
+        # last-defs, and neither can drop a store whose destination is
+        # read only EARLIER in the method. This one can, when no
+        # backward flow reaches that earlier read.
+        raw = self._drop_dead_lastdef(raw)
+        # fix 75b: the cached-delegate backer triple folds to
+        # the ?? spelling (the cctor artifact, the shared-ctor
+        # call and the phi copies go with it)
+        raw = self._delegate_cache_fold(raw)
+        rendered = self._name_interface_dispatch(self._render(raw))
+        return self._semantic_local_names(rendered, m)
+
+    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # witness counts over this binary's 4,526 pad-bearing methods are
+    # strongly bimodal -- 3269, 304, 181, 177, 39, 11, then 6, 5, 4, 3 --
+    # and every straggler resolves to a shared generic thunk that chains
+    # into a Dispose, so the cut sits inside the 6..11 gap
+    # measured over all 4,526 pad-bearing methods, AFTER the named-plumbing
+    # and noreturn filters below: 3347, 183, then 13, 13, 8. Cutting in that
+    # 183 -> 13 gap (14x) keeps only the decisively witnessed helpers; the
+    # first draft used 10, which sat inside a dense 13/13/12/8 cluster of
+    # scan-continuation artifacts. -- fix 91
+    _EH_HELPER_MIN_WITNESSES = 25
+    # a role decided 13:12 is a coin flip, and the two roles render
+    # differently (`throw;` vs `throw x;`), so require a decisive margin
+    _EH_HELPER_MIN_DOMINANCE = 4
+
+    def _ensure_eh_helper_set(self):
+        """Prove the program's throw helpers once, from the whole binary.
+
+        Fix 90 made helper naming per-method, which is honest but narrow:
+        a method with no EH pad of its own can never name a helper, so
+        throw renderings collapsed and bare helper calls took their place.
+        Over a fixed 400-method sample, counted with identical needles in
+        both configurations, this set restores 11 -> 17 throw renderings and
+        takes residual calls to the proven helpers from 6 to 0. Corpus-wide
+        figures belong in the review writeup, measured, not here: the first
+        draft of this docstring quoted 3,113 -> 267 and 460 -> 3,366, and
+        those two scans had counted with different needles.
+
+        Program-wide evidence restores that coverage. Two cheaper sources
+        were tried first and rejected on measurement:
+          * the helper's callee -- the stubs funnel into unnamed native
+            plumbing, and one sink is shared by five unregistered helpers
+            and thirty-six registered managed methods, so it would
+            re-admit AsyncTaskMethodBuilder.SetException, the exact defect
+            fix 90 removed;
+          * a linear window at each pad instead of real blocks -- 0.6s,
+            but it inverted role dominance for 0x1804356b0 (truly 283
+            rethrow / 24 raise, approximated as 617 / 1829), which would
+            emit `throw x;` where `throw;` belongs.
+
+        So this runs the real shape detection over every pad-bearing
+        method (1.7s for 4,526 here) and keeps only targets _eh_helper_ok
+        already accepts -- which now also rejects runtime plumbing the
+        lifter can already name, and any routine with a reachable `ret` --
+        and then only where at least _EH_HELPER_MIN_WITNESSES independent
+        methods agree, by a margin of _EH_HELPER_MIN_DOMINANCE. Here that
+        proves exactly two: 0x180435740 rethrow (3403 witnesses vs 126) and
+        0x180435670 raise (183 vs 25). An earlier draft trusted the witness
+        count alone and published six, three of which were runtime plumbing
+        and one of which simply returns. -- fix 91
+        """
+        L = self.L
+        if getattr(L, 'eh_helper_set', None) is not None:
+            return
+        # publish the sentinel before scanning: the scan calls straight
+        # back into _seh_helpers, and a half-built set must never be
+        # observable to a render
+        L.eh_helper_set = {}
+        il = getattr(L, 'il', None)
+        meta = getattr(il, 'meta', None)
+        if meta is None or not hasattr(il, 'eh_regions'):
+            return
+        votes = {'rethrow_va': {}, 'raise_va': {}}
+        for m in getattr(meta, 'methods', ()) or ():
+            addr = getattr(m, 'addr', 0)
+            if not addr:
+                continue
+            try:
+                eh = il.eh_regions(addr)
+            except Exception:
+                continue
+            if not eh or not (eh.get('pads') or ()):
+                continue
+            try:
+                self.eh = eh
+                insns, skip = self._decode(m)
+                if not insns:
+                    continue
+                self.skip_ips = skip
+                self.entry_ip = insns[0].ip
+                self.last_ip = insns[-1].next_ip
+                self._flat_insns = insns
+                self._flat_ip_idx = {ins.ip: i for i, ins in enumerate(insns)}
+                blocks, bmap = self._make_blocks(
+                    insns, skip, self._scan_jump_table_leaders(insns))
+                if not blocks or len(blocks) > 3000:
+                    continue
+                self._pad_bids = set()
+                for p in eh.get('pads') or ():
+                    bi = bmap.get(p)
+                    if bi is not None:
+                        self._pad_bids.add(bi)
+                L.rethrow_va = None
+                L.raise_va = None
+                self._seh_helpers(blocks, bmap)
+            except Exception:
+                continue
+            for role in ('rethrow_va', 'raise_va'):
+                va = getattr(L, role, None)
+                if va:
+                    votes[role][va] = votes[role].get(va, 0) + 1
+        proven = {}
+        for va in sorted(set(votes['rethrow_va']) | set(votes['raise_va'])):
+            nre = votes['rethrow_va'].get(va, 0)
+            nra = votes['raise_va'].get(va, 0)
+            if max(nre, nra) < self._EH_HELPER_MIN_WITNESSES:
+                continue
+            # 0x1804346b0 is noreturn, so plausibly a helper, but it was
+            # witnessed 12 rethrow / 13 raise: nothing in that split says
+            # which role it plays, so it must not be published at all
+            lo = min(nre, nra)
+            if lo and max(nre, nra) < lo * self._EH_HELPER_MIN_DOMINANCE:
+                continue
+            proven[va] = 'rethrow_va' if nre >= nra else 'raise_va'
+        L.eh_helper_set = proven
+        L.rethrow_va = None
+        L.raise_va = None
+
+    def _eh_helper_ok(self, va):
+        """True when `va` can be an il2cpp EH runtime helper.
+
+        The pad shapes alone are too weak to name one: across 4,526
+        pad-bearing methods they picked 51 registered managed methods as the
+        rethrow helper -- AsyncTaskMethodBuilder.SetException,
+        Debug.LogException, Marshal.FreeHGlobal, even DateTime.AddYears --
+        so every method calling one of those rendered `throw;` in place of
+        the call. A real helper is unregistered native code: no MethodDef
+        owns it and it is not an export. -- fix 90
+        """
+        if not va:
+            return False
+        il = getattr(self.L, 'il', None)
+        if il is None:
+            return True
+        if va in (getattr(il, 'addr_to_method', None) or {}):
+            return False
+        # addr_candidates is a defaultdict; .get keeps this probe side-effect free
+        cands = getattr(il, 'addr_candidates', None)
+        if cands is not None and cands.get(va):
+            return False
+        b = getattr(il, 'bin', None)
+        if b is not None and va in (getattr(b, 'exports', None) or {}):
+            return False
+        # ...and it must not be plumbing the lifter has ALREADY named. The
+        # pad shapes taught 0x180435420 as the rethrow in 181 methods, but
+        # it is a jmp thunk onto il2cpp_codegen_initialize_runtime_metadata:
+        # rendering its call sites as `throw;` ate the
+        # il2cpp_codegen_initialize_runtime_metadata(typeof(...)) lines and
+        # cascaded into the following allocation. 0x1804356a0 and
+        # 0x1804356b0 are raise_IndexOutOfRangeException and
+        # raise_NullReferenceException -- real throw helpers, but each
+        # raises one specific new exception and already carries an honest
+        # evidence-derived name, so flattening them to a bare `throw;`
+        # loses which exception is thrown. Mirror the naming path: if the
+        # lifter can name the target, a structural guess must not relabel
+        # it. -- fix 91
+        L = self.L
+        names = getattr(L, 'rt_names', None) or {}
+        if va in names:
+            return False
+        for attr in ('rt_init_meta', 'rt_alloc', 'rt_value_box', 'rt_sqrt'):
+            if va == getattr(L, attr, None):
+                return False
+        for attr in ('rt_arrnew', 'rt_wbarrier'):
+            if va in (getattr(L, attr, None) or ()):
+                return False
+        twin = getattr(L, '_is_class_init_twin', None)
+        if twin is not None:
+            try:
+                if twin(va):
+                    return False
+            except Exception:
+                pass
+        final = getattr(L, '_thunk_final', None)
+        if final is not None:
+            try:
+                t = final(va)
+            except Exception:
+                t = None
+            # _thunk_final also walks `sub rsp,N; call T` noreturn
+            # forwarders, and genuine throw helpers are shaped exactly like
+            # that, so only a resolution the lifter can NAME disqualifies
+            # the candidate -- never the mere fact that it resolves
+            if t is not None and t != va:
+                if t in names or t == getattr(L, 'rt_init_meta', None):
+                    return False
+                if b is not None and t in (getattr(b, 'exports', None) or {}):
+                    return False
+        # ...and a throw helper never comes back. 0x180002650 was taught as
+        # the rethrow helper by 45 pad-bearing methods, yet its body is
+        # `movsxd rdx,[rcx+10h]; ...; ret` -- ordinary code the pad scan
+        # only reached because the real helper ahead of it was skipped.
+        # Four more returning routines were accepted the same way, so every
+        # method calling one of them rendered a fabricated `throw;`.
+        if self._eh_helper_returns(va):
+            return False
+        return True
+
+    def _eh_helper_returns(self, va):
+        """True when `va` positively contains a reachable `ret`.
+
+        An il2cpp throw helper is noreturn by construction: its call site is
+        followed by int3 padding, which _make_blocks already reads as
+        ('abort',). A `ret` before that padding is therefore proof the
+        target is not a throw helper, whatever the pad shapes voted, and
+        unlike a witness count it is a property of the callee alone -- so
+        it screens the per-method evidence and the program-wide set alike.
+        Only positive evidence rejects: an unreadable target keeps the
+        previous behaviour. -- fix 91
+        """
+        cache = getattr(self, '_eh_returns_cache', None)
+        if cache is None:
+            cache = self._eh_returns_cache = {}
+        if va in cache:
+            return cache[va]
+        res = False
+        il = getattr(self.L, 'il', None)
+        b = getattr(il, 'bin', None) if il is not None else None
+        code = None
+        if HAVE_ICED and b is not None:
+            try:
+                if b.is_exec_va(va):
+                    code = b.read(va, 256)
+            except Exception:
+                code = None
+        if code:
+            try:
+                dec = Decoder(64, code, DecoderOptions.NONE)
+                dec.ip = va
+                seen = 0
+                for ins in dec:
+                    if ins.is_invalid:
+                        break
+                    if ins.mnemonic in (Mnemonic.INT3, Mnemonic.UD2):
+                        break
+                    if ins.mnemonic == Mnemonic.RET:
+                        res = True
+                        break
+                    seen += 1
+                    if seen >= 64:
+                        break
+            except Exception:
+                res = False
+        cache[va] = res
+        return res
+
+    def _seh_helpers(self, blocks, bmap):
+        """Name the EH runtime helpers from the pad shapes, before lifting:
+        the rethrow is the call in the branch target of the pad's wrapper
+        test; the raise is the final call of a trapping pad.
+
+        Both are per-method evidence only: lift_method clears them for every
+        method, and a candidate must pass _eh_helper_ok -- an unqualified
+        call is skipped, not accepted. -- fix 90
+        """
+        L = self.L
+        for p in self.eh.get('pads') or ():
+            bi = bmap.get(p)
+            if bi is None:
+                continue
+            comp = []
+            seen = set()
+            stack = [bi]
+            while stack:
+                x = stack.pop()
+                if x in seen:
+                    continue
+                seen.add(x)
+                comp.append(x)
+                for s in blocks[x].succs:
+                    if s >= 0 and s not in seen:
+                        stack.append(s)
+            for cb in comp:
+                for ins in blocks[cb].insns:
+                    if ins.flow_control == FlowControl.CONDITIONAL_BRANCH                             and ins.op0_kind == OpKind.NEAR_BRANCH64:
+                        tb = bmap.get(ins.near_branch_target)
+                        if tb is None:
+                            continue
+                        for w in blocks[tb].insns:
+                            if w.mnemonic == Mnemonic.CALL and w.op0_kind == OpKind.NEAR_BRANCH64:
+                                if not self._eh_helper_ok(w.near_branch_target):
+                                    continue
+                                L.rethrow_va = w.near_branch_target
+                                return
+            for cb in sorted(comp, reverse=True):
+                if blocks[cb].term and blocks[cb].term[0] == 'abort':
+                    for w in reversed(blocks[cb].insns):
+                        if w.mnemonic == Mnemonic.CALL and w.op0_kind == OpKind.NEAR_BRANCH64:
+                            if not self._eh_helper_ok(w.near_branch_target):
+                                continue
+                            L.raise_va = w.near_branch_target
+                            return
+
+    _GETCLASS_RX = re.compile(r'^\s*(?:[A-Za-z_][\w.]*\s+)?(\w+) = ([\w.]+)\.getClass\(\);')
+    _DEPTH_RX = re.compile(
+        r'(\w+)\.typeHierarchyDepth < ((?:typeof\([^)]*\))|\w+)\.typeHierarchyDepth')
+    _HIER_RX = re.compile(
+        # fix 61c gave a 16-bit zero-extension its own mask spelling;
+        # accept both so a source-width change cannot silently stop
+        # this batch-16 pattern from matching
+        # fix 68c: _bool_sugar's balanced-paren walk (fix 68) now
+        # strips this mask's own wrapper along with it -- nothing
+        # needs those parens once the mask is gone -- so they can no
+        # longer be assumed present either.
+        r'\*\((\w+)\.typeHierarchy \+ \(?((?:typeof\([^)]*\))|\w+)\.typeHierarchyDepth(?: & 0xFF(?:FF)?/\*z\*/)?\)?\*8 - 0x8\) != (\2|\w+)')
+
+    _IMG_TABLE_RX = re.compile(
+        r'\*\(&data_180000000 \+ ((?:(?!&data_180000000).)+?) \+ (0x[0-9a-f]+)\)'
+        r' \+ &data_180000000\b')

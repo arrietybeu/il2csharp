@@ -1,0 +1,1373 @@
+from il2cpp.prelude import *  # noqa: F401,F403
+from il2cpp.cfg import INT_TY, _match_brace
+from il2cpp.metadata import MethodDef
+from il2cpp.names import safe_ident
+from il2cpp.stmt_text import _split_top
+
+class _HighLevelMixin:
+    def _jumps_into(self, lines, lo, hi) -> bool:
+        """Any goto outside [lo, hi) targets a label inside the span."""
+        inner = {m.group(1) for k in range(lo, min(hi, len(lines)))
+                 for m in self._GOTO_RX.finditer(lines[k])}
+        labels = {lines[k].strip()[:-1] for k in range(lo, min(hi, len(lines)))
+                  if self._LBLDEF_RX.match(lines[k].strip())}
+        for k, st in enumerate(lines):
+            if lo <= k < hi:
+                continue
+            for m in self._GOTO_RX.finditer(st):
+                if m.group(1) in labels and m.group(1) not in inner:
+                    return True
+        return False
+
+    def _redundant_else(self, lines: List[str]) -> List[str]:
+        """Drop an `else` arm's keyword when the if-arm provably ends
+        in an unconditional flow-break (return/throw/goto/break/
+        continue): control never falls past the then-arm, so the
+        else-arm is plain fall-through. Its braces splice out with the
+        keyword (no bare-block nesting); that cannot reassociate any
+        inner else -- the inner token sequence is unchanged, and a
+        dangling else after the splice would have dangled before it
+        too. Brace matching counts only lines that ARE braces (the
+        _seq shapes), so braces inside string literals on statement
+        lines cannot skew depth. fix 41; 1,054 sites at b37_out1."""
+        out = list(lines)
+        while True:
+            n = len(out)
+            fold = None
+            for i in range(n):
+                if out[i].strip() != 'else':
+                    continue
+                j = i - 1
+                while j >= 0 and not out[j].strip():
+                    j -= 1
+                if j < 0 or out[j].strip() != '}':
+                    continue
+                depth = 0
+                openk = -1
+                k = j
+                while k >= 0:
+                    t = out[k].strip()
+                    if t == '}' or t.startswith('} while'):
+                        depth += 1
+                    elif t == '{':
+                        depth -= 1
+                        if depth == 0:
+                            openk = k
+                            break
+                    k -= 1
+                if openk < 1:
+                    continue
+                last = ''
+                for q in range(j - 1, openk, -1):
+                    if out[q].strip():
+                        last = out[q].strip()
+                        break
+                if not last.startswith(('return', 'throw', 'goto ',
+                                        'break;', 'continue;')):
+                    continue
+                nxt = i + 1
+                while nxt < n and not out[nxt].strip():
+                    nxt += 1
+                if nxt < n and out[nxt].strip() == '{':
+                    c = _match_brace(out, nxt)
+                    if c is None or c < 0:
+                        continue
+                    fold = (i, nxt, c)
+                else:
+                    fold = (i,)
+                break
+            if fold is None:
+                return out
+            drop = set(fold)
+            out = [ln for x, ln in enumerate(out) if x not in drop]
+
+    def _lock_sugar(self, lines: List[str]) -> List[str]:
+        """lock (obj) { ... } for the compiled Monitor shape: Enter(obj,
+        &taken) ... if (taken != 0) { Exit(obj); }. MSVC duplicates the
+        finally guard on every exit path, so a lock region collects every
+        guard up to the next Enter of the same flag; the duplicated guards
+        vanish inside the lock (Exit is implicit) and the last one closes
+        the block."""
+        out = list(lines)
+        for _ in range(8):
+            # segment: each Enter owns the guards up to the next Enter
+            enters = []
+            for i, st in enumerate(out):
+                m = self._ENTER_RX.match(st.strip())
+                if m:
+                    enters.append((i, m.group(1).strip(), m.group(2)[1:]))
+            hit = None
+            for e, (i, obj, flag) in enumerate(enters):
+                stop = enters[e + 1][0] if e + 1 < len(enters) else len(out)
+                guards = []
+                for k in range(i + 1, min(stop, len(out) - 3)):
+                    if out[k].strip() not in ('if (%s != 0)' % flag,
+                                              'if (!(%s == 0))' % flag):
+                        continue
+                    em = self._EXIT_RX.match(out[k + 2].strip()) \
+                        if out[k + 1].strip() == '{' else None
+                    if em and self._norm_obj(em.group(1)) == obj \
+                            and out[k + 3].strip() == '}':
+                        guards.append(k)
+                if guards and stop - i < 400:
+                    hit = (i, guards, obj)
+                    break
+            if hit is None:
+                return out
+            i, guards, obj = hit
+            last = guards[-1]
+            body = out[i + 1:last]
+            for g in reversed(guards[:-1]):
+                # drop each duplicated finally guard (4 balanced lines)
+                body = [s for j, s in enumerate(body) if not (g - i - 1 <= j < g - i + 3)]
+            out = out[:i] + ['lock (%s)' % obj, '{'] + body + ['}'] + out[last + 4:]
+        return out
+
+    @staticmethod
+    def _norm_obj(s: str) -> str:
+        return re.sub(r'^\*\((&?[\w.]+) \+ 0x0\)$', r'\1', s.strip())
+
+    # ------------------------------------------------------------------
+    _GUARD_HDR_RX = re.compile(r'^if \(([\w.]+) != null\)$')
+    _GUARD_HDR2_RX = re.compile(r'^if \(!\(([\w.]+) == null\)\)$')
+    _DISPOSE_RX = re.compile(r'^([\w.]+)\.Dispose\(\);$')
+    _NEWDECL_RX = re.compile(r'^[\w.<>\[\],` ]+? ([\w.]+) = (new .+);$')
+
+    _CASTDISP_RX = re.compile(r'^sub_\w+\(0, typeof\(System\.IDisposable\), (.+?), ')
+    _HDRDREF_RX = re.compile(r'^\*\((&?[\w.\[\]]+) \+ 0x0\)$')
+    _NEZERO_RX = re.compile(r'^if \((.+) != 0\)$')
+    _NEZERO2_RX = re.compile(r'^if \(!\((.+) == 0\)\)$')
+    _EZERO_RX = re.compile(r'^if \((.+) == 0\)$')
+
+    @staticmethod
+    def _match_brace(st: List[str], open_idx: int):
+        """Index of the line closing the brace opened at open_idx ('{')."""
+        d = 0
+        for k in range(open_idx, len(st)):
+            d += st[k].count('{') - st[k].count('}')
+            if k > open_idx and d <= 0:
+                return k
+        return None
+
+    def _dispose_guard_recv(self, fin: List[str]):
+        """The disposable X for a dispose guard of either orientation --
+        `if (R != 0) { cast(IDisposable, R); ... }` or `if (R == 0) { }
+        else { cast(...); ... }` -- where R is X or its header deref
+        `*(X + 0x0)` / `*(&X + 0x0)`. None for anything else.
+        Returns (X, dup temps)."""
+        if len(fin) < 4 or fin[1] != '{':
+            return None
+        m = self._NEZERO_RX.match(fin[0]) or self._NEZERO2_RX.match(fin[0])
+        if m:
+            if '}' not in fin[2:]:
+                return None
+            close = fin.index('}', 2)
+            if close + 1 != len(fin):
+                return None
+            inner = fin[2:close]
+            cond_r = m.group(1)
+        else:
+            m2 = self._EZERO_RX.match(fin[0])
+            if not (m2 and len(fin) >= 6 and fin[2] == '}' and fin[3] == 'else'
+                    and fin[4] == '{'):
+                return None
+            close = fin.index('}', 5)
+            if close + 1 != len(fin):
+                return None
+            inner = fin[5:close]
+            cond_r = m2.group(1)
+        cm = self._CASTDISP_RX.match(inner[0]) if inner else None
+        if not cm:
+            return None
+        dups = []
+        for b in inner[1:]:
+            if self._CASTDISP_RX.match(b):
+                continue
+            dm2 = re.match(r'^([\w.]+) = sub_\w+\(', b)
+            if dm2:
+                dups.append(dm2.group(1))
+                continue
+            if b.startswith('goto '):
+                continue
+            return None
+
+        def base(r: str) -> str:
+            hm = self._HDRDREF_RX.match(r.strip())
+            return (hm.group(1) if hm else r.strip()).lstrip('&')
+
+        x = base(cm.group(1))
+        if base(cond_r) != x:
+            return None
+        return x, dups
+
+    def _using_fold(self, lines, st, i, fb, x):
+        """For a finally at i closing at fb with disposable x: fold the
+        enclosing `T x = new ...; try { B } finally { dispose }` into
+        `using (x) { B }`. The raw braces may drift unbalanced inside the
+        try body, so the try span is located tolerantly (nearest `}`
+        above the finally, nearest `try {` above that)."""
+        j = i - 1
+        while j >= 0 and not st[j]:
+            j -= 1
+        if j < 0 or st[j] != '}':
+            return None
+        tb = j
+        k = tb - 1
+        tri = None
+        while k > 0:
+            if st[k] == 'finally':
+                return None
+            if st[k] == '{' and st[k - 1] == 'try':
+                tri = k - 1
+                break
+            k -= 1
+        if tri is None:
+            return None
+        dm = self._NEWDECL_RX.match(st[tri - 1]) if tri > 0 else None
+        reass = any(re.match(r'^%s = ' % re.escape(x), b) for b in st[tri + 2:tb])
+        if not (dm and dm.group(1) == x) or reass:
+            return None
+        if self._jumps_into(lines, tri + 2, fb):
+            return None
+        seg = ['using (%s)' % x, '{'] + lines[tri + 2:tb] + ['}']
+        return lines[:tri] + seg + lines[fb + 1:]
+
+    def _using_pass(self, lines: List[str]) -> List[str]:
+        st = [s.strip() for s in lines]
+        n = len(lines)
+        i = 0
+        while i < n:
+            if st[i] == 'finally' and i + 1 < n and st[i + 1] == '{':
+                fb = self._match_brace(st, i + 1)
+                if fb is not None:
+                    g = self._dispose_guard_recv(st[i + 2:fb])
+                    if g is not None:
+                        x, dups = g
+                        dup_live = any(
+                            re.search(r'(?<![\w.])%s(?![\w])' % re.escape(d), s2)
+                            for d in dups for s2 in st[:i] + st[fb + 1:])
+                        if not dup_live:
+                            fold = self._using_fold(lines, st, i, fb, x)
+                            if fold is not None:
+                                return fold
+                            return lines[:i + 1] + ['{', '%s?.Dispose();' % x, '}'] \
+                                + lines[fb + 1:]
+            # bare in-body guard: if (R != 0) { cast(R); [dup;] } -> X?.Dispose();
+            if st[i].startswith('if (') and i + 1 < n and st[i + 1] == '{' \
+                    and '}' not in st[i]:
+                cb = self._match_brace(st, i + 1)
+                if cb is not None:
+                    g = self._dispose_guard_recv(st[i:cb + 1])
+                    if g is not None:
+                        x, dups = g
+                        dup_live = any(
+                            re.search(r'(?<![\w.])%s(?![\w])' % re.escape(d), s2)
+                            for d in dups for s2 in st[:i] + st[cb + 1:])
+                        if not dup_live:
+                            return lines[:i] + ['%s?.Dispose();' % x] + lines[cb + 1:]
+            i += 1
+        return lines
+
+    def _using_sugar(self, lines: List[str]) -> List[str]:
+        """using (x) { ... } for the compiled finally-dispose guard. The
+        finally renders as `if (R != 0) { cast(IDisposable, R); ... }`
+        with R the disposable (possibly through its header deref). The
+        guard simplifies to `x?.Dispose();`, and a directly preceding
+        `T x = new ...;` folds the whole try/finally into `using (x)`.
+        The fixpoint folds nested usings inside-out."""
+        for _ in range(12):
+            new = self._using_pass(lines)
+            if new == lines:
+                return lines
+            lines = new
+        return lines
+
+    # ------------------------------------------------------------------
+    _ASGN_RX = re.compile(r'^(.+?) = (.*);$')
+    _NULLCOND_RX = re.compile(r'^([\w.]+) != null$')
+    _NULLCOND2_RX = re.compile(r'^!\(([\w.]+) == null\)$')
+
+    @classmethod
+    def _null_test_var(cls, cond: str):
+        """X for `X != null` / `!(X == null)`, else None."""
+        m = cls._NULLCOND_RX.match(cond) or cls._NULLCOND2_RX.match(cond)
+        return m.group(1) if m else None
+
+    def _ternary(self, lines: List[str]) -> List[str]:
+        """Fixpoint: else-if chains fold bottom-up, each round turning one
+        more single-assignment if/else into a ?: expression."""
+        for _ in range(6):
+            new = self._ternary_pass(lines)
+            if new == lines:
+                return lines
+            lines = new
+        return lines
+
+    def _ternary_pass(self, lines: List[str]) -> List[str]:
+        """`if (c) { x = a; } else { x = b; }` -> `x = c ? a : b;` -- when
+        both arms are a single assignment to the same lvalue. Each arm's
+        assignment only ever executed under its condition, so folding
+        preserves the evaluation order. A null else-arm over `x != null`
+        becomes the null-conditional `x?.member` form."""
+        out: List[str] = []
+        i = 0
+        n = len(lines)
+        while i < n:
+            s = lines[i].strip()
+            if s.startswith('if (') and s.endswith(')') \
+                    and i + 8 <= n and lines[i + 1].strip() == '{' \
+                    and lines[i + 3].strip() == '}' \
+                    and lines[i + 4].strip() == 'else' \
+                    and lines[i + 5].strip() == '{' \
+                    and lines[i + 7].strip() == '}':
+                m1 = self._ASGN_RX.match(lines[i + 2].strip())
+                m2 = self._ASGN_RX.match(lines[i + 6].strip())
+                # fix 97: either arm may carry its declaration (`bool x`
+                # vs `x`) now that first-use bare assignments declare.
+                # Compare the temp, keep the declaration. `var` keeps
+                # the old exact-match behavior.
+                lvs = []
+                for mm in (m1, m2):
+                    if mm is None:
+                        lvs = None
+                        break
+                    tm = re.fullmatch(r'(?!var\b)[A-Za-z_][\w.<>\[\]]*\s+'
+                                      r'(obj\d+|num\d+|real\d+|flag\d+)', mm.group(1))
+                    key = tm.group(1) if tm else mm.group(1)
+                    lvs.append((mm.group(1), key, tm is not None))
+                if lvs is not None and lvs[0][1] == lvs[1][1] \
+                        and '&&' not in m1.group(1) and '=' not in m1.group(1)[1:] \
+                        and '?' not in lines[i]:
+                    lv = lvs[0][0] if lvs[0][2] or not lvs[1][2] else lvs[1][0]
+                    cond = s[3:].strip()
+                    if cond.startswith('(') and cond.endswith(')'):
+                        cond = cond[1:-1]
+                    cm = self._null_test_var(cond)
+                    if cm and m2.group(2).strip() == 'null' \
+                            and m1.group(2).startswith(cm + '.'):
+                        out.append('%s%s = %s?.%s;' % (
+                            lines[i][:len(lines[i]) - len(lines[i].lstrip())],
+                            lv, cm, m1.group(2)[len(cm) + 1:]))
+                        i += 8
+                        continue
+                    out.append('%s%s = %s ? %s : %s;' % (
+                        lines[i][:len(lines[i]) - len(lines[i].lstrip())],
+                        lv, cond, m1.group(2), m2.group(2)))
+                    i += 8
+                    continue
+            out.append(lines[i])
+            i += 1
+        return out
+
+    # ------------------------------------------------------------------
+    def _null_conditional(self, lines: List[str]) -> List[str]:
+        """`if (x != null) { x.M(...); }` -> `x?.M(...);` when the guarded
+        body is a single statement rooted at the tested object."""
+        out: List[str] = []
+        i = 0
+        n = len(lines)
+        while i < n:
+            s = lines[i].strip()
+            m = self._null_test_var(s[4:-1].strip()) if s.startswith('if (') and s.endswith(')') else None
+            if m and i + 3 < n and lines[i + 1].strip() == '{' \
+                    and lines[i + 3].strip() == '}':
+                st = lines[i + 2].strip()
+                if st.startswith(m + '.') and not re.match(
+                        r'[\w.\[\]<>]+\s*(?:[+\-*/%&|^]|\?\?)?\s*=', st[len(m) + 1:]):
+                    out.append(lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+                               + st[:len(m)] + '?.' + st[len(m) + 1:])
+                    i += 4
+                    continue
+            # inverted shape: if (x == null) { } else { x.M(); }
+            m2 = re.match(r'^([\w.]+) == null$', s[4:-1].strip()) if s.startswith('if (') and s.endswith(')') else None
+            if m2 and i + 7 < n and lines[i + 1].strip() == '{' \
+                    and lines[i + 2].strip() == '}' and lines[i + 3].strip() == 'else' \
+                    and lines[i + 4].strip() == '{' and lines[i + 6].strip() == '}':
+                st = lines[i + 5].strip()
+                if st.startswith(m2.group(1) + '.') and not re.match(
+                        r'[\w.\[\]<>]+\s*(?:[+\-*/%&|^]|\?\?)?\s*=', st[len(m2.group(1)) + 1:]):
+                    out.append(lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+                               + st[:len(m2.group(1))] + '?.' + st[len(m2.group(1)) + 1:])
+                    i += 7
+                    continue
+            out.append(lines[i])
+            i += 1
+        return out
+
+    # ------------------------------------------------------------------
+    _NULLTERN_RX = re.compile(
+        r'^((?:[A-Za-z_][\w.]*(?:<[^=]*?>)?(?:\[\d*\])*(?:\* )?) )?'      # decl type
+        r'([\w.\[\]]+) = (\()?([\w.\[\]]+) (==|!=) null(\))? \? ([^;]+) : ([^;]+);$')
+
+    def _null_ternary_sugar(self, lines: List[str]) -> List[str]:
+        """`obj == null ? null : obj.Member` (either orientation) renders as
+        `obj?.Member`; `obj != null ? obj : fallback` (either orientation)
+        renders as `obj ?? fallback`. A `0` arm is the mislifted null
+        constant and folds like `null`; the member arm must root at the
+        tested object so swapped-arm shapes never match."""
+        out = []
+        for raw in lines:
+            s = raw.strip()
+            m = self._NULLTERN_RX.match(s)
+            if not m:
+                out.append(raw)
+                continue
+            pre, lv, popen, t, op, pclose, a, b = m.groups()
+            a = a.strip()
+            b = b.strip()
+            # a bare integer literal can never be null -- a textual
+            # `1 != null` match (AnimationCurve.cs:571) is not a real
+            # nullable check; leave the honest original text alone
+            # rather than synthesize `??`/`?.` sugar over it.
+            if t.lstrip('-').isdigit():
+                out.append(raw)
+                continue
+            # the condition can be parenthesized alone (`(t == null)`,
+            # popen+pclose both present) or bare (neither); but the
+            # WHOLE ternary can also be the parenthesized part (`(t ==
+            # null ? a : b)` -- popen present, pclose absent), and the
+            # closing paren that actually matches popen is then the one
+            # `b`'s greedy capture just swallowed off the tail. Strip it
+            # back off so the synthesized text stays balanced -- this is
+            # exactly how `num1 = 1 ?? 0);` (dangling `)`) shipped.
+            if popen and not pclose:
+                if not b.endswith(')'):
+                    out.append(raw)
+                    continue
+                b = b[:-1].rstrip()
+            if '?' in lv or '?' in a or '?' in b:
+                out.append(raw)
+                continue
+            ind = raw[:len(raw) - len(raw.lstrip())]
+            hit = None
+            if op == '==':
+                if a in ('null', '0') and b.startswith(t + '.'):
+                    hit = '%s?.%s' % (t, b[len(t) + 1:])
+                elif b == t:
+                    hit = '%s ?? %s' % (t, a)
+            else:
+                if b in ('null', '0') and a.startswith(t + '.'):
+                    hit = '%s?.%s' % (t, a[len(t) + 1:])
+                elif a == t:
+                    hit = '%s ?? %s' % (t, b)
+            if hit is None:
+                out.append(raw)
+            else:
+                out.append('%s%s%s = %s;' % (ind, (pre or ''), lv, hit))
+        return out
+
+    # ------------------------------------------------------------------
+    _SWHDR_RX = re.compile(r'^switch \((.+)\)$')
+    _CASE_RX = re.compile(r'^case (-?\d+):$')
+
+    def _switch_to_if(self, lines: List[str]) -> List[str]:
+        """A switch with at most two case labels is an if/else-if: the jump
+        table compiled away exactly that shape. Section-final `break;`
+        statements belong to the switch, not to a loop, and are dropped."""
+        out: List[str] = []
+        i = 0
+        n = len(lines)
+        while i < n:
+            m = self._SWHDR_RX.match(lines[i].strip())
+            if not (m and i + 1 < n and lines[i + 1].strip() == '{'):
+                out.append(lines[i])
+                i += 1
+                continue
+            idx = m.group(1)
+            j = i + 2
+            groups: List[Tuple[List[int], int, int]] = []  # (labels, body_start, body_end)
+            labels: List[int] = []
+            ok = True
+            while j < n:
+                cs = lines[j].strip()
+                cm = self._CASE_RX.match(cs)
+                if cm:
+                    labels.append(int(cm.group(1)))
+                    j += 1
+                    continue
+                if cs == '{':
+                    d = 1
+                    k = j + 1
+                    while k < n and d:
+                        t = lines[k].strip()
+                        d += t.count('{') - t.count('}')
+                        k += 1
+                    if d:
+                        ok = False
+                        break
+                    groups.append((labels, j, k))   # body is lines[j+1:k-1]
+                    labels = []
+                    j = k
+                    continue
+                if cs == '}':
+                    j += 1
+                    break
+                ok = False
+                break
+            flat = [L for g in groups for L in g[0]]
+            if not ok or len(groups) < 1 or len(flat) > 2:
+                out.append(lines[i])
+                i += 1
+                continue
+            indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+            for gi, (labs, bs, be) in enumerate(groups):
+                cond = ' || '.join('%s == %d' % (idx, L) for L in labs)
+                out.append('%s%s (%s)' % (indent, 'if' if gi == 0 else 'else if', cond))
+                out.append(indent + '{')
+                body = lines[bs + 1:be - 1]
+                if body and body[-1].strip() == 'break;':
+                    body = body[:-1]
+                out.extend(body)
+                out.append(indent + '}')
+            i = j
+        return out
+    _INC_RX = re.compile(r'^(v\d+) = \(?\1 ([+-]) (\d+)\)?;$')
+    _LEN_RX = re.compile(r'(?<![\w.])(\w+) (<|>=) \*\((.+?) \+ 0x18\)')
+
+    @classmethod
+    def _len_sugar(cls, cond: str) -> str:
+        """`i < *(a + 0x18)` is an array-length test; +0x18 is Il2CppArray::max_length."""
+        return cls._LEN_RX.sub(lambda m: '%s %s %s.Length' % (m.group(1), m.group(2),
+                                                             m.group(3)), cond)
+
+    def _for_sugar(self, lines: List[str]) -> List[str]:
+        """while + counter phi -> for. The increment is the phi copy on the back
+        edge, the initial value the copy on the entry edge."""
+        i = 0
+        while i < len(lines):
+            s = lines[i].strip()
+            if not (s.startswith('while (') and s.endswith(')')) or s == 'while (true)':
+                i += 1
+                continue
+            if i + 1 >= len(lines) or lines[i + 1].strip() != '{':
+                i += 1
+                continue
+            close = _match_brace(lines, i + 1)
+            if close < 0:
+                i += 1
+                continue
+            cond = s[7:-1]
+            found = self._find_increment(lines, i + 1, close, cond)
+            if found is None:
+                i += 1
+                continue
+            last, var, op, step = found
+            # stepping by an integer constant makes this an integer counter
+            self._var_types[var] = INT_TY
+            init, init_idx = self._find_init(lines, i, var)
+            if init == var:          # `i = i` carries nothing
+                init, init_idx = None, None
+            step_txt = ('%s++' % var) if (op == '+' and step == '1') else \
+                       ('%s--' % var) if (op == '-' and step == '1') else \
+                       ('%s %s= %s' % (var, op, step))
+            decl = ''
+            if init is not None and re.match(r'^-?(?:\d+|0[xX][0-9a-fA-F]+)$', init) \
+                    and not self._used_outside(lines, i, close, var, init_idx):
+                decl = 'int '
+            head = '%s%s' % (decl, ('%s = %s' % (var, init)) if init is not None else '')
+            cond = self._len_sugar(self._simplify_cond(cond))
+            lines[i] = 'for (%s; %s; %s)' % (head, cond, step_txt)
+            del lines[last]
+            if init_idx is not None:
+                del lines[init_idx]
+                i -= 1
+            i += 1
+        for i, st in enumerate(lines):
+            t = st.strip()
+            if t.startswith('if (') or t.startswith('while ('):
+                lines[i] = self._len_sugar(st)
+        return lines
+
+
+    _FHF_CALL_RX = re.compile(r'([\w.]+\([^()]*\))\.Length')
+    _FHF_DECLHEAD_RX = re.compile(
+        r'^[A-Za-z_][\w.<>\[\], ]*? ((?:obj\d+|num\d+|flag\d+|real\d+|v\d+|t\d+))$')
+    _FHF_STOP_RX = re.compile(
+        r'^(?:\{|\}|else\b|if\s*\(|while\s*\(|for\s*\(|foreach\s*\(|'
+        r'switch\s*\(|case\b|default:|try\b|catch\b|finally\b|do\b|'
+        r'return\b|break;|continue;|goto\b|L_[0-9a-fA-F]+:)')
+
+    @staticmethod
+    def _fhf_split(clauses):
+        """split `init; cond; inc` on depth-0 semicolons, blind to the
+        contents of string/char literals (a `; ` inside a tag string
+        must not split the head)"""
+        parts = []
+        depth = 0
+        cur = []
+        i = 0
+        L = len(clauses)
+        while i < L:
+            c = clauses[i]
+            if c == '"' or c == "'":
+                q = c
+                cur.append(c)
+                i += 1
+                while i < L:
+                    if clauses[i] == chr(92):
+                        cur.append(clauses[i:i + 2])
+                        i += 2
+                        continue
+                    cur.append(clauses[i])
+                    if clauses[i] == q:
+                        i += 1
+                        break
+                    i += 1
+                continue
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+            elif c == ';' and depth == 0:
+                parts.append(''.join(cur).strip())
+                cur = []
+                i += 1
+                continue
+            cur.append(c)
+            i += 1
+        parts.append(''.join(cur).strip())
+        return parts
+
+    def _fhf_holder(self, lines, i, call):
+        """the token of the NEAREST preceding decl whose RHS is exactly
+        `call`, same block (stops at any label/control head/brace/goto),
+        <= 8 plain statements up, and nothing between stores to or
+        takes by-ref the holder or any identifier the call reads"""
+        suffix = '= %s;' % call
+        window = []
+        j = i - 1
+        while j >= 0 and len(window) < 8:
+            s = lines[j].strip()
+            if not s:
+                j -= 1
+                continue
+            if self._FHF_STOP_RX.match(s):
+                break
+            window.append((j, s))
+            j -= 1
+        for j, s in window:
+            if not s.endswith(suffix):
+                continue
+            m = self._FHF_DECLHEAD_RX.match(
+                s[:-len(suffix)].rstrip())
+            if not m:
+                continue
+            tok = m.group(1)
+            ids = set(re.findall(r'[A-Za-z_]\w*', call))
+            ids.add(tok)
+            ids.discard('this')
+            for k, s2 in window:
+                if k == j:
+                    break
+                t2 = self._CMT_RX.sub('', s2)
+                for ident in ids:
+                    ie = re.escape(ident)
+                    if re.search(r'\b' + ie + r'\s*(?:[-+*/%&|^]|<<|>>)?=',
+                                 t2) \
+                            or re.search(r'&\s*' + ie + r'\b', t2) \
+                            or re.search(r'\b(?:ref|out)\s+' + ie + r'\b',
+                                         t2):
+                        return None
+            return tok
+        return None
+
+    def _forhead_call_fold(self, lines: List[str]) -> List[str]:
+        """fix 50 (todo lead #1): a for-head cond re-rendering a call
+        whose result a preceding decl already holds folds to the decl
+        token. Ground truth InventoryManager.PickupNewObj @ 0x1807018d0
+        (work/probe_b41_forhead.py): the native tag loops each call
+        FindGameObjectsWithTag ONCE, before the loop -- the cond's call
+        text is the lifter re-rendering the once-computed array value,
+        so `i < CALL.Length` -> `i < tok.Length` restores native
+        semantics. Only the cond clause rewrites, only exact call-text
+        matches, and only when the decl provably still holds the call
+        (see _fhf_holder). 26 adjacent sites in AC at b40_out2."""
+        out = list(lines)
+        for i, st in enumerate(out):
+            s = st.strip()
+            if not (s.startswith('for (') and s.endswith(')')):
+                continue
+            parts = self._fhf_split(s[5:-1])
+            if len(parts) != 3:
+                continue
+            init, cond, inc = parts
+            calls = self._FHF_CALL_RX.findall(cond)
+            if not calls:
+                continue
+            new_cond = cond
+            for call in dict.fromkeys(calls):
+                tok = self._fhf_holder(out, i, call)
+                if tok is not None:
+                    new_cond = new_cond.replace(call + '.Length',
+                                                tok + '.Length')
+            if new_cond != cond:
+                out[i] = '%sfor (%s; %s; %s)' % (
+                    st[:len(st) - len(st.lstrip())], init, new_cond, inc)
+        return out
+
+    # ------------------------------------------------------------------
+    _FORHDR_RX = re.compile(r'^for \(int (v\d+) = 0; \1 < ([\w.]+)\.Length; \1\+\+\)$')
+
+    def _foreach_sugar(self, lines: List[str]) -> List[str]:
+        """for (int i = 0; i < arr.Length; i++) over an array becomes
+        foreach (T e in arr) when the counter feeds nothing but element
+        reads. Both indexing styles count: arr[i] and the raw IL2CPP element
+        load *(arr + i*size + hdr). Runs before local renaming so the
+        element local joins the normal rename pass."""
+        i = 0
+        while i < len(lines):
+            m = self._FORHDR_RX.match(lines[i].strip())
+            if not m or i + 1 >= len(lines) or lines[i + 1].strip() != '{':
+                i += 1
+                continue
+            close = _match_brace(lines, i + 1)
+            if close < 0:
+                i += 1
+                continue
+            idx, arr = m.group(1), m.group(2)
+            body = lines[i + 2:close]
+            p1 = re.compile(r'\*\(%s \+ %s\*\d+ \+ 0x[0-9a-fA-F]+\)' % (
+                re.escape(arr), re.escape(idx)))
+            p3 = re.compile(r'%s\[%s\]' % (re.escape(arr), re.escape(idx)))
+            idx_rx = re.compile(r'(?<![\w.])%s(?![\w])' % re.escape(idx))
+            ok = True
+            masked = []
+            for st in body:
+                s = st.strip()
+                # element writes disqualify (foreach elements are read-only)
+                w = re.match(r'^(.+?) = ', s)
+                if w and idx_rx.search(w.group(1)):
+                    ok = False
+                    break
+                t = p1.sub('~E~', s)
+                t = p3.sub('~E~', t)
+                if idx_rx.search(t):
+                    ok = False      # counter used for something else
+                    break
+                masked.append(t)
+            if not ok:
+                i += 1
+                continue
+            etype = self._array_elem_type(arr)
+            ev = self._fresh_vtok(lines)
+            newbody = [t.replace('~E~', ev) for t in masked]
+            lines[i] = 'foreach (%s %s in %s)' % (etype, ev, arr)
+            lines[i + 2:close] = newbody
+            i += 2
+        return lines
+
+    def _fresh_vtok(self, lines) -> str:
+        """A vN token used nowhere in this method and carrying no stale type
+        hint (lifter hints persist across methods and would mis-name it)."""
+        taken = set(self._var_types) | set(getattr(self.L, '_type_hints', {}))
+        mx = 0
+        for st in lines:
+            for t in re.findall(r'\bv(\d+)\b', st):
+                mx = max(mx, int(t))
+        n = mx + 1
+        while ('v%d' % n) in taken:
+            n += 1
+        return 'v%d' % n
+
+    def _array_elem_type(self, arr_tok) -> str:
+        t = self._var_types.get(arr_tok) or getattr(self.L, '_type_hints', {}).get(arr_tok)
+        if not t or not isinstance(t, tuple):
+            return 'object'
+        te = (t[1] >> 16) & 0xFF
+        if te != 0x1d:
+            return 'object'
+        inner = self.L.il.type_from_ptr(t[0])
+        if inner is None:
+            return 'object'
+        try:
+            return self.L.il.type_name(inner)
+        except Exception:
+            return 'object'
+
+    def _find_increment(self, lines, open_idx, close_idx, cond):
+        """The counter bump near the end of the loop body. It need not be the
+        very last statement -- other phi copies often follow it -- as long as
+        nothing after it reads the counter."""
+        depth = 0
+        tail = []
+        for j in range(close_idx - 1, open_idx, -1):
+            t = lines[j].strip()
+            if t == '}' or t.startswith('} while'):
+                depth += 1
+            elif t == '{':
+                depth -= 1
+            elif depth == 0 and t and not t.endswith(':'):
+                tail.append(j)
+                if len(tail) > 6:
+                    break
+        for j in tail:
+            m = self._INC_RX.match(lines[j].strip())
+            if not m:
+                continue
+            var = m.group(1)
+            rx = re.compile(r'(?<![\w.])%s(?![\w])' % var)
+            if not rx.search(cond):
+                continue
+            if any(rx.search(lines[k]) for k in range(j + 1, close_idx)):
+                continue
+            return j, var, m.group(2), m.group(3)
+        return None
+
+    def _find_init(self, lines, wi, var):
+        """Nearest preceding `var = <pure expr>;` at the same brace depth."""
+        rx = re.compile(r'^%s = (.+);$' % var)
+        use = re.compile(r'(?<![\w.])%s(?![\w])' % var)
+        depth = 0
+        for q in range(wi - 1, max(wi - 60, -1), -1):
+            t = lines[q].strip()
+            if t == '}':
+                depth += 1
+                continue
+            if t == '{':
+                depth -= 1
+                if depth < 0:
+                    break
+                continue
+            if depth != 0 or not t:
+                continue
+            m = rx.match(t)
+            if m:
+                return (m.group(1), q) if not self._IMPURE.search(m.group(1)) else (None, None)
+            if use.search(t):
+                break
+        return None, None
+
+    def _used_outside(self, lines, i, close, var, init_idx):
+        rx = re.compile(r'(?<![\w.])%s(?![\w])' % var)
+        for q, st in enumerate(lines):
+            if i <= q <= close or q == init_idx:
+                continue
+            if rx.search(st):
+                return True
+        return False
+
+    PREFIX = {'int': 'num', 'bool': 'flag', 'float': 'real', 'other': 'obj'}
+
+    _COMP_OPS = {'+': '+=', '-': '-=', '*': '*=', '|': '|=', '&': '&=', '^': '^='}
+    _SELF_ARITH_RX = re.compile(
+        r'^([\w.\[\]]+) = \1 ([+\-*|&^]) (\d+|0x[0-9a-f]+|(?:\d+\.\d*|\.\d+)f?);$')
+    # fix 97: the hop temp may carry its declaration (`int num5 = ...`)
+    # now that first-use bare assignments declare. The declaration rides
+    # along with the temp: the fold drops both together, so no orphan
+    # decl survives. The temp group numbering is unchanged.
+    _HOP_DEF_RX = re.compile(
+        r'^(?:[A-Za-z_][\w.<>\[\]]* )?'
+        r'((?:num|flag|real|obj)\d+|v\d+|t\d+) = ([\w.\[\]]+) ([+\-]) '
+        r'(\d+|0x[0-9a-f]+|(?:\d+\.\d*|\.\d+)f?);$')
+    _HOP_COPY_RX = re.compile(r'^([\w.\[\]]+) = ((?:num|flag|real|obj)\d+|v\d+|t\d+);$')
+
+    def _compound_assign(self, lines: List[str]) -> List[str]:
+        """`num1 = x + 1; x = num1;` -- the SSA temp hop -- and the direct
+        `x = x + 1;` both fold to `x += 1;`. The hop temp must die at the
+        copy (exactly two occurrences body-wide) and nothing may write the
+        target between the two statements."""
+        for _ in range(8):
+            st = [s.strip() for s in lines]
+            counts = {}
+            for s in st:
+                for tok in set(self._LOC_RX.findall(self._CMT_RX.sub('', s))):
+                    counts[tok] = counts.get(tok, 0) + 1
+            drop = set()
+            res = []
+            for i, s in enumerate(st):
+                if i in drop:
+                    continue
+                ind = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+                m = self._SELF_ARITH_RX.match(s)
+                if m and '(' not in m.group(1):
+                    res.append('%s%s %s %s;' % (ind, m.group(1),
+                                                self._COMP_OPS[m.group(2)], m.group(3)))
+                    continue
+                m = self._HOP_DEF_RX.match(s)
+                if m and counts.get(m.group(1), 0) == 2 and '(' not in m.group(2):
+                    t, x, op, c = m.groups()
+                    wrx = re.compile(r'^%s = ' % re.escape(x))
+                    folded = False
+                    for j in range(i + 1, min(i + 5, len(st))):
+                        if j in drop or not st[j]:
+                            continue
+                        if wrx.match(st[j]):
+                            if self._HOP_COPY_RX.match(st[j]) \
+                                    and self._HOP_COPY_RX.match(st[j]).group(2) == t:
+                                res.append('%s%s %s %s;' % (ind, x, self._COMP_OPS[op], c))
+                                drop.add(j)
+                                folded = True
+                            break
+                        if re.search(r'(?<![\w.])%s(?![\w])' % re.escape(t), st[j]):
+                            break       # another use of the hop temp appears
+                    if not folded:
+                        res.append(lines[i])
+                    continue
+                res.append(lines[i])
+            if len(res) + len(drop) == len(lines):
+                return res
+            lines = res
+        return lines
+
+    _NUMERIC_DECLS = frozenset([
+        'bool', 'sbyte', 'short', 'int', 'long', 'byte', 'ushort',
+        'uint', 'ulong', 'char', 'float', 'double', 'decimal'])
+    _FLOAT_DECLS = frozenset(['float', 'double', 'decimal'])
+    _FLOAT_LIT_RX = re.compile(r'^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?[fFdD]?$')
+
+    def _bare_rhs_needs_default(self, dt, rhs):
+        """True when a zero literal RHS cannot spell its declaration type.
+
+        Stack-slot zeroing renders `= 0` / `= 0f` under whatever type
+        the slot carries. That is fine for `object` (boxing), numerics,
+        and `bool` (normalized later), but `RaycastHit x = 0f` and
+        `T x = 0` are not C#. `= default` is the zero value in every one
+        of those shapes, so the rewrite is value-preserving. Only zero
+       -valued numerics rewrite: a nonzero literal under a mismatched
+        type keeps its faithful (if uncompilable) value instead of
+        baking in a different one. Anything else (calls, members, null,
+        strings, matching literals) is untouched. -- fix 97b
+        """
+        if not rhs or dt == 'object':
+            return False
+        short = dt.rsplit('.', 1)[-1].rstrip('?')
+        r = rhs[:-1].strip() if rhs.rstrip().endswith(';') else rhs.strip()
+        if r in ('true', 'false', 'default', 'null'):
+            return False
+        if len(r) >= 2 and r[0] == "'" and r[-1] == "'":
+            return False
+        if len(r) >= 2 and r[0] == '"':
+            return False
+        try:
+            iv = int(r, 0)
+            return iv == 0 and short not in self._NUMERIC_DECLS
+        except ValueError:
+            pass
+        if self._FLOAT_LIT_RX.match(r):
+            try:
+                fv = float(r.rstrip('fFdD'))
+            except ValueError:
+                return False
+            return fv == 0.0 and short not in self._FLOAT_DECLS
+        return False
+
+    def _rename_locals(self, lines: List[str]) -> List[str]:
+        import re as _re
+        tokens = []
+        for st in lines:
+            tokens.extend(_re.findall(r'(?<![\w.])(?:v\d+|t\d+|s_[0-9a-fA-F]+)(?![\w])', st))
+        seen = set()
+        ordered = [t for t in tokens if not (t in seen or seen.add(t))]
+        if not ordered:
+            return lines
+        cnt = {'int': 0, 'bool': 0, 'float': 0, 'other': 0}
+        names = {}
+
+        def type_of(tok):
+            t = None
+            if tok.startswith('s_'):
+                t = self.L.slot_types.get(tok)
+            if t is None:
+                t = self._var_types.get(tok)
+            if t is None:
+                t = self.L.__dict__.get('_var_types', {}).get(tok)
+            if not t or not isinstance(t, tuple):
+                return 'other'
+            te = (t[1] >> 16) & 0xFF
+            if te == 0x02:
+                return 'bool'
+            if te in (0x0c, 0x0d):
+                return 'float'
+            if te in (0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x18, 0x19):
+                return 'int'
+            return 'other'
+
+        for tok in ordered:
+            k = type_of(tok)
+            cnt[k] += 1
+            names[tok] = '%s%d' % (self.PREFIX[k], cnt[k])
+        rx = _re.compile(r'(?<![\w.])(' + '|'.join(_re.escape(t) for t in names) + r')(?![\w])')
+        lines = [rx.sub(lambda mm: names[mm.group(1)], st) for st in lines]
+        # explicit declaration types: no `var` in the output, each local is
+        # declared with its tracked il2cpp type (object when untracked); the
+        # first `var NAME = rhs;` occurrence fixes the type, from the rhs
+        # itself for klass loads
+        tok_of = {new: tok for tok, new in names.items()}
+        decl = {}
+        new_names = sorted(set(names.values()))
+        decl_rx = _re.compile(r'^(\s*)var (' + '|'.join(_re.escape(n) for n in new_names)
+                              + r')( = )(.*)$')
+        # fix 97: a first-use bare assignment (`objN = rhs;` -- stack-slot
+        # zeroing, phi copies, unbound call results) declares nothing, so
+        # the method never compiles. Declare it exactly like a `var`
+        # line, with the same tracked-type lookup; a later `var` line for
+        # the same temp then keeps only its assignment. Labels, member
+        # stores, comparisons and lambdas never match: the name must
+        # follow the indent directly and `=` must stand alone.
+        bare_rx = _re.compile(r'^(\s*)(' + '|'.join(_re.escape(n) for n in new_names)
+                              + r') = (?!==|=|>)(.*)$')
+        gp_blocked = getattr(self.L, '_gp_blocked', ())
+        # `Foo.Method()` (bare, no `<T>`) is what a shared-generic call for a
+        # reference-type argument compiles down to (`GetComponent<T>()` and
+        # friends): IL2CPP calls the method's own unsubstituted signature,
+        # which returns the literal generic parameter `T`. `_bind`/etc.
+        # withhold that useless type (fix 21f, `_gp_blocked`) so a real hint
+        # from where the result is USED (its assignment target) can type the
+        # declaration instead -- and since that is the same type the call
+        # itself lost, re-attach it here as `<T>` too, but only for the
+        # bare-call shape this pattern actually produces (any call already
+        # carrying its own `<...>` didn't need this and is left untouched).
+        callno_rx = _re.compile(r'^(.*?\.\w+)\(\)(;)$')
+        out = []
+        depth = 0
+        # fix 97c: declarations are block-scoped. A temp declared in a
+        # closed sibling block is not visible here, so suppress the
+        # duplicate-decl rewrite unless an enclosing (or same) scope
+        # already declared it; otherwise re-declare (shadowing is legal,
+        # leaking across arms is not). Same-brace-level switch sections
+        # share one scope, so they keep suppressing.
+        for st in lines:
+            s = st.strip()
+            if s == '{':
+                depth += 1
+            elif s == '}':
+                depth -= 1
+                for k2 in [k2 for k2, dd in decl.items() if dd[1] > depth]:
+                    del decl[k2]
+            m = decl_rx.match(st)
+            if m:
+                nm = m.group(2)
+                rhs = m.group(4)
+                if nm not in decl:
+                    dt = self._decl_type_of(tok_of[nm], rhs)
+                    if tok_of[nm] in gp_blocked and dt not in ('object', 'System.Type'):
+                        cm = callno_rx.match(rhs)
+                        if cm:
+                            rhs = '%s<%s>()%s' % (cm.group(1), dt, cm.group(2))
+                    if self._bare_rhs_needs_default(dt, rhs):
+                        rhs = 'default;'
+                    decl[nm] = (dt, depth)
+                    st = '%s%s %s = %s' % (m.group(1), dt, nm, rhs)
+                else:
+                    st = '%s%s = %s' % (m.group(1), nm, rhs)
+            else:
+                b = bare_rx.match(st)
+                if b is not None and b.group(2) not in decl:
+                    nm = b.group(2)
+                    rhs = b.group(3)
+                    dt = self._decl_type_of(tok_of.get(nm, nm), rhs)
+                    if tok_of.get(nm, nm) in gp_blocked and dt not in ('object', 'System.Type'):
+                        cm = callno_rx.match(rhs)
+                        if cm:
+                            rhs = '%s<%s>()%s' % (cm.group(1), dt, cm.group(2))
+                    if self._bare_rhs_needs_default(dt, rhs):
+                        rhs = 'default;'
+                    decl[nm] = (dt, depth)
+                    st = '%s%s %s = %s' % (b.group(1), dt, nm, rhs)
+            out.append(st)
+        return out
+
+    def _decl_type_of(self, tok, rhs='') -> str:
+        """C# declaration type for one (pre-rename) local token."""
+        r = (rhs or '').strip().rstrip(';').strip()
+        if r.endswith('.getClass()') or (r.startswith('typeof(') and r.endswith(')')):
+            return 'System.Type'      # klass loads hold the runtime type
+        t = None
+        if tok.startswith('s_'):
+            t = self.L.slot_types.get(tok)
+        if t is None:
+            t = self._var_types.get(tok)
+        if t is None:
+            t = self.L.__dict__.get('_var_types', {}).get(tok)
+        if t is None:
+            t = getattr(self.L, '_type_hints', {}).get(tok)
+        if not t or not isinstance(t, tuple):
+            return 'object'
+        try:
+            tn = self.L.il.type_name(t)
+        except Exception:
+            return 'object'
+        if tn.startswith('ref '):
+            tn = tn[4:]
+        tn = re.sub(r'`\d+(?=<|$)', '', tn)   # List`1<T> -> List<T>
+        if not tn or tn == 'void':
+            return 'object'
+        return tn
+
+    _SEM_LOCAL_DECL_RX = re.compile(
+        r'^\s*(?!(?:return|throw|yield|case|goto|if|else|while|do|for|'
+        r'foreach|switch|using|lock)\b)'
+        r'([A-Za-z_@][^=;(){}]*?)\s+(obj\d+)\s*=(?!=)')
+    _SEM_LOCAL_FOREACH_RX = re.compile(
+        r'^\s*foreach\s*\((.+?)\s+(obj\d+)\s+in\b')
+
+    @staticmethod
+    def _semantic_type_prefix(type_text: str) -> Optional[str]:
+        """Readable identifier stem proved only by an emitted local type.
+
+        `objN` stays the honesty marker for an untracked `object`.  A local
+        whose declaration already says `GameObject`, `System.Type`, `T[]`,
+        etc. can be renamed without inventing any new type or value fact.
+        """
+        t = re.sub(r'^(?:ref|out|in)\s+', '', (type_text or '').strip())
+        if not t:
+            return None
+        # Reject statement fragments and exotic spellings this deliberately
+        # small cosmetic pass cannot parse.  Ordinary metadata type names,
+        # generics, arrays, pointers and nullable suffixes are sufficient.
+        if not re.fullmatch(r'[A-Za-z0-9_@.<>,\[\]*? ]+', t):
+            return None
+        t = t.replace('global::', '').strip()
+        is_array = False
+        while re.search(r'\[[,0-9 ]*\]$', t):
+            is_array = True
+            t = re.sub(r'\[[,0-9 ]*\]$', '', t).strip()
+        pointer_depth = 0
+        while t.endswith('*'):
+            pointer_depth += 1
+            t = t[:-1].strip()
+        t = t.rstrip('?').strip()
+        if not t:
+            return None
+        if not is_array and not pointer_depth and t in ('object', 'System.Object'):
+            return None
+
+        outer = t.split('<', 1)[0].strip()
+        simple = re.sub(r'`\d+$', '', outer.rsplit('.', 1)[-1].lstrip('@'))
+        simple = simple.strip('_')
+        if not simple:
+            return None
+        if len(simple) > 1 and simple[0] == 'I' and simple[1].isupper():
+            simple = simple[1:]
+
+        special = {
+            'String': 'text', 'string': 'text',
+            'Char': 'character', 'char': 'character',
+            'Type': 'type',
+            'Boolean': 'flag', 'bool': 'flag',
+            'T': 'value', 'TValue': 'value', 'TResult': 'result',
+            'TKey': 'key', 'TItem': 'item', 'TElement': 'element',
+            'Nullable': 'value', 'ValueTuple': 'tuple',
+            'KeyValuePair': 'pair', 'IGrouping': 'group',
+        }
+        stem = special.get(simple)
+        if stem is None:
+            words = re.findall(
+                r'[A-Z]+(?=[A-Z][a-z]|\d|_|$)|[A-Z]?[a-z]+|\d+',
+                simple.replace('__', '_'))
+            if not words:
+                return None
+            stem = words[0].lower() + ''.join(
+                word[:1].upper() + word[1:].lower() for word in words[1:])
+        if is_array:
+            stem += 'Array'
+        if pointer_depth:
+            stem += 'Ptr' if pointer_depth == 1 else 'Ptr%d' % pointer_depth
+        stem = re.sub(r'[^A-Za-z0-9_]', '', stem)[:48]
+        return stem if stem and stem != 'obj' else None
+
+    @staticmethod
+    def _replace_semantic_names(line: str, names: Dict[str, str],
+                                in_block_comment: bool) -> Tuple[str, bool]:
+        """Replace identifier tokens while preserving literals/comments."""
+        out = []
+        i = 0
+        n = len(line)
+        while i < n:
+            if in_block_comment:
+                j = line.find('*/', i)
+                if j < 0:
+                    out.append(line[i:])
+                    return ''.join(out), True
+                out.append(line[i:j + 2])
+                i = j + 2
+                in_block_comment = False
+                continue
+            if line.startswith('//', i):
+                out.append(line[i:])
+                break
+            if line.startswith('/*', i):
+                in_block_comment = True
+                out.append('/*')
+                i += 2
+                continue
+            if line.startswith('@"', i):
+                j = i + 2
+                while j < n:
+                    if line.startswith('""', j):
+                        j += 2
+                        continue
+                    if line[j] == '"':
+                        j += 1
+                        break
+                    j += 1
+                out.append(line[i:j])
+                i = j
+                continue
+            c = line[i]
+            if c in ('"', "'"):
+                delim = c
+                j = i + 1
+                while j < n:
+                    if line[j] == '\\':
+                        j += 2
+                        continue
+                    if line[j] == delim:
+                        j += 1
+                        break
+                    j += 1
+                out.append(line[i:j])
+                i = j
+                continue
+            if c.isalpha() or c == '_':
+                j = i + 1
+                while j < n and (line[j].isalnum() or line[j] == '_'):
+                    j += 1
+                token = line[i:j]
+                out.append(names.get(token, token))
+                i = j
+                continue
+            out.append(c)
+            i += 1
+        return ''.join(out), in_block_comment
+
+    _SEM_OBJECT_DECL_RX = re.compile(
+        r'^(\s*)object\s+(obj\d+)\s*=\s*(.*);\s*$')
+
+    @staticmethod
+    def _semantic_explicit_rhs_type(rhs: str) -> Optional[str]:
+        """Static reference type carried literally by a small RHS family."""
+        r = (rhs or '').strip()
+        if re.fullmatch(r'"(?:[^"\\]|\\.)*"', r) \
+                or re.fullmatch(r'@"(?:[^"]|"")*"', r):
+            return 'string'
+        if re.fullmatch(r'typeof\([^()]+\)', r):
+            return 'System.Type'
+        # `new T[n,m][]` has the static type `T[,][]`.  Array creation is
+        # always a reference type, unlike `new T()` where T could be a
+        # value type and changing an object local could change boxing.
+        match = re.fullmatch(
+            r'new\s+([A-Za-z_@][A-Za-z0-9_@.<>, ]*)'
+            r'\[([^\[\]]*)\]((?:\[[, ]*\])*)', r)
+        if match:
+            base, dims, tail = match.groups()
+            base = base.strip()
+            if re.fullmatch(r'[A-Za-z0-9_@.<>, ]+', base):
+                if '<' in dims or '>' in dims:
+                    return None
+                rank = '[' + (',' * (len(_split_top(dims)) - 1)) + ']'
+                return base + rank + tail.replace(' ', '')
+        return None
+
+    def _refine_explicit_object_locals(self, lines: List[str]) -> List[str]:
+        """Refine single-definition object locals with literal RHS proof.
+
+        Only arrays, strings and exact `typeof` expressions qualify.  A later
+        write or any ref/out/in/address escape keeps `object`: stronger typing
+        there could reject a valid assignment or change by-reference ABI.
+        """
+        candidates: Dict[str, Set[str]] = {}
+        for line in lines:
+            match = self._SEM_OBJECT_DECL_RX.match(line)
+            if not match:
+                continue
+            static_type = self._semantic_explicit_rhs_type(match.group(3))
+            if static_type:
+                candidates.setdefault(match.group(2), set()).add(static_type)
+        if not candidates:
+            return lines
+
+        approved = {}
+        for token, types in candidates.items():
+            if len(types) != 1:
+                continue
+            escaped = re.compile(
+                r'(?:&\s*|\b(?:ref|out|in)\s+)%s\b' % re.escape(token))
+            written = re.compile(
+                r'(?<![\w.])%s\s*(?:=(?!=)|[-+*/%%&|^]=|<<=|>>=|\+\+|--)'
+                % re.escape(token))
+            if any(escaped.search(line) for line in lines):
+                continue
+            if sum(len(written.findall(line)) for line in lines) != 1:
+                continue
+            approved[token] = next(iter(types))
+        if not approved:
+            return lines
+
+        out = []
+        for line in lines:
+            match = self._SEM_OBJECT_DECL_RX.match(line)
+            if match and match.group(2) in approved:
+                line = '%s%s %s = %s;' % (
+                    match.group(1), approved[match.group(2)],
+                    match.group(2), match.group(3))
+            out.append(line)
+        return out
+
+    def _semantic_local_names(self, lines: List[str],
+                              method: Optional[MethodDef] = None) -> List[str]:
+        """Rename concretely typed `objN` locals at the final render boundary.
+
+        Earlier cleanup passes intentionally depend on the compact
+        num/flag/real/obj vocabulary.  Running here preserves every one of
+        those analyses and changes identifiers only after the emitted type is
+        visible.  Conflicting or `object` declarations stay unchanged.
+        """
+        lines = self._refine_explicit_object_locals(lines)
+        prefixes: Dict[str, Set[str]] = {}
+        order = []
+        for line in lines:
+            match = self._SEM_LOCAL_FOREACH_RX.match(line)
+            if match is None:
+                match = self._SEM_LOCAL_DECL_RX.match(line)
+            if match is None:
+                continue
+            type_text, token = match.groups()
+            prefix = self._semantic_type_prefix(type_text) or ''
+            if token not in prefixes:
+                prefixes[token] = set()
+                order.append(token)
+            prefixes[token].add(prefix)
+
+        eligible = [(token, next(iter(prefixes[token]))) for token in order
+                    if len(prefixes[token]) == 1 and '' not in prefixes[token]]
+        if not eligible:
+            return lines
+
+        # Any existing identifier is a conservative collision barrier.  Add
+        # metadata parameter names even when an unused parameter never appears
+        # in the body: locals may not redeclare one in C#.
+        reserved = set()
+        in_comment = False
+        for line in lines:
+            code, in_comment = self._replace_semantic_names(line, {}, in_comment)
+            reserved.update(re.findall(r'\b[A-Za-z_]\w*\b', code))
+        if method is not None:
+            try:
+                reserved.update(safe_ident(p.name)
+                                for p in self.L.meta.method_params(method))
+            except Exception:
+                pass
+
+        counts: Dict[str, int] = {}
+        names: Dict[str, str] = {}
+        for token, prefix in eligible:
+            number = counts.get(prefix, 0) + 1
+            candidate = '%s%d' % (prefix, number)
+            while candidate in reserved:
+                number += 1
+                candidate = '%s%d' % (prefix, number)
+            counts[prefix] = number
+            names[token] = candidate
+            reserved.add(candidate)
+
+        out = []
+        in_comment = False
+        for line in lines:
+            replaced, in_comment = self._replace_semantic_names(
+                line, names, in_comment)
+            out.append(replaced)
+        return out
+
+
+    NEG = {'==': '!=', '!=': '==', '<': '>=', '>=': '<', '>': '<=', '<=': '>'}

@@ -1,0 +1,396 @@
+# il2csharp — TODO (open work and historical triage)
+
+## Package split (2026-09-12, no behaviour change)
+
+`il2csharp.py` (10,061 lines) and `decompiler.py` (8,407 lines) were split into
+the `il2cpp/` package (42 modules). Lines were moved by binary CRLF slicing,
+never retyped, under coverage and line-preservation asserts; the splitter is
+`work/split/split_pkg.py` and the import smoke is `work/split/smoke.py`.
+
+- Big classes are composed from mixins, one file per mixin: `Il2Cpp`
+  (`runtime/`: registration, types, fields, eh), `Lifter` (`lifter/`: state,
+  values, insn, calls, render), `Decompiler` (`dec/`: build, analyze,
+  structure, sugar, seh, flow, dataflow, highlevel, textpass, emit).
+  Pass order inside `_structure`/`_final_text` is untouched.
+- Cycle-free by construction: leaf helpers live in `il2cpp/names.py` and
+  `il2cpp/runtime/meta.py`, `runtime/__init__.py` is deliberately import-free,
+  and `dec/sugar.py` + `stmt_text.py` reach `Decompiler` through a late-bound
+  proxy. `python -c "import il2cpp"` is the cycle regression check.
+- `il2csharp.py` is now a launcher (CRLF + UTF-8 BOM retained), so
+  `python il2csharp.py <target> -o <out>` still works; `python -m il2cpp` too.
+  `decompiler.py` is gone (`bckups/presplit_20260912/` holds both originals).
+- Consumers moved to real imports (no re-export shims): 271 import lines in
+  154 files across `tests/`, `tools/`, `work/`. Historical monolith snapshots
+  under `bckups/`, `final_out/`, and `work/review8*` were deliberately
+  left untouched.
+- Contract test `tests/test_source_format.py` now asserts CRLF + no BOM across
+  `il2cpp/**/*.py` and CRLF + BOM on the launcher. `source_sha256` in
+  `tools/validate_corpus.py` / `tools/make_goldens.py` now pins every package
+  file via `corpus_common.source_fingerprints()`.
+- `tests/test_diagnostics.py` imports `il2cpp.cli` (not the facade) because
+  `main()` resolves `Emitter`/`Metadata`/`is_arm64_binary` in that module.
+- Gates: 436 tests pass (317 portable + 64 snapshots + 54 native, plus the
+  extra source-format case); byte-identity rebuild vs `final_out/` recorded in
+  `validation_reports/split_rebuild_verification.json`.
+- Root cleanup: `scan_stale.py` -> `tools/scan_stale.py`, `SHA256SUMS.txt` ->
+  `validation_reports/SHA256SUMS.txt` (`tools/verify_release.py` looks there
+  first, then the tree root).
+- `work/` reorg (2026-09-12, moves only, no renames): the flat tree is now
+  grouped into `artifacts/`, `batches/`, `census/`, `experiments/`, `lib/`,
+  `logs/`, `patches/`, `probes/`, `review81/`-`review89/`, `runners/`, and
+  `split/` (routing table in `work/README.md`; `review83/`, `review84/`, and
+  the `reviewNN_out/` trees predate the reorg and were left as-is). The 176
+  root-deriving scripts were depth-rewritten in the same pass
+  (`parents[1]` -> `parents[2]`, one more `dirname(...)`);
+  `work/split/verify_reorg.py` proves every root expression still resolves
+  (167 expressions across 162 files).
+- Release manifest refreshed after the split + reorg:
+  `validation_reports/SHA256SUMS.txt` 12,597 -> 12,638 entries (406
+  relocated, 11,391 rehashed — the old manifest still pinned the Review 84
+  tree while `final_out/` holds the promoted Review 89 tree, as proved by
+  `work/split/probe_manifest_era.py`: 400/400 sampled `final_out/` digests
+  match `bckups/final_out_r84`, 0 match the current tree — 1 dropped
+  `decompiler.py`, 42 added `il2cpp/` files; the pre-split manifest is
+  archived at `validation_reports/SHA256SUMS.presplit_20260912.txt`).
+  `tools/verify_release.py` passes with 0 failures.
+- Post-verification cleanup: `work/split/rebuild_out/` (the 11,200-file,
+  ~138MB byte-identical rebuild used once for the split proof) deleted; the
+  proof stands in `validation_reports/split_rebuild_verification.json` and
+  `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
+  `fulltest.log` with the 436-pass run).
+
+## Current work — fix 97 (bare first-use temp declarations + 97e render repair, gated 2026-09-14)
+
+Declare bare first-use temps (`objN = rhs;` with no prior declaration from
+stack-slot zeroing, phi copies, unbound call results) exactly like `var`
+lines, from the same tracked-type lookup; a later `var` line for the same
+temp keeps only its assignment. Gates: **483 tests (462 + 21 new: 15 in
+`tests/test_review97_bare_decls.py` plus 6 fix-97e `_render` cases); direct
+sweep 116,178 methods / 0 crashes / 0 structural changes vs fix 94 (39,478
+bodies changed, net declaration additions); strict build 11,107 files /
+115,658 bodies / 0 failures or fallbacks (`work/review97_out`); parser 0
+bad files**. Reports: `validation_reports/review97e_sweep.json`,
+`review97e_vs97.json` (25 changed, 0 structural — the 97e repair only),
+`review97e_parse.json`; built tree `work/review97_out`. The 64 goldens were
+regenerated with **0 body changes** (none of the 25 repaired methods is a
+golden MI; only source fingerprints refreshed). Promotion record:
+`validation_reports/review97e_promotion_verification.json`; post-promotion
+parse recheck `validation_reports/review97e_recheck_parse_final.json`.
+
+- [x] Fix 97: first-use bare assignments declare (`_rename_locals` in
+  `il2cpp/dec/highlevel.py`, wired through the existing `var` type path).
+- [x] Fix 97b: `= default` for zero-literal RHS that cannot spell the
+  declaration type (`_bare_rhs_needs_default`: only zero-valued numerics
+  rewrite; nonzero literals keep their faithful value).
+- [x] Fix 97c: scope-aware declaration tracking (sibling scopes re-declare;
+  enclosing declarations suppress).
+- [x] Fix 97d: (folded into 97b) nonzero-literal fidelity.
+- [x] Companion updates: typed `bool flagN` sugar variants (`_bool_sugar`
+  in `il2cpp/dec/sugar.py`), ternary arm declaration normalization
+  (`_ternary_pass`), typed hop-temp acceptance (`_HOP_DEF_RX` in
+  `_compound_assign`).
+- [x] Fix 97e (render-strip repair, found by the parse gate, not the
+  sweep): the first `work/review97_out` build gated **23 bad files / 26
+  ERROR nodes** (review 94: 0/0/0). Chain: 97b synthesizes `: default`
+  false arms, `_ternary` folds `if (!c) { T x = call(); } else
+  { T x = default; }` into `T x = c ? call() : default;`, then
+  `_strip_dangling_default` (`il2cpp/dec/textpass.py`, inside `_render`)
+  dropped the tail — its flat `region_q` flag reset on every `(` (the
+  call's parens) and `,` (multi-arg calls), orphaning unparseable
+  `? call() ;`, which `_fix_select` cannot repair (statement-level `?`).
+  The strip now tracks the paren depth of each live ternary/select `?`
+  mark: `(` no longer resets, `,` only forgets marks at its own depth or
+  deeper, `)` forgets the closed group's marks, `;{=` still clear the
+  region, and `??`/`?.`/nullable `?` never become marks. All 26 sites
+  (e.g. `IntPtr num2 = num1 != null ? AndroidJNI.NewGlobalRef(num1) ;`
+  → `... : default;`) verified fixed in the rebuilt tree; dangling tails
+  (`Foo(a : default)`, including after `int?` declarations) still strip.
+  Side note: `tools/validate_corpus.py parse` segfaulted on the broken
+  tree (native tree-sitter flakiness; per-file processes and `ts_gate.py`
+  were unaffected) and succeeds on the fixed tree.
+
+### Next priorities (fix 97 follow-ups)
+
+1. **511 remaining `return sub_*shared body` tails** (fix 94 list stands).
+2. **`UnityAction<T0>` declaration LHS** (61 sites), **dead
+   `Type type1 = typeof(Object);` lines** (2,791 sites), Review 87
+   byte-store/noreturn-EH/leftover lists — all stand (see below).
+
+## Current work — fixes 94, 95, 96 (gated + promoted 2026-09-13)
+
+Tail-call honesty, void-caller tails, and a `_value_cse` allocation hole,
+found by reading `AudioVolumeSliders.Start` end to end. Gates: **462
+tests (446 + 16 new); direct sweep 116,178 methods / 0 crashes / 0
+structural changes vs fix 92 (3,879 bodies changed, net +1,466 lines,
+3,405 line-neutral); strict build 11,107 files / 115,658 bodies / 0
+failures or fallbacks (`work/review94_out`); parser 0 bad files**.
+Reports: `validation_reports/review94_sweep.json`,
+`review94_vs92.json` (3,879 changed, 0 structural),
+`review94_comparison.json` (vs Review 84: 17,843 changed, same 4
+pre-existing fix-91 structural entries, 0 new crashes),
+`review94_parse.json`; built tree `work/review94_out`. Promoted
+2026-09-13: `final_out/` now holds `work/review94_out` (11,200 files,
+candidate and promoted aggregate sha256 both
+`6ec3c6f45deb2f653c1f3bf02053a82251c322f169f5b0df7c8f0249b64e679b`, 0
+mismatches; the Review 89 tree is kept at
+`bckups/final_out_review89`, the fix-91 tree at
+`bckups/final_out_review88`, the Review 84 tree at
+`bckups/final_out_r84`). Promotion record:
+`validation_reports/review94_promotion_verification.json`;
+post-promotion parse recheck
+`validation_reports/review94_recheck_parse_final.json` (11,107 files, 0
+bad). `validation_reports/SHA256SUMS.txt` still pins the Review 84 era
+(prior promotions likewise left it; see the split notes). The 64 goldens
+were regenerated after individual review of all 5
+diffs (4 void-shape, 1 shared-ctor-tail initializer).
+
+- [x] Fix 94: shared tails strip the hidden instantiation argument
+  (exact-text identity proof, trailing-position + single-spec
+  tightenings), trim trailing stale unknowns (fix-58 mirror), and render
+  the true generic callee instance-folded; resolved ctors take the
+  `..ctor` pseudo-form the emitter promotes (`_tail_hidden_generic`,
+  `_tail_trim_stale`, `_tail_generic_call` in `il2cpp/lifter/calls.py`,
+  wired into both tail-jmp paths). Ground truth: the Start tail's
+  `mov r8,[slot]` + dispatch-through-R8 body proves R8 selects
+  `UnityEvent<float>.AddListener`, which the 8 listed candidates (all
+  zero-arg TypeTraits getters) miss — so NO max-arity trim: the
+  candidate set is provably incomplete (a cap of 0 wiped real args in
+  testing). `return sub_*shared body` tails fall 1,939 → 511.
+  Regressions: `tests/test_review94_tails.py` (12 portable).
+- [x] Fix 95: value-returning tails in exact-metadata-void callers render
+  `<call>; return;` (`_caller_is_void`, `_emit_tail`; each site keeps its
+  `/* tail */` habit). Covers resolved, shared, array-new, and
+  generic-resolved tails in both paths.
+- [x] Fix 96: `_value_cse` never caches `new` allocations (fresh identity
+  per execution; parameterless `new T()` slipped past `_IMPURE`).
+  Restores wrongly aliased objects, e.g. all 133
+  `StructWrapper<byte>` pool instances in `StructWrapperPools..cctor`
+  (+132 lines there). Regressions:
+  `tests/test_review96_value_cse.py` (4 portable).
+
+### Next priorities (fixes 94-96 follow-ups)
+
+1. **511 remaining `return sub_*shared body` tails** have no trailing
+   hidden identity (absent, non-trailing, or conflicting). The registry
+   misses true sharers (fix 94 proof), so closing these needs sharer
+   discovery beyond `addr_candidates`, never a max-arity guess.
+2. **`UnityAction<T0>` declaration LHS** (61 sites): open-signature hints
+   type the declaration while the `new` RHS is closed. Propagate the
+   closed RHS type when the hint is an unresolved generic parameter.
+3. **Dead `Type type1 = typeof(Object);` lines** (2,791 sites): bound
+   results of side-effect-only class-init calls. Drop the result binding
+   for class-init helpers.
+4. **Review 87 list stands:** untyped `((byte*)+0)[0] = 4294967294`
+   stores, five sub-threshold noreturn EH targets, 15 constructor
+   leftovers, `object objN` / empty-allocation provenance, ABI gaps,
+   8,067 into-block gotos, vector/ARM64/fixture breadth.
+
+## Current work — Review 87 (fix 92, gated 2026-09-11, promoted 2026-09-12)
+
+`docs/reviews/REVIEW87.md`, `validation_reports/review85/sweep4.json`,
+`sweep4_comparison.json`, and `parse4.json` describe one source fix (92):
+MethodSpec instantiation indices are zero-based with -1 absent. Gates:
+**435 tests (317 portable + 64 snapshots + 54 native); strict build 11,107
+C# files / 115,658 bodies with 0 failures or fallbacks
+(`work/review89_out`); parser 0 bad files; direct sweep 116,178 methods /
+0 crashes / 0 new structural changes vs Review 84 (same 4 fix-91
+entries)**. Promoted 2026-09-12: `final_out/` now holds `work/review89_out`
+(11,200 files, candidate and promoted aggregate sha256 both
+`0b906f7d1c8ab400a8718f745df1182bad9e9ffbb55a2bea18c30f51839323b5`, 0
+mismatches; the fix-91 tree is kept at `bckups/final_out_review88`, the
+Review 84 tree at `bckups/final_out_r84`). Promotion record:
+`validation_reports/review85/promotion_verification_review89.json`;
+post-promotion parse recheck
+`validation_reports/review85/recheck_parse_final.json` (11,107 files, 0 bad).
+Note: this section previously reserved "candidate fix 92" for the two
+named raisers; that unshipped candidate is renumbered to fix 93.
+
+Completed in this batch:
+
+- [x] Read `classIndexIndex`/`methodIndexIndex` zero-based in
+  `generic_method_name` and `_method_spec_type_args`, with -1 as the only
+  absent spelling (row 0 is a real instantiation). Proved over all 175,736
+  specs: zero-based matches every declared generic arity (32,671 method +
+  144,977 class rows, zero exceptions), one-based contradicts 2,749.
+  Evidence: `work/review89_spec_arity_census.py`,
+  `work/review89_spec_index_base.py`.
+- [x] Fixed `Object.Instantiate<Font>`: 66 sites become `GameObject`, 0
+  `Font` remain; every generic name steps off its neighbouring row
+  (`EpilepsyHandler` -> `ComputeShader`, `Obi.*` -> `Vector2`/`byte`/
+  `TouchPhase`/etc.). 16,119 bodies changed, all name-only; inventory and
+  line-count shape unchanged.
+- [x] Regenerated the 64 golden snapshots: 5 reviewed generic-name changes,
+  59 unchanged. Regressions: `tests/test_review89_spec_indices.py` (11
+  portable); `tests/test_shared_returns.py` updated to the proved spelling.
+
+### Next priorities (Review 87)
+
+1. **Type the untyped `((byte*)objN + 0x0)[0] = 4294967294;` stores.**
+   Carried over from Review 85: the lvalue has no declared width, so the
+   immediate cannot be sign-flipped on evidence yet.
+2. **DONE - fix 93 shipped 2026-09-13: the two named raisers render as
+   `throw new`.** `raise_IndexOutOfRangeException` /
+   `raise_NullReferenceException` are each one specific new exception raised
+   by a `sub rsp,X; call T; int3` noreturn forwarder, so
+   `object objN = raise_NullReferenceException();` becomes
+   `throw new NullReferenceException();` (0 old-style sites remain, 834
+   throw-new sites in `work/review93_out`). Gates: 446 tests (436 + 10 new
+   in `tests/test_review93_named_raise.py`); direct sweep 116,178 methods /
+   0 crashes / 0 structural changes vs fix 92 (76 bodies changed, -76
+   lines); strict build 11,107 files / 115,658 bodies / 0 failures; parse
+   gate 0 bad files. Reports: `validation_reports/review93_sweep.json`,
+   `review93_vs92.json` (`review93_comparison.json` vs Review 84),
+   `review93_parse.json`. Predicate: exact evidence-derived name, arity 0,
+   unregistered target, forwarder shape (`_named_raise_throw` in
+   `il2cpp/lifter/calls.py`, wired into `_call` and both tail-jmp paths).
+3. **Prove the five sub-threshold noreturn EH targets**
+   (`0x180435040`, role-ambiguous `0x1804346b0`, `0x180434690`,
+   `0x180001ea0`, `0x180002070`) with evidence other than witness counts,
+   then tighten per-method/proven-set agreement.
+4. **Review 84 list stands:** 15 constructor leftovers, 112,423
+   `object objN` declarations, 13,254 empty allocations, ABI gaps, 8,067
+   into-block gotos, vector/ARM64/fixture breadth (see the Current
+   replacement section below).
+
+## Previous work — Reviews 85 and 86 (2026-09-10/11)
+
+`docs/reviews/REVIEW85.md` and `validation_reports/review85/` describe five source fixes
+(85-89), one validation-tool fix, and one newly diagnosed defect. Gates:
+**399 tests (289 portable + 64 snapshots + 46 native); strict build 11,107 C#
+files / 115,658 bodies with 0 failures or fallbacks; parser 0 bad files;
+direct sweep 116,178 methods / 0 crashes / 0 structural-metric changes / 0 new
+crashes vs Review 84**. Promoted 2026-09-11 (itself superseded 2026-09-12 by
+the Review 87 promotion; the fix-91 tree is kept at
+`bckups/final_out_review88`): `final_out` then held
+`work/review88_out`, the tree gated after fixes 90, 91, 91b, and 91c (11,200
+files, candidate and promoted aggregate sha256 both
+`0ef7607e317dbb00f59ad72ccaa8089b36ccf0a79c42bae7f525ebeb30118d00`, 0
+mismatches; the Review 84 tree is kept at `bckups/final_out_r84`).
+`work/review86_out` was never promoted. Gates for that tree: 424 tests,
+strict build 11,107 files / 115,658 bodies / 0 failures, parse gate 0 errors
+and 0 recovery nodes, direct sweep 116,178 methods / 0 crashes, 64 goldens
+regenerated with 0 changes. See `docs/reviews/REVIEW86.md`.
+
+Completed in this batch:
+
+- [x] Decode enum member tables through the enum's underlying element type
+  with the compressed (zigzag) reader. The old raw fixed-width read doubled
+  every value and invented junk members; eight member names are confirmed
+  wrong before and correct after, including `DateTimeKind.Utc` -> `Local` and
+  `Token.XdrDatatype` -> `XsdSchema`.
+- [x] Fold enum-valued call arguments to `Type.Member`, so
+  `new FileStream(text2, 3)` becomes `new FileStream(text2, FileMode.Open)`.
+- [x] Stop `_int_lit` stripping the hex digits `d` and `f` as float suffixes.
+  It had read `0x3d` as 3, `0x7f` as 7, and `0xf` as unparseable.
+- [x] Fold literal-base address composition, `(0 + 0x3)` -> `3`, without
+  touching `_field_expr`'s dereference form.
+- [x] Reinterpret immediates at their declared signed width, `4294967294` ->
+  `-2`; 188 rewrites in the first 4,000 methods. Unsigned and native-int type
+  codes deliberately excluded.
+- [x] Relocate sweep manifests relative to the report that names them, fixing
+  moved-report reads on Windows.
+- [x] Regenerate the 64 golden snapshots: 9 changed, +37 / -37 lines, every
+  changed line an enum-member fold.
+
+### Next priorities (Review 85, historical; use the Current work list above)
+
+1. **DONE - EH helper naming is now evidence based (fixes 90, 91, 91b, 91c).**
+   `_seh_helpers` used to discover the raise/rethrow VAs from whichever method
+   was lifted first and write them onto the shared lifter, so output depended
+   on process partitioning and lift order. That part was right, and it still
+   explains 1,913 of the 10,758 changed bodies in that batch, which are **not**
+   attributable to fixes 85-89.
+   The rest of the diagnosis above was wrong about which side was correct. A
+   census of all 4,526 pad-bearing methods found 99 distinct rethrow targets
+   and 9 raise targets, and 51 of the rethrow targets were ordinary registered
+   methods -- `AsyncTaskMethodBuilder.SetException`, `Debug.LogException`,
+   `Marshal.FreeHGlobal`, even `DateTime.AddYears` -- so a large share of
+   those 3,113 `throw` statements were leaked values that had each eaten a
+   real call, not correct output.
+   Fix 90 clears both fields for every method and requires an unregistered
+   native target. Fix 91 then proves the pair once from the whole binary:
+   `0x180435740` rethrow (3,403 witnesses against 126) and `0x180435670`
+   raise (183 against 25). Fix 91b rejects plumbing the lifter can already
+   name, directly or through a jmp thunk -- `0x180435420` is a thunk onto
+   `il2cpp_codegen_initialize_runtime_metadata` that 181 methods had taught
+   as a helper -- and fix 91c rejects any routine with a reachable `ret`,
+   which removed five impostors including the 45-witness `0x180002650`.
+   Evidence: `work/review87_helper_census.py`,
+   `work/review87_helper_classify.py`, `work/review88_helper_ident.py`,
+   `work/review88_anchor_diff.py`, `work/review88_sample.py`. Regressions:
+   `tests/test_review87_eh_helpers.py`,
+   `tests/test_review88_eh_helper_set.py`.
+   Still open: five noreturn but sub-threshold targets (`0x180435040` 13/0,
+   `0x1804346b0` 12 rethrow against 13 raise, `0x180434690` 8/0,
+   `0x180001ea0` 6/0, `0x180002070` 3/0) remain on per-method evidence only,
+   and the two named raisers still render as calls rather than
+   `throw new IndexOutOfRangeException();` / `throw new
+   NullReferenceException();` -- candidate fix 92 (renumbered to fix 93, since
+   fix 92 shipped the MethodSpec base; see the Current work section).
+2. **Type the untyped `((byte*)objN + 0x0)[0] = 4294967294;` stores.** The
+   lvalue has no declared width, so the immediate cannot be sign-flipped on
+   evidence yet. Recover the store type and width first.
+3. **DONE - Fix the wrong generic argument in `Object.Instantiate<Font>`.**
+   Shipped as fix 92; see the Current work section above and `docs/reviews/REVIEW87.md`.
+
+## Current replacement — Review 84 (2026-09-10)
+
+`docs/reviews/REVIEW84.md`, `docs/archive/reviews-log.md` §0bb, and `validation_reports/review84/` describe the
+current source and complete output. Release: **358 tests (260 portable + 64
+snapshots + 34 native); strict build 11,107 C# files / 115,658 bodies with 0
+failures or fallbacks; parser 0 bad files; direct sweep 116,178 methods / 0
+crashes / 0 structural-metric changes; constructor sweep 11,737 methods / 0
+crashes**. The original DLL/metadata remain unchanged and were read statically,
+never executed.
+
+Completed in this release:
+
+- [x] Complete class inheritance chains through a unique
+  `IL2CPP_TYPE_OBJECT` → `System.Object` mapping, stop cycles, and isolate
+  inheritance/field caches per `Il2Cpp` instance.
+- [x] Resolve folded parameterless constructors only from typed current-ctor
+  `this` or exact fresh-allocation provenance, one concrete closed MethodDef,
+  a reference-type inheritance match, and exact instance/void/zero-argument
+  metadata. Decline generic, multiple-match, byref, value-type, or malformed
+  cases.
+- [x] Distinguish same-type `: this(args)` from ancestor `: base(args)` and
+  recover parameterized resolved initializers without leaving raw pseudo calls
+  in generated C#.
+- [x] Carry exact `_alloc` provenance through binding/copies and complete one
+  allocation declaration in place. Audited discarded constructor allocations
+  fall 13,292 → 0; empty allocation declarations fall 21,624 → 13,254.
+- [x] Reduce `sub_180506120` constructor-family markers 2,958 → 160, legacy
+  `this.ctor(...)` text 2,186 → 45, all shared calls 21,504 → 18,703, and
+  `object objN` declarations 113,155 → 112,423.
+- [x] Increase real `: base(...)` initializers 5,960 → 9,530 and
+  `: this(...)` initializers 0 → 325 while shrinking generated C# by 20,568
+  lines with no file-inventory change.
+- [x] Preserve unrelated shared-call behavior by excluding the newly visible
+  Object tail from the broad legacy receiver heuristic; freeze the regression
+  where `System.Type.op_Equality` must not become an Object method.
+- [x] Freeze the same 64 MethodDefs in `goldens_review84.json`: 56 unchanged and
+  eight reviewed constructor/allocation changes.
+- [x] Strict-build, overlap-verify, parse, directly sweep all methods and all
+  constructors, compare, test, promote, checksum, and package the complete
+  replacement.
+
+### Next priorities (current, not archived diagnoses)
+
+1. **Prove the 15 conservative constructor leftovers.** Twelve native
+   constructors still contain `sub_180506120` because multiple eligible
+   ancestor constructors share it; three complex generic/scope constructors
+   retain `this.ctor(...)`. Add receiver/generic proof, never a cosmetic guess.
+2. **Trace the producers of the remaining 112,423 `object objN` declarations.**
+   Recover register seeds, stack-slot reads, local copy/store provenance, and
+   alias identity. Type the producing value before changing its declaration.
+3. **Finish allocation and indirect-call identity.** Classify the remaining
+   13,254 empty allocations, virtual/function-pointer constructor targets, and
+   cyclic allocations with dominance and per-iteration alias proof.
+4. **Complete missing return/call ABIs.** Generic value-type instantiated sizes,
+   source-level `ref` returns, non-address hidden buffers, mixed candidates, and
+   broader stack/vector arguments need explicit models and negative tests.
+5. **Finish legal structured control flow and compilation readiness.** 8,067
+   into-block gotos remain across 2,047 methods, along with definite assignment,
+   project references, constructor/SEH, identifier/type, and ref-return issues.
+6. **Vector, ARM64, and fixture breadth.** General packed-lane state, ARM64
+   semantics, and an independent licensed fixture remain open.
