@@ -181,8 +181,8 @@ output (`il2cpp/metadata.py` + `binary.py` frontends, `il2cpp/runtime/` for
 `review97e_parse.json` + `review97e_promotion_verification.json`; older files
 are historical), `final_out/` (the complete fix-97 strict-built/
 syntax-gated output, promoted from `work/review97_out/`), and `testgame/` (the supplied Shift At
-Midnight DLL/metadata, unchanged and included only in this private replacement
-at the user's request; do not redistribute them). Backup zips live in
+Midnight DLL/metadata, tracked via Git LFS and included only in this private repo
+at the user's request; do not redistribute them or make the repo public). Backup zips live in
 the parent folder. Pre-consolidation history in `docs/archive/` still
 refers to `../work/`, sibling `bXX_out1` trees, and `Shift At Midnight` at
 the old root — read those as `work/`, reaped batch trees, and `testgame/`.

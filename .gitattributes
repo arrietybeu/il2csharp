@@ -3,3 +3,5 @@ il2csharp.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-e
 decompiler.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 *.md text eol=lf
 requirements*.txt text eol=lf
+testgame/GameAssembly.dll filter=lfs diff=lfs merge=lfs -text
+testgame/ShiftAtMidnight_Data/il2cpp_data/Metadata/global-metadata.dat filter=lfs diff=lfs merge=lfs -text

@@ -146,8 +146,9 @@ Use `tools/csharp_smoke.py` for the .NET 8 compiled-pattern checks, including th
 actual loop emitter. They passed for Review 80 but were not rerun for Reviews
 81–97 (or the package split, which `work/split/rebuild_verify.py` proves byte-identical)
 because this environment has no .NET SDK; they are never a build of the
-complete recovered game. Keep the supplied game fixtures private; they are
-retained only for this user-requested replacement.
+complete recovered game. The supplied game fixtures are tracked via Git LFS
+while this repo stays private; they were added at the user's request —
+never make the repo public without removing them first.
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -184,7 +185,7 @@ Project root is `il2csharp/` itself. The old parent folder held a sibling
 `work/` (20 files, now merged into `work/`), five loose scripts (now in
 `tools/`: `compare_content.py`, `compare_outputs.py`, `count_diffs.py`,
 `test_import.py`, `test_import2.py`), and the game folder (now
-`testgame/`, gitignored). Pre-consolidation history in `docs/archive/`
+`testgame/`, tracked via Git LFS in this private repo). Pre-consolidation history in `docs/archive/`
 still refers to `../work/`, `il2csharp/final_out/`, sibling `bXX_out1`
 trees, and `Shift At Midnight` at the old root — read those as `work/`,
 `final_out/`, reaped batch trees, and `testgame/`. Backup zips live in the
@@ -232,8 +233,9 @@ then write once; make backups once and never re-derive them from the
 live file.
 
 **The real target for validation** is a licensed Windows build of *Shift At
-Midnight* (Kwalee), metadata v31, x64, kept locally in `testgame/`
-(gitignored; never publicly redistributed). A Unity 2022 sample
+Midnight* (Kwalee), metadata v31, x64, kept in `testgame/`
+(tracked via Git LFS; private repo only — never publicly redistributed
+and never make the repo public without removing the fixtures). A Unity 2022 sample
 (`Simple_2022_3_35`) under `temptools/Cpp2IL/TestFiles/` is a second,
 smaller data point when that external checkout is present (it is not
 bundled with this repo). There's no synthetic/bundled test fixture — every claim
