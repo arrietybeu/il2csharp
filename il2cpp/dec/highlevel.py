@@ -1067,6 +1067,220 @@ class _HighLevelMixin:
             out.append(st)
         return out
 
+    _OPEN_PARAM_RX = re.compile(r'\bT(?:\d+|[A-Z]\w*)?\b')
+
+    @staticmethod
+    def _new_rhs_type(rhs):
+        """Closed `new` target type carried literally by the RHS, if any."""
+        s = (rhs or '').strip()
+        if not s.startswith('new '):
+            return None
+        s = s[4:].strip()
+        depth = 0
+        cut = len(s)
+        for i, ch in enumerate(s):
+            if ch == '<':
+                depth += 1
+            elif ch == '>':
+                depth -= 1
+                if depth < 0:
+                    return None
+            elif ch == '(' and depth == 0:
+                cut = i
+                break
+            elif depth == 0 and ch in ('[', ']', '?', ';', '{', '}', '='):
+                return None
+        ty = s[:cut].strip()
+        if not ty or '<' not in ty:
+            return None
+        if ty.count('<') != ty.count('>'):
+            return None
+        if not re.fullmatch(r'[A-Za-z_@][\w@.]*\s*<.+>', ty, re.DOTALL):
+            return None
+        ty = re.sub(r'`\d+(?=<|$)', '', ty).strip()
+        return ty or None
+
+    @staticmethod
+    def _split_generic(ty):
+        """(base, args) for one `Base<A, B>` spelling; ([], base) if not generic."""
+        i = ty.find('<')
+        if i < 0:
+            return ty.strip(), []
+        depth = 0
+        end = -1
+        for j in range(i, len(ty)):
+            if ty[j] == '<':
+                depth += 1
+            elif ty[j] == '>':
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+        if end < 0:
+            return ty.strip(), []
+        if ty[end + 1:].strip():
+            return ty.strip(), []
+        inner = ty[i + 1:end]
+        args = []
+        d2 = 0
+        cur = ''
+        for ch in inner:
+            if ch == '<':
+                d2 += 1
+            elif ch == '>':
+                d2 -= 1
+            if ch == ',' and d2 == 0:
+                args.append(cur.strip())
+                cur = ''
+            else:
+                cur += ch
+        args.append(cur.strip())
+        return ty[:i].strip(), args
+
+    def _type_has_var(self, ty):
+        """True when the il2cpp type tuple holds VAR/MVAR at any depth."""
+        try:
+            il = self.L.il
+            bin = il.bin
+        except Exception:
+            return None
+        try:
+            from il2cpp.common import u64
+        except Exception:
+            return None
+        def walk(cur, depth):
+            if cur is None or depth > 16:
+                return None
+            if not isinstance(cur, tuple) or len(cur) != 2:
+                return None
+            data, bits = cur
+            te = (bits >> 16) & 0xFF
+            if te in (0x13, 0x1e):
+                return True
+            if 0x01 <= te <= 0x0e or te in (0x16, 0x18, 0x19, 0x1c):
+                return False
+            if te in (0x11, 0x12, 0x55):
+                return False
+            if te in (0x0f, 0x10, 0x1d):
+                try:
+                    inner = il.type_from_ptr(data)
+                except Exception:
+                    return None
+                if inner is None:
+                    return None
+                return walk(inner, depth + 1)
+            if te == 0x14:
+                try:
+                    o = bin.va2off(data)
+                    if o is None:
+                        return None
+                    ep = u64(bin.d, o)
+                    inner = il.type_from_ptr(ep) if ep else None
+                except Exception:
+                    return None
+                if inner is None:
+                    return None
+                return walk(inner, depth + 1)
+            if te == 0x15:
+                try:
+                    o = bin.va2off(data)
+                    if o is None:
+                        return None
+                    basep = u64(bin.d, o)
+                    instp = u64(bin.d, o + 8)
+                    base = il.type_from_ptr(basep) if basep else None
+                    if base is None:
+                        return None
+                    io = bin.va2off(instp) if instp else None
+                    if io is None:
+                        return None
+                    args = il._argv_type_tuples(u64(bin.d, io), u64(bin.d, io + 8))
+                    if args is None:
+                        return None
+                except Exception:
+                    return None
+                rb = walk(base, depth + 1)
+                if rb is True:
+                    return True
+                if rb is None:
+                    return None
+                for a in args:
+                    ra = walk(a, depth + 1)
+                    if ra is True:
+                        return True
+                    if ra is None:
+                        return None
+                return False
+            return None
+        try:
+            return walk(ty, 0)
+        except Exception:
+            return None
+
+    _OPEN_PARAM_FULL_RX = re.compile(r'T(?:\d+|[A-Z]\w*)?')
+
+    @staticmethod
+    def _args_contain_open_param(ty):
+        """True when a generic spelling carries a VAR-like argument at any depth."""
+        stack = [ty]
+        while stack:
+            cur = stack.pop()
+            try:
+                base, args = _HighLevelMixin._split_generic(cur)
+            except Exception:
+                return False
+            bshort = base.split('.')[-1].strip()
+            if bshort and re.fullmatch(r'T(?:\d+|[A-Z]\w*)?', bshort):
+                if not args:
+                    return True
+                return True
+            for a in args:
+                tok = re.sub(r'^(?:ref|out|in)\s+', '', a.strip())
+                while True:
+                    if tok.endswith('?') or tok.endswith('*'):
+                        tok = tok[:-1].strip()
+                        continue
+                    m = re.search(r'\[[,0-9 ]*\]$', tok)
+                    if m:
+                        tok = tok[:m.start()].strip()
+                        continue
+                    break
+                if not tok:
+                    continue
+                if '<' in tok:
+                    stack.append(tok)
+                else:
+                    short = tok.split('.')[-1].strip()
+                    if short and re.fullmatch(r'T(?:\d+|[A-Z]\w*)?', short):
+                        return True
+        return False
+
+    def _closed_rhs_new_type(self, t, tn, rhs):
+        """Closed `new` spelling for an open-generic tracked hint, if provable."""
+        try:
+            if self._type_has_var(t) is not True:
+                return None
+        except Exception:
+            return None
+        rhs_ty = self._new_rhs_type(rhs)
+        if rhs_ty is None:
+            return None
+        if self._args_contain_open_param(rhs_ty):
+            return None
+        if not self._args_contain_open_param(tn):
+            return None
+        tbase, targs = self._split_generic(tn)
+        rbase, rargs = self._split_generic(rhs_ty)
+        if not targs or not rargs or len(targs) != len(rargs):
+            return None
+        tshort = tbase.split('.')[-1].strip()
+        rshort = rbase.split('.')[-1].strip()
+        if not tshort or tshort != rshort:
+            return None
+        if '.' in tbase and '.' in rbase and tbase.strip() != rbase.strip():
+            return None
+        return rhs_ty
+
     def _decl_type_of(self, tok, rhs='') -> str:
         """C# declaration type for one (pre-rename) local token."""
         r = (rhs or '').strip().rstrip(';').strip()
@@ -1092,6 +1306,12 @@ class _HighLevelMixin:
         tn = re.sub(r'`\d+(?=<|$)', '', tn)   # List`1<T> -> List<T>
         if not tn or tn == 'void':
             return 'object'
+        try:
+            closed = self._closed_rhs_new_type(t, tn, r)
+        except Exception:
+            closed = None
+        if closed is not None:
+            return closed
         return tn
 
     _SEM_LOCAL_DECL_RX = re.compile(

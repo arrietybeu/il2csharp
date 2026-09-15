@@ -164,6 +164,17 @@ class _StructureMixin:
         # call and the phi copies go with it)
         raw = self._delegate_cache_fold(raw)
         rendered = self._name_interface_dispatch(self._render(raw))
+        # fix 99: `_render` drops empty pure-cond `if`s (e.g. an emptied
+        # class-init guard `if (!(k.initialized != 0)) { }`), orphaning the
+        # pure loads they alone read (`System.Type objN = typeof(X)`).
+        # No DCE runs after render, so those dead lines survived into
+        # output (12.7k dead typeof decls tree-wide) and were then renamed
+        # `Type typeN` by `_semantic_local_names`. Re-run the proven
+        # `_drop_dead_locals` on the rendered lines: same predicate (pure
+        # RHS incl. pure-loads drop, impure calls stay), now seeing
+        # post-render shapes. Render preserves statement order, so dropping
+        # a pure unread line cannot reorder or erase any side effect.
+        rendered = self._drop_dead_locals(rendered)
         return self._semantic_local_names(rendered, m)
 
     # ------------------------------------------------------------------

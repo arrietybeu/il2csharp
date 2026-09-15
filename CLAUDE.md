@@ -1,14 +1,14 @@
 # CLAUDE.md
 
-## Current source and validation authority — fix-97 live tree (Review 84 baseline, fixes 85–97)
+## Current source and validation authority — fix-99 live tree (Review 84 baseline, fixes 85–99)
 
 Read `docs/reviews/REVIEW84.md`–`REVIEW87.md`, `docs/todo.md`'s Current work section, and
 `docs/archive/reviews-log.md` section 0bf first. `final_out/` is the complete strict-built
-fix-97 output promoted 2026-09-14 (11,200 files, aggregate `93a4eb7b…9d87a2`),
+fix-99 output promoted 2026-09-15 (11,200 files, aggregate `c1426378…89391f2`),
 not the Review 84 file set alone, b42/b76, or a partial candidate. Historical paragraphs below retain
 the reasoning behind older changes; their old "current" labels are not release authority.
-`validation_reports/review84/summary.json` (baseline) plus `validation_reports/review97e_sweep.json`,
-`review97e_vs97.json`, `review97e_parse.json`, and `review97e_promotion_verification.json`
+`validation_reports/review84/summary.json` (baseline) plus `validation_reports/review99_sweep.json`,
+`review99_vs98.json`, `review99_parse.json`, and `review99_promotion_verification.json`
 are authoritative for the live tree.
 
 **Current invariants:**
@@ -130,17 +130,25 @@ are authoritative for the live tree.
   identity. Broader shared/virtual/indirect ABI recovery remains open.
 - Preserve Review 78's Boolean-byte stores, old-value aliases, array type hints,
   and exact all-candidate static-conversion gate.
+- `_decl_type_of` may close an open-generic tracked hint (structural VAR/MVAR
+  proof) over the same line's closed `new` RHS only for the same generic
+  definition (same short base, same arity) with argument-position openness
+  agreement — qualified names like `TMPro.X` are closed, never params.
+- `_drop_dead_locals` re-runs on post-`_render` lines (fix 99): `_render`
+  drops empty pure-cond `if`s and orphans their pure loads, so the second run
+  is load-bearing. Never remove it as "redundant" with the pre-render run.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test
-(`tests/test_source_format.py`) enforces this contract. **483 tests pass** (365 portable + 118 game;
+(`tests/test_source_format.py`) enforces this contract. **509 tests pass** (391 portable + 118 game;
 358 at the Review 84 baseline).
 `goldens_review77.json`, `goldens_review79.json`,
 `goldens_review80.json`, `goldens_review82.json`, and `goldens_review83.json` are
 archived unchanged. Current `goldens_review84.json` uses the same 64 MethodDefs:
 56 bodies are unchanged from Review 83 and eight reviewed bodies recover exact
 constructor/allocation behavior (Reviews 85–89 regenerate with only name-only deltas,
-fix 97 with declaration-only deltas, fix 97e with 0 body changes: see `docs/todo.md` Current work).
+fix 97 with declaration-only deltas, fix 97e with 0 body changes, fix 99 with 6 reviewed
+dead-typeof removals: see `docs/todo.md` Current work).
 
 Use `tools/csharp_smoke.py` for the .NET 8 compiled-pattern checks, including the
 actual loop emitter. They passed for Review 80 but were not rerun for Reviews

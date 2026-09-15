@@ -59,7 +59,96 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 97 (bare first-use temp declarations + 97e render repair, gated 2026-09-14)
+## Current work — fix 99 (post-render dead-pure-load DCE, gated 2026-09-15)
+
+`_render` drops empty pure-cond `if`s (e.g. an emptied class-init guard
+`if (!(k.initialized != 0)) { }`), orphaning the pure klass loads they
+alone read — no DCE ran after render, so `System.Type objN = typeof(X)`
+survived dead into output and was renamed `Type typeN`. `_structure`
+(`il2cpp/dec/structure.py`) now re-runs the proven `_drop_dead_locals`
+on the rendered lines: same predicate (pure RHS incl. pure-loads drop,
+impure calls stay), later timing. Gates: **509 tests (499 + 10 new in
+`tests/test_review99_render_orphans.py`); direct sweep 116,178 methods /
+0 crashes / 0 structural changes vs fix 98 (10,062 bodies changed, every
+one pure line deletions, net -16,555 lines); strict build 11,107 files /
+115,658 bodies / 0 failures or fallbacks (`work/review99_out`); parser 0
+bad files**. Reports: `validation_reports/review99_sweep.json`,
+`review99_vs98.json` (10,062 changed, 0 structural), `review99_parse.json`;
+built tree `work/review99_out`. The 64 goldens were regenerated after
+individual review of all 6 diffs (each exactly dead-typeof removals plus
+required renumbering cascades). Promoted 2026-09-15: `final_out/` now holds
+`work/review99_out` (11,200 files, candidate and promoted aggregate sha256
+both `c14263784492b2f209ff695018376404cf0093f06862e1b20e928da89391f2e7`, 0
+mismatches; the fix-97e tree is kept at `bckups/final_out_review97e`).
+Promotion record: `validation_reports/review99_promotion_verification.json`;
+post-promotion parse recheck
+`validation_reports/review99_recheck_parse_final.json` (11,107 files, 0
+bad).
+
+- [x] Fix 99: one post-render `_drop_dead_locals` call. Ground truth:
+  ActorCOMTransform.Update (mi 23898) ships `Type type1 =
+  typeof(Object)` whose only reader is the guard `_render` removes;
+  KerningTable.AddKerningPair (mi 95457) is untouched.
+- [x] Provenance verified on the built trees: all 13,646 lost
+  call-shaped lines are `Type V = typeof(X)` (dead pure loads); the 3
+  apparent gains are local-renumbering artifacts of the audit's own
+  normalizer (verified method-full diffs); every added tree line is a
+  consistent rename (`type2` → `type1`) of a surviving live line.
+- [x] Residue: dead `Type typeN = typeof(X)` decls fall 12,700 → 10 (the
+  10 survivors are kept by `//` line-comment contents seeding liveness —
+  over-retention, safe direction). Diagnosed but NOT changed: `_IMPURE`
+  (`[\w\]\)]\s*\(`) never matches generic calls (`Foo<Bar>(...)`), so the
+  pre-existing DCE already treats dead generic calls as droppable; fix 99
+  adds no new unsoundness class (1 such drop corpus-wide:
+  `CompileFunctionPointer<...>` in GPUResidentDrawerBurst).
+
+### Next priorities (fix 99 follow-ups)
+
+1. **511 remaining `return sub_*shared body` tails** (fix 94 list stands).
+2. **Bare-`T` declaration LHS** (`T value1 = new KerningPair();`, ~425
+   sites), **8,067 into-block gotos**, Review 87 byte-store/noreturn-EH
+   lists — all stand.
+3. **`UnityAction<T0>` LHS is DONE (fix 98); dead-`typeof` LHS is DONE
+   (fix 99)** except the 10 comment-pinned survivors above.
+
+## Previous work — fix 98 (open-generic declaration LHS closes over `new` RHS, gated 2026-09-15)
+
+Open-generic tracked hints (`UnityAction<T0>`, `EventCallback<TEventType>`,
+`Func<TSource, bool>`, …) now declare with the same line's closed `new`
+allocation spelling when the generic definition matches (same short base,
+same arity) and the RHS is textually closed. Gates: **499 tests (483 + 16
+new in `tests/test_review98_open_generic_decls.py`); direct sweep 116,178
+methods / 0 crashes / 0 structural changes vs fix 97e (229 bodies changed,
+all line-neutral declaration-only); strict build 11,107 files / 115,658
+bodies / 0 failures or fallbacks (`work/review98_out`); parser 0 bad
+files**. Reports: `validation_reports/review98_sweep.json`,
+`review98_vs97e.json` (229 changed, 0 structural), `review98_parse.json`;
+built tree `work/review98_out`. The 64 goldens are untouched (0 overlapping
+MIs, no regen needed).
+
+- [x] Fix 98: `_decl_type_of` (`il2cpp/dec/highlevel.py`) propagates the
+  closed RHS `new` type when the tracked type structurally contains
+  VAR/MVAR (`_type_has_var` binary walk, not a name guess), the RHS parses
+  as a generic `new` (`_new_rhs_type`, arrays/non-generics decline), both
+  sides split to the same short base and arity (`_split_generic`), and
+  generic-argument-position openness agrees
+  (`_args_contain_open_param`: `TMPro.KerningPair`-style qualified names no
+  longer read as open). Different bases (`IList<T>` vs `new List<int>()`),
+  open RHS, non-`new` RHS (`Enumerator<T> = obj.GetEnumerator()`), bare-`T`
+  LHS (`T value1 = new KerningPair()`), and closed/unknown tracked types all
+  decline. Built-tree same-base open→closed `new` sites fall 414 → 0 (the 3
+  remaining `UnityAction<T0>` lines are legitimate method signatures).
+
+### Next priorities (fix 98 follow-ups)
+
+1. **511 remaining `return sub_*shared body` tails** (fix 94 list stands).
+2. **Bare-`T` declaration LHS** (`T value1 = new KerningPair();` family),
+   **dead `Type type1 = typeof(Object);` lines** (2,791 sites), Review 87
+   byte-store/noreturn-EH/leftover lists — all stand (see below).
+3. **`UnityAction<T0>` declaration LHS is DONE (fix 98 above)** except the 3
+   legitimate open-generic method signatures, which must stay open.
+
+## Previous work — fix 97 (bare first-use temp declarations + 97e render repair, gated 2026-09-14)
 
 Declare bare first-use temps (`objN = rhs;` with no prior declaration from
 stack-slot zeroing, phi copies, unbound call results) exactly like `var`
