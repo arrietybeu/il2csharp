@@ -28,16 +28,19 @@ def test_representative_shared_addresses_have_exact_consensus(game_decompiler):
 def test_shared_boolean_result_becomes_a_boolean_condition(game_decompiler):
     text = body(game_decompiler, 23560)
     call = 'sub_181af7520/*shared body, 2 candidates*/'
-    assert f'if ({call}(this.animName, "walk"))' in text
-    assert f'else if (!({call}(this.animName, "run")))' in text
+    # fix 104: whole conditions prove bool, so the shared calls carry
+    # caller-proven casts; the boolean-condition proof is unchanged.
+    assert f'if ((bool){call}(this.animName, "walk"))' in text
+    assert f'else if (!((bool){call}(this.animName, "run")))' in text
     assert f'object obj8 = {call}' not in text
 
 
 def test_typed_shared_result_stays_after_its_native_predecessor(game_decompiler):
     lines = body(game_decompiler, 31664).splitlines()
     ctor = lines.index('obj4.ctor(shortDisplayName);')
+    # fix 104: the string decl carries its caller-proven cast now.
     result = next(i for i, line in enumerate(lines)
-                  if 'string text1 = sub_1825b1150/*shared body' in line)
+                  if 'string text1 = (string)sub_1825b1150/*shared body' in line)
     assert ctor < result
 
 
@@ -63,8 +66,10 @@ def test_shared_struct_return_uses_buffer_and_trims_stale_registers(game_decompi
     call = 'sub_1825bd360/*shared body, 2 candidates*/'
     # fix 97: the shared results now carry declarations (and the first a
     # semantic name); the buffer-and-trim proof is unchanged.
-    assert f'PrimitiveValue primitiveValue1 = {call}(0);' in text
-    assert f'primitiveValue1 = {call}(1);' in text
+    # fix 104: both carry caller-proven casts (decl and mapped assign).
+    pv = '(UnityEngine.InputSystem.Utilities.PrimitiveValue)'
+    assert f'PrimitiveValue primitiveValue1 = {pv}{call}(0);' in text
+    assert f'primitiveValue1 = {pv}{call}(1);' in text
     assert f'{call}(0, 0' not in text
 
 
@@ -74,4 +79,5 @@ def test_unobserved_sret_buffer_stays_unknown_per_call(game_decompiler):
     assert f'object obj3 = {call}(default, default, default);' in text
     # fix 97: declared, so the semantic namer types it v128 by its
     # consensus struct return; the per-call unknown-buffer proof stands.
-    assert f'Unity.Burst.Intrinsics.v128 v1281 = {call}(&obj4, &obj6);' in text
+    # fix 104: the v128 decl carries its caller-proven cast.
+    assert f'Unity.Burst.Intrinsics.v128 v1281 = (Unity.Burst.Intrinsics.v128){call}(&obj4, &obj6);' in text

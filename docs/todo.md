@@ -59,7 +59,67 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 103 (native-width INDEXED raw-store lvalues, gated 2026-09-16)
+## Current work — fix 104 (object stubs for unresolved sub_ + caller casts, gated 2026-09-16)
+
+53,984 `sub_X(...)` references pointed at methods declared nowhere
+(2,687 distinct VAs, 0 definitions tree-wide). The emitter now writes
+one global `__SharedBodyStubs` class per assembly (`internal static
+object sub_X(params object[] args)`, throwing, with per-VA owner
+comments) plus `using static __SharedBodyStubs;` per referencing file,
+and a late dec pass (`_shared_stub_casts` in `il2cpp/dec/highlevel.py`,
+after the delegate fold) inserts caller-proven `(T)` casts: decl TYPE
+(83% of sites), whole-condition `bool`, method return (`void` splits
+to call-then-return), unique-mapped plain assigns. Only direct value
+positions rewrite (root, ternary arms with sub_-free conditions,
+`!`-chains, one paren layer); nested args keep the object spelling;
+real metadata `sub_<hex>` names never stub or cast. Gates: **598
+tests (576 + 22 new in `tests/test_review104_shared_stubs.py`; 4
+review83 spellings updated, behaviors intact); direct sweep 116,178
+methods / 0 crashes / 0 structural changes vs fix 103 (7,096 bodies
+changed); strict build 11,184 files (11,107 + 77 stub files) /
+115,658 bodies / 0 failures or fallbacks (`work/review104_out`);
+parser 0 bad files**. Reports: `validation_reports/review104_sweep.json`,
+`review104_vs103.json` (7,096 changed, 0 structural),
+`review104_parse.json`; built tree `work/review104_out`. The 64
+goldens were regenerated after individual review of all 5 diffs (each
+exactly a caller-proven cast). NOT promoted — `final_out/` still holds
+the fix-99 tree pending a human promotion call.
+
+- [x] Fix 104: 12,716 cast lines (8,584 decl + 1,319 return + 2,544
+  conditions + 269 assigns), every cast type proven against its own
+  line/method/metadata (decl casts equal their decl, conditions are
+  `(bool)`, returns match file signatures and metadata sharer sets,
+  assigns match unique decl maps); 3,627 usings; 77 stub files;
+  0 void splits left (fix 95 owned them), 0 unexplained hunks.
+  Hardening along the way: `\x01` mask alphabet for comments (104c),
+  string-aware balanced spans, chained-assign shape proven
+  unmatchable so its guards were removed (104e).
+- [x] Residue, all verified declined by design: `&`/pointer args
+  (~9k, need byref recovery — the method now resolves, the argument
+  still doesn't), nested-expression positions (~2.6k conditions with
+  calls under operators, `is`/`as`, `??`), untyped sources.
+- [x] Next honest-naming targets identified (not attempted): the top
+  unregistered VAs are analyzable natives — `0x180434690` (8,046
+  uses) is a `jmp` thunk onto `0x180479F80`, `0x1804355f0` (1,449) a
+  thunk onto a `lock or [rsp],0` memory barrier, `0x180002210` /
+  `0x180002380` (~5,700) near-identical interface-dispatch search
+  loops, plus `0x18043dc60`, `0x18043e360`, `0x1804346a0`. Each needs
+  native structural proof (sqrt-wrapper precedent), never a name
+  guess. A generic `<T>` stub was rejected (C# never infers from
+  return position); casts express caller-side need and stay valid if
+  a VA later resolves honestly.
+
+### Next priorities (fix 104 follow-ups)
+
+1. **Condition/nested-expression casts** (`&&`/`||` operands,
+   `== <lit>` comparisons, ternary conditions, `is`/`as` left alone
+   correctly): needs expression-type analysis per operator.
+2. **Byref/pointer arguments** into stubs; **honest names** for the
+   top unregistered VAs above; **447 remaining shared tails** (10 via
+   the `this`-rule), **8,067 into-block gotos**, Review 87
+   noreturn-EH/leftover lists — all stand.
+
+## Previous work — fix 103 (native-width INDEXED raw-store lvalues, gated 2026-09-16)
 
 Same display-only rule as fix 102, extended to the indexed raw branch
 (`base + idx*scale + disp`): the index/scale pair is recorded in

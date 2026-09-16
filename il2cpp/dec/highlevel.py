@@ -1067,6 +1067,448 @@ class _HighLevelMixin:
             out.append(st)
         return out
 
+    _SUB_CALL_RX = re.compile(r'sub_([0-9a-f]+)')
+    _STUB_SKIP_TYPES = frozenset(
+        ('object', 'System.Object', 'Object', 'void', 'System.Void'))
+    _STUB_KEYWORDS = frozenset((
+        'if', 'else', 'while', 'do', 'for', 'foreach', 'switch', 'case',
+        'default', 'goto', 'return', 'throw', 'try', 'catch', 'finally',
+        'using', 'lock', 'fixed', 'checked', 'unchecked', 'const', 'new',
+        'yield', 'await', 'var', 'ref', 'in', 'out', 'scoped', 'readonly',
+        'volatile', 'typeof', 'sizeof', 'nameof', 'stackalloc'))
+    _STUB_DECL_RX = re.compile(
+        r'^([A-Za-z_@][\w@.<>,\[\]*? ]*?)\s+([A-Za-z_@]\w*)\s*=\s*(.*);\s*$')
+    _STUB_ASSIGN_RX = re.compile(
+        r'^([A-Za-z_@]\w*)\s*=\s*(.*);\s*$')
+    _STUB_RETURN_RX = re.compile(r'^return\s+(.*);\s*$')
+    _STUB_COND_RX = re.compile(r'^(?:else\s+)?(?:if|while)\s*\((.*)\)\s*$')
+    _STUB_FOREACH_RX = re.compile(
+        r'^foreach\s*\(\s*(.+?)\s+([A-Za-z_@]\w*)\s+in\b')
+    _STUB_CATCH_RX = re.compile(
+        r'^catch\s*\(\s*(.+?)\s+([A-Za-z_@]\w*)\s*\)')
+
+    @staticmethod
+    def _stub_mask_line(s):
+        """Length-preserving mask: strings/chars become spaces,
+        comments become \x01 (a real // tail stays recognizable).
+
+        The sub_ scanner runs on the mask (same offsets as the line) so
+        string contents and comments can never match. Interpolated holes
+        mask whole: object interpolates, no cast is needed there.
+        """
+        out = list(s)
+        i, n = 0, len(s)
+        while i < n:
+            ch = s[i]
+            if ch == '/' and i + 1 < n and s[i + 1] == '/':
+                for k in range(i, n):
+                    out[k] = '\x01'
+                break
+            if ch == '/' and i + 1 < n and s[i + 1] == '*':
+                j = s.find('*/', i + 2)
+                j = n if j < 0 else j + 2
+                for k in range(i, j):
+                    out[k] = '\x01'
+                i = j
+                continue
+            if ch in ('"', "'"):
+                verb = i > 0 and (s[i - 1] == '@' or (
+                    s[i - 1] == '$' and i > 1 and s[i - 2] == '@'))
+                j = i + 1
+                while j < n:
+                    if verb and s[j] == '"' and j + 1 < n \
+                            and s[j + 1] == '"':
+                        j += 2
+                        continue
+                    if not verb and s[j] == '\\' and j + 1 < n:
+                        j += 2
+                        continue
+                    if s[j] == ch:
+                        break
+                    j += 1
+                j = min(j + 1, n)
+                for k in range(i, j):
+                    out[k] = ' '
+                i = j
+                continue
+            i += 1
+        return ''.join(out)
+
+    def _stub_real_names(self):
+        """`sub_<hex>` spellings that are REAL metadata method names.
+
+        An obfuscated binary could declare one; those calls resolve for
+        real and must never gain a stub or a cast. Empty on this corpus.
+        """
+        hit = getattr(self, '_stub_real_cache', None)
+        if hit is not None:
+            return hit
+        out = set()
+        try:
+            for md in self.L.meta.methods:
+                nm = md.name or ''
+                if nm.startswith('sub_') \
+                        and re.fullmatch(r'sub_[0-9a-f]+', nm):
+                    out.add(nm[4:])
+        except Exception:
+            pass
+        self._stub_real_cache = frozenset(out)
+        return self._stub_real_cache
+
+    @classmethod
+    def _stub_type_ok(cls, ty):
+        """True when `(ty)` is a well-formed cast spelling for a stub call."""
+        t = (ty or '').strip()
+        if not t or t in cls._STUB_SKIP_TYPES or '*' in t:
+            return False
+        if t.startswith('(') or ';' in t or '=' in t:
+            return False
+        if t.split()[0] in cls._STUB_KEYWORDS:
+            return False
+        return True
+
+    @classmethod
+    def _stub_call_at(cls, masked, pos):
+        """Hex VA for a call-name `sub_<hex>` at pos with ident boundaries."""
+        m = re.match(r'sub_([0-9a-f]+)', masked[pos:])
+        if m is None:
+            return None
+        if pos > 0 and (masked[pos - 1].isalnum() or masked[pos - 1] in '@_.'):
+            return None
+        e = pos + m.end()
+        if e < len(masked) and (masked[e].isalnum() or masked[e] == '_'):
+            return None
+        return m.group(1)
+
+    @staticmethod
+    def _stub_call_span(masked, va_end):
+        """(open, close) of the call parens after a name match, else None."""
+        i, n = va_end, len(masked)
+        while i < n and masked[i] in ' \t\x01':
+            i += 1
+        if i >= n or masked[i] != '(':
+            return None
+        depth = 0
+        for k in range(i, n):
+            if masked[k] == '(':
+                depth += 1
+            elif masked[k] == ')':
+                depth -= 1
+                if depth == 0:
+                    return (i, k)
+        return None
+
+    @staticmethod
+    def _stub_top_qmark(masked, lo, hi):
+        """Index of a top-level ternary `?` (never `??`/`?.`), else None."""
+        depth = 0
+        k = lo
+        while k < hi:
+            ch = masked[k]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            elif ch == '?' and depth == 0:
+                nxt = masked[k + 1] if k + 1 < hi else ''
+                if nxt not in ('?', '.'):
+                    return k
+                k += 1
+            k += 1
+        return None
+
+    @staticmethod
+    def _stub_top_colon(masked, lo, hi):
+        depth = 0
+        for k in range(lo, hi):
+            if masked[k] == '(':
+                depth += 1
+            elif masked[k] == ')':
+                depth -= 1
+            elif masked[k] == ':' and depth == 0 \
+                    and (k + 1 >= hi or masked[k + 1] != ':'):
+                return k
+        return None
+
+    @classmethod
+    def _stub_span_has_call(cls, masked, lo, hi):
+        pos = lo
+        while pos < hi:
+            m = cls._SUB_CALL_RX.search(masked, pos, hi)
+            if m is None:
+                return False
+            if cls._stub_call_at(masked, m.start()) is not None:
+                return True
+            pos = m.end()
+        return False
+
+    @staticmethod
+    def _stub_top_eq(masked):
+        """Index of a top-level plain `=` (never ==/=>/<=/>=/!=/compounds)."""
+        depth = 0
+        k, n = 0, len(masked)
+        while k < n:
+            ch = masked[k]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            elif ch == '=' and depth == 0:
+                prev = masked[k - 1] if k > 0 else ''
+                nxt = masked[k + 1] if k + 1 < n else ''
+                if prev not in ('=', '!', '<', '>', '+', '-', '*', '/',
+                                '%', '&', '|', '^') and nxt not in ('=', '>'):
+                    return k
+            k += 1
+        return None
+
+    def _stub_wrap_range(self, code, masked, lo, hi, ty, real, depth=0):
+        """Wrap direct-position sub_ calls in masked[lo:hi] with `(ty)`.
+
+        Grammar: CALL | `(...)` | `!`-chain | ternary (whose condition
+        must be sub_-free; arms recurse). Anything else declines the
+        whole span (None): a partially rewritten value would mix proven
+        and unproven needs. Calls nested inside another sub_'s own
+        argument list keep the object spelling (params take object).
+        """
+        if depth > 4:
+            return None
+        a, b = lo, hi
+        while a < b and masked[a] in ' \t\x01':
+            a += 1
+        while b > a and masked[b - 1] in ' \t\x01':
+            b -= 1
+        if a >= b:
+            return None
+        bangs = 0
+        while a < b and masked[a] == '!':
+            bangs += 1
+            a += 1
+            while a < b and masked[a] in ' \t\x01':
+                a += 1
+        if a >= b:
+            return None
+        inner_ty = 'bool' if bangs else ty
+        if masked[a] == '(':
+            d, k = 0, a
+            while k < b:
+                if masked[k] == '(':
+                    d += 1
+                elif masked[k] == ')':
+                    d -= 1
+                    if d == 0:
+                        break
+                k += 1
+            if k == b - 1:
+                inner = self._stub_wrap_range(
+                    code, masked, a + 1, b - 1, inner_ty, real, depth + 1)
+                if inner is None:
+                    return None
+                return code[lo:a] + '(' + inner + ')' + code[b:hi]
+        q = self._stub_top_qmark(masked, a, b)
+        if q is not None:
+            c = self._stub_top_colon(masked, q + 1, b)
+            if c is None:
+                return None
+            if self._stub_span_has_call(masked, a, q):
+                return None
+            arm1 = self._stub_wrap_range(
+                code, masked, q + 1, c, ty, real, depth + 1)
+            arm2 = self._stub_wrap_range(
+                code, masked, c + 1, b, ty, real, depth + 1)
+            if arm1 is None or arm2 is None:
+                return None
+            return code[lo:q + 1] + arm1 + code[c:c + 1] + arm2 + code[b:hi]
+        vm = self._stub_call_at(masked, a)
+        if vm is None or vm in real:
+            return None
+        span = self._stub_call_span(masked, a + 4 + len(vm))
+        if span is None or span[1] != b - 1:
+            return None
+        pre = '!' * bangs
+        return code[lo:a] + pre + '(%s)' % inner_ty + code[a:b] + code[b:hi]
+
+    def _stub_exact_call(self, masked, lo, hi, real):
+        """(start, end) when the span is exactly one sub_ call."""
+        a, b = lo, hi
+        while a < b and masked[a] in ' \t\x01':
+            a += 1
+        while b > a and masked[b - 1] in ' \t\x01':
+            b -= 1
+        if a >= b:
+            return None
+        vm = self._stub_call_at(masked, a)
+        if vm is None or vm in real:
+            return None
+        span = self._stub_call_span(masked, a + 4 + len(vm))
+        if span is None or span[1] != b - 1:
+            return None
+        return (a, span[1])
+
+    def _stub_assign_types(self, lines, m):
+        """name -> unique TYPE text from decls and params."""
+        found = {}
+        multi = set()
+
+        def add(nm, ty):
+            if nm in multi:
+                return
+            if nm in found:
+                if found[nm] != ty:
+                    multi.add(nm)
+                    del found[nm]
+                return
+            found[nm] = ty
+
+        for st in lines:
+            s = st.strip()
+            dm = self._STUB_DECL_RX.match(s)
+            if dm is not None:
+                ty = dm.group(1).strip()
+                if ty.split()[0] not in self._STUB_KEYWORDS:
+                    add(dm.group(2), ty)
+                continue
+            fm = self._STUB_FOREACH_RX.match(s)
+            if fm is not None:
+                add(fm.group(2), fm.group(1).strip())
+                continue
+            cm = self._STUB_CATCH_RX.match(s)
+            if cm is not None:
+                add(cm.group(2), cm.group(1).strip())
+        try:
+            il = self.L.il
+            for p in self.L.meta.method_params(m):
+                ty = il.types[p.type] if 0 <= p.type < len(il.types) else None
+                if ty is not None:
+                    add(p.name, il.type_name(ty))
+        except Exception:
+            pass
+        return found
+
+    def _stub_return_type(self, m):
+        """(spelling, is_void) for the enclosing method's return."""
+        try:
+            il = self.L.il
+            rt = il.types[m.return_type] \
+                if 0 <= m.return_type < len(il.types) else None
+            if rt is None:
+                return None, False
+            if ((rt[1] >> 16) & 0xFF) == 0x01:
+                return None, True
+            nm = il.type_name(rt)
+            if not self._stub_type_ok(nm):
+                return None, False
+            return nm, False
+        except Exception:
+            return None, False
+
+    def _stub_cast_line(self, line, amap, rty, is_void, real):
+        """One line rewritten (or split); None to keep it. Never raises."""
+        try:
+            return self._stub_cast_line_inner(
+                line, amap, rty, is_void, real)
+        except Exception:
+            return None
+
+    def _stub_cast_line_inner(self, line, amap, rty, is_void, real):
+        s = line.strip()
+        if 'sub_' not in s:
+            return None
+        masked = self._stub_mask_line(s)
+        if 'sub_' not in masked:
+            return None
+        ind = line[:len(line) - len(line.lstrip())]
+        tail = ''
+        ci = masked.find('\x01')
+        if ci != -1 and s[ci:ci + 2] == '//':
+            tail = ' ' + s[ci:].strip()
+            s = s[:ci].rstrip()
+            masked = masked[:len(s)]
+        rm = self._STUB_RETURN_RX.match(s)
+        if rm is not None:
+            v_lo, v_hi = rm.start(1), rm.end(1)
+            if is_void:
+                span = self._stub_exact_call(masked, v_lo, v_hi, real)
+                if span is None:
+                    return None
+                call = s[span[0]:span[1] + 1]
+                return [ind + call + ';' + tail, ind + 'return;']
+            if rty is None or not self._stub_type_ok(rty):
+                return None
+            new = self._stub_wrap_range(s, masked, v_lo, v_hi, rty, real)
+            if new is None or new == s[v_lo:v_hi]:
+                return None
+            return ind + 'return ' + new + ';' + tail
+        cm = self._STUB_COND_RX.match(s)
+        if cm is not None:
+            v_lo, v_hi = cm.start(1), cm.end(1)
+            new = self._stub_wrap_range(s, masked, v_lo, v_hi, 'bool', real)
+            if new is None or new == s[v_lo:v_hi]:
+                return None
+            return ind + s[:v_lo] + new + s[v_hi:] + tail
+        dm = self._STUB_DECL_RX.match(s)
+        if dm is not None:
+            ty = dm.group(1).strip()
+            if ty.split()[0] in self._STUB_KEYWORDS \
+                    or not self._stub_type_ok(ty):
+                return None
+            v_lo, v_hi = dm.start(3), dm.end(3)
+            if self._stub_top_eq(masked[v_lo:v_hi]) is not None:
+                return None
+            new = self._stub_wrap_range(s, masked, v_lo, v_hi, ty, real)
+            if new is None or new == s[v_lo:v_hi]:
+                return None
+            return ind + s[:v_lo] + new + s[v_hi:] + tail
+        am = self._STUB_ASSIGN_RX.match(s)
+        if am is not None:
+            ty = amap.get(am.group(1))
+            if ty is None or not self._stub_type_ok(ty):
+                return None
+            v_lo, v_hi = am.start(2), am.end(2)
+            new = self._stub_wrap_range(s, masked, v_lo, v_hi, ty, real)
+            if new is None or new == s[v_lo:v_hi]:
+                return None
+            return ind + s[:v_lo] + new + s[v_hi:] + tail
+        return None
+
+    def _shared_stub_casts(self, lines, m):
+        """Caller-proven `(T)` casts over unresolved `sub_X` calls. -- fix 104
+
+        Most shared-body references sit in `TYPE name = sub_X(...)`
+        position, where the declaration TYPE is the callee's proven need
+        (the object stubs return object for everything else). Whole
+        conditions prove `bool`, `return` proves the method's return
+        (void splits to call-then-return), plain assignments prove the
+        mapped decl type. Only direct value positions rewrite (root,
+        ternary arms with sub_-free conditions, `!`-chains, one paren
+        layer); anything nested deeper keeps the object spelling, and
+        any unparseable span declines the whole line. Real metadata
+        `sub_<hex>` names (obfuscated binaries) never stub or cast.
+        Never raises: one bad line keeps itself.
+        """
+        try:
+            real = self._stub_real_names()
+        except Exception:
+            real = frozenset()
+        try:
+            amap = self._stub_assign_types(lines, m)
+        except Exception:
+            amap = {}
+        try:
+            rty, is_void = self._stub_return_type(m)
+        except Exception:
+            rty, is_void = None, False
+        out = []
+        for ln in lines:
+            res = self._stub_cast_line(ln, amap, rty, is_void, real)
+            if res is None:
+                out.append(ln)
+            elif isinstance(res, list):
+                out.extend(res)
+            else:
+                out.append(res)
+        return out
+
     _OPEN_PARAM_RX = re.compile(r'\bT(?:\d+|[A-Z]\w*)?\b')
 
     @staticmethod
