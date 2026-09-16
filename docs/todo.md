@@ -59,7 +59,81 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 101 (bare-param declaration hints close over `new` RHS, gated 2026-09-16)
+## Current work — fix 102 (native-width raw-store lvalues, gated 2026-09-16)
+
+A raw `*(base + disp)` store lvalue rendered `((byte*)base + disp)[0]`,
+which fails to compile whenever the stored value is not a byte (1,524
+out-of-range literals tree-wide, plus mistyped variables). The native
+width is ground truth from the store instruction, so the statement now
+spells a same-width cast (`_wide_src_cast`/`_wide_rmw_cast` +
+`_wide_store_disp`/`_wide_rmw_disp` in `il2cpp/lifter/insn.py`, parts
+recorded in `_mem_lvalue`). Only the emitted statement spells the
+width — kills, slots, barriers and twin dedup keep the raw text; the
+barrier twin still renders raw, bridged by `_canon_wide_cast` in
+`_norm_twin` (`il2cpp/text.py`); the `unsafe` detector covers all
+pointer casts (`il2cpp/dec/textpass.py`). Gates: **571 tests (544 + 27
+new in `tests/test_review102_raw_store_widths.py`, incl. end-to-end
+`_write_mem`/`_rmw_mem` and an updated packed-lane spelling in
+`tests/test_game_review81.py`); direct sweep 116,178 methods / 0
+crashes / 0 structural changes vs fix 101 (9,269 bodies changed);
+strict build 11,107 files / 115,658 bodies / 0 failures or fallbacks
+(`work/review102_out`); parser 0 bad files**. Reports:
+`validation_reports/review102_sweep.json`, `review102_vs101.json`
+(9,269 changed, 0 structural), `review102_parse.json`; built tree
+`work/review102_out`. The 64 goldens were regenerated after individual
+review of all 4 diffs (each exactly a width improvement:
+`GetChars`, `Rpc_CMD_Heal`, `uint3x3.op_Explicit`, `Finalize`).
+NOT promoted — `final_out/` still holds the fix-99 tree pending a
+human promotion call.
+
+- [x] Fix 102: integer literals pick signedness by fit (signed first),
+  float literals keep their suffixed width (`f`→float, `d`/bare→
+  double; fix 102b), register sources are accepted only when the
+  source type's size equals the native width so every rendered byte is
+  value-determined (a narrower source would leave upper bytes
+  unexplained — e.g. a long in a dword store stays honest). RMW keeps
+  result unity (`int`/`long`/`uint`/`ulong`/`float`/`double` only,
+  width 4/8). Declines on unknown/reference/enum/bool sources,
+  indexed stores, `__static_fields` blobs (19 sites, all compiling —
+  keeps the sfblob twin machinery byte-identical), and un fitting
+  values/widths.
+- [x] Fix 102c: `_field_expr`'s miss over a dotted base returned the
+  raw text through the field branch, bypassing width recording
+  (`this.ropeRenderer + 0x54`, `this.heap[0x0] + 0x22`, ...). The
+  exact-passthrough spelling now records the identical parts at true
+  instruction width; returned text is byte-identical either way.
+- [x] Provenance verified on the built trees (11,107 files, inventory
+  identical): 25,765 widened lines in 1,820 files, every one a
+  cast-only swap at identical indent; +1 honest line (`Decimal.Abs`:
+  a 16-byte struct copy plus a dword flags fixup previously
+  accidentally deduped to one line — verified against native);
+  3 honest ternary unfolds (one arm widened while a genuinely
+  different-width sibling arm stayed byte* — merging them would be the
+  bug); 0 unexplained changes. Out-of-range literal stores fall
+  1,524 → 189 (residue: indexed fills, untyped registers,
+  wide-in-narrow, `__static_fields` — each verified declined by
+  design, modulo comparison/indexed census false positives).
+- [x] Ground truth: `mov dword [rbx],0FFFFFFFEh` → `((uint*)num1 +
+  0x0)[0] = 4294967294;`, `movss` float lanes → `((float*)obj4 +
+  0x4)[0] = ...` (review81 proof intact: 4 Sqrt, no helper, no
+  unknown), `mov word [x],0FFFFh` → `((ushort*)...)[0] = 65535;` —
+  full cases in the test file.
+
+### Next priorities (fix 102 follow-ups)
+
+1. **Indexed raw stores** (`base + idx*scale + disp`, e.g. float-1.0
+   array fills): same helper extends naturally, needs its own gate.
+2. **Untyped register sources** (`void*` params, untyped slots) and
+   **wide-source-in-narrow-store** (long into dword field): both need
+   field-type recovery, not spelling guesses.
+3. **Reference/array/`new` RHS** through raw pointers: barrier and
+   field-recovery territory, never a pointer cast.
+4. **447 remaining shared tails** (fix 100 list stands — receiver
+   `this`-rule scoped at 10 `MemberwiseClone` sites), **8,067
+   into-block gotos**, Review 87 noreturn-EH/leftover lists — all
+   stand.
+
+## Previous work — fix 101 (bare-param declaration hints close over `new` RHS, gated 2026-09-16)
 
 A tracked hint that is one bare VAR/MVAR (`T`, `T1`, `TValue` —
 top-level 0x13/0x1e with a matching spelling, openness proved

@@ -2,6 +2,16 @@ from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.cfg import _has_arrow, _in_string
 from il2cpp.stmt_text import _fix_cond_line, _rsplit_op, _split_top
 
+def _needs_unsafe_block(lines):
+    """True when any rendered line uses unsafe pointer syntax: a raw
+    `*(...)` deref, a `(T*)` pointer cast of any primitive spelling (fix
+    102 renders width-preserving casts, not only byte), or `->`."""
+    for ln in lines:
+        if '*(' in ln or '*))' in ln or _has_arrow(ln):
+            return True
+        if re.search(r'\(\([A-Za-z_][\w$]*\*\)', ln):
+            return True
+    return False
 class _TextPassMixin:
     @classmethod
     def _simplify_cond(cls, c: str) -> str:
@@ -555,9 +565,7 @@ class _TextPassMixin:
         # re-expressed; keep the fact as a comment, drop the impossible line
         raw = [re.sub(r'^(\s*)default\s*=.*;$',
                       r'\1/* store into untracked ?addr elided */', ln) for ln in raw]
-        needs_unsafe = any('*(' in ln or '((byte*)' in ln or '*))' in ln
-                           or _has_arrow(ln)
-                           for ln in raw)
+        needs_unsafe = _needs_unsafe_block(raw)
         # drop pure value-discard statements: a line that IS only a
         # pointer cast/index with no assignment or call has no effect
         cleaned = []

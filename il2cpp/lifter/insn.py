@@ -6,6 +6,13 @@ from il2cpp.runtime.meta import IMM_OPS, meta_lit_repr
 from il2cpp.text import _ATOM_PREC, _BIN_PREC, _bin_txt, _fold_bin, _int_lit, _term_up, disp_add, imm_of, reg_name, sdisp, strip_outer
 from il2cpp.x64 import ARG_REGS, RMW_OPS, STORE_MNEMONICS, VOLATILE, _CMOV_AS_J, _SFPF, _reg_size, flag_cond
 
+if HAVE_ICED:
+    _WIDE_FLOAT_MN = frozenset((Mnemonic.ADDSS, Mnemonic.ADDSD, Mnemonic.SUBSS,
+                                Mnemonic.SUBSD, Mnemonic.MULSS, Mnemonic.MULSD,
+                                Mnemonic.DIVSS, Mnemonic.DIVSD))
+else:
+    _WIDE_FLOAT_MN = frozenset()
+
 class _InsnMixin:
     def _insn(self, ins, insns, idx, fmt, end):
         mn = ins.mnemonic
@@ -1188,6 +1195,11 @@ class _InsnMixin:
         """Assignable text for a memory destination, or None when the write is
         runtime bookkeeping that should not appear in the body."""
         self._lv_ty = None
+        # fix 102: native width + (base, disp) parts for a raw
+        # `*(...)` lvalue, so _write_mem/_rmw_mem can render a
+        # width-preserving cast. Bookkeeping keeps raw text.
+        self._lv_width = None
+        self._lv_raw_parts = None
         if ins.memory_base == IReg.RIP:
             slot = ins.ip_rel_memory_address
             q = self.bin.qword(slot)
@@ -1232,9 +1244,18 @@ class _InsnMixin:
         if fe.kind in ('obj', 'arr', 'str') or ('.' in fe.text) \
                 or ('->' in fe.text):
             self._lv_ty = fe.ty
+            if fe.text == '*(%s %s)' % (be.text, disp_add(disp)):
+                # fix 102c: _field_expr's raw passthrough over a
+                # dotted base (`*(this.field + disp)` on a field
+                # map miss); the raw branch below would record
+                # these identical parts. Same text either way.
+                self._lv_width = MemorySizeExt.size(ins.memory_size)
+                self._lv_raw_parts = (be.text, disp_add(disp))
             return fe.text
         if be.kind == 'arr' and disp >= 0x20:
             return '%s[%#x]' % (be.text, (disp - 0x20) // max(size, 1))
+        self._lv_width = MemorySizeExt.size(ins.memory_size)
+        self._lv_raw_parts = (be.text, disp_add(disp))
         return '*(%s %s)' % (be.text, disp_add(disp))
 
     def _coalesced_bool_store(self, ins, asm):
@@ -1290,6 +1311,186 @@ class _InsnMixin:
         for lv, value in stores:
             self.emit(ins.ip, '%s = %s;' % (lv, value), asm)
         return True
+
+    _WIDE_SIGNED = {2: 'short', 4: 'int', 8: 'long'}
+    _WIDE_UNSIGNED = {2: 'ushort', 4: 'uint', 8: 'ulong'}
+    _WIDE_INT_RX = re.compile(r'^([+-]?)(?:(0[xX][0-9a-fA-F]+)|(\d+))([uUlL]*|[fFdD])?$')
+    _WIDE_FLOAT_RX = re.compile(r'^[+-]?(?:\d+\.\d*|\.\d+|\d+[eE][+-]?\d+)(?:[eE][+-]?\d+)?[fFdD]?$')
+    # il2cpp element type -> (signedness, size); only primitives with C#
+    # implicit conversions. Natives, enums, references, strings, bools
+    # and pointers decline.
+    _WIDE_SRC_KIND = {
+        0x03: ('u', 2),  # char
+        0x04: ('s', 1), 0x05: ('u', 1),
+        0x06: ('s', 2), 0x07: ('u', 2),
+        0x08: ('s', 4), 0x09: ('u', 4),
+        0x0a: ('s', 8), 0x0b: ('u', 8),
+        0x0c: ('f', 4), 0x0d: ('f', 8),
+    }
+    _WIDE_EXACT = {
+        0x08: ('int', 4), 0x09: ('uint', 4),
+        0x0a: ('long', 8), 0x0b: ('ulong', 8),
+        0x0c: ('float', 4), 0x0d: ('double', 8),
+    }
+
+    def _wide_int_cast(self, width, v):
+        """Signed/unsigned `width` cast accepting integer `v`, else None.
+
+        Signed first when the value fits (the default C# integral
+        family); unsigned for the wrapped upper half. Out-of-width
+        values decline: no cast can hold them.
+        """
+        if width not in (2, 4, 8):
+            return None
+        bits = width * 8
+        if -(1 << (bits - 1)) <= v <= (1 << (bits - 1)) - 1:
+            return self._WIDE_SIGNED[width]
+        if 0 <= v <= (1 << bits) - 1:
+            return self._WIDE_UNSIGNED[width]
+        return None
+
+    @staticmethod
+    def _wide_float_cast(width, src):
+        """Float/double cast for a float-literal `src` at `width`, else None.
+
+        The lifter always suffixes float texts (`1.0f`, `1.0d`), so the
+        suffix decides: `f` is 4 bytes, `d`/bare is 8. A 4-byte float
+        widened to 8 (or the reverse) would change the value.
+        """
+        if width == 4 and src[-1:] in ('f', 'F'):
+            return 'float'
+        if width == 8 and (src[-1:] in ('d', 'D')
+                           or src[-1:].isdigit()):
+            return 'double'
+        return None
+
+    def _wide_src_cast(self, width, src, src_ty):
+        """Pointer cast rendering a raw native-width store compilable, else None. -- fix 102
+
+        A raw `*(base + disp)` lvalue renders `((byte*)base + disp)[0]`,
+        which fails to compile whenever the stored value is not a byte.
+        The native width is ground truth from the store instruction, so a
+        same-width cast preserves address, value and width: integer
+        literals pick signedness by fit (constant expressions convert
+        implicitly when representable), float literals keep their
+        suffixed width, and register sources are accepted only when the
+        source type's size equals the native width, so every rendered
+        byte is value-determined (a narrower source would leave upper
+        bytes unexplained). Unknown, reference, enum, bool and
+        over-wide sources decline and keep today's spelling. Never
+        invents a width: only 2/4/8 native widths render.
+        """
+        if width not in (2, 4, 8):
+            return None
+        if not src:
+            return None
+        m = self._WIDE_INT_RX.match(src)
+        if m:
+            try:
+                v = int(m.group(1) + (m.group(2) or m.group(3)), 0)
+            except ValueError:
+                return None
+            return self._wide_int_cast(width, v)
+        if self._WIDE_FLOAT_RX.match(src):
+            return self._wide_float_cast(width, src)
+        if not isinstance(src_ty, tuple) or len(src_ty) != 2:
+            return None
+        if (src_ty[1] >> 29) & 1:
+            return None
+        kind = self._WIDE_SRC_KIND.get((src_ty[1] >> 16) & 0xFF)
+        if kind is None:
+            return None
+        sign, size = kind
+        if size != width:
+            return None
+        if sign == 'f':
+            return {4: 'float', 8: 'double'}[width]
+        return (self._WIDE_SIGNED if sign == 's' else self._WIDE_UNSIGNED)[width]
+
+    def _wide_rmw_cast(self, width, mn, src, src_ty):
+        """Pointer cast for a raw read-modify-write store, else None. -- fix 102
+
+        `C = C op S` must stay `C`: integer mnemonics take int-literal
+        sources fitting the signed width (an unsigned target would
+        promote the arithmetic result away) or a register whose type
+        maps exactly to the width cast; float mnemonics take suffixed
+        float sources onto float/double. Width 2 never unifies (short
+        + int is int) and declines, like everything unproven.
+        """
+        if width not in (4, 8):
+            return None
+        if not src:
+            return None
+        if mn in _WIDE_FLOAT_MN:
+            if self._WIDE_FLOAT_RX.match(src):
+                return self._wide_float_cast(width, src)
+            if isinstance(src_ty, tuple) and len(src_ty) == 2 \
+                    and not (src_ty[1] >> 29) & 1:
+                exact = self._WIDE_EXACT.get((src_ty[1] >> 16) & 0xFF)
+                if exact is not None and exact[1] == width \
+                        and exact[0] in ('float', 'double'):
+                    return exact[0]
+            return None
+        m = self._WIDE_INT_RX.match(src)
+        if m:
+            try:
+                v = int(m.group(1) + (m.group(2) or m.group(3)), 0)
+            except ValueError:
+                return None
+            bits = width * 8
+            if -(1 << (bits - 1)) <= v <= (1 << (bits - 1)) - 1:
+                return self._WIDE_SIGNED[width]
+            return None
+        if isinstance(src_ty, tuple) and len(src_ty) == 2 \
+                and not (src_ty[1] >> 29) & 1:
+            exact = self._WIDE_EXACT.get((src_ty[1] >> 16) & 0xFF)
+            if exact is not None and exact[1] == width \
+                    and exact[0] in ('int', 'uint', 'long', 'ulong'):
+                return exact[0]
+        return None
+
+    def _wide_store_disp(self, ins, lv, src):
+        """Wide display lvalue for one raw plain store, else None. -- fix 102
+
+        Bookkeeping (kills, slots, barriers, twin dedup) keeps the raw
+        `*(...)` text; only the emitted statement spells the width. The
+        `__static_fields` blob keeps its byte spelling so the sfblob
+        twin machinery matches exactly what it always did.
+        """
+        if not lv.startswith('*('):
+            return None
+        parts = getattr(self, '_lv_raw_parts', None)
+        if parts is None or '__static_fields' in parts[0]:
+            return None
+        st = strip_outer(src)
+        src_ty = None
+        if ins.op_kind(1) == OpKind.REGISTER:
+            se = dict.get(self.regs, reg_name(ins.op1_register))
+            src_ty = se.ty if se is not None else None
+        cast = self._wide_src_cast(getattr(self, '_lv_width', None), st, src_ty)
+        if cast is None:
+            return None
+        return '((%s*)%s %s)[0]' % (cast, parts[0], parts[1]), st
+
+    def _wide_rmw_disp(self, ins, lv, op, src):
+        """Wide display lvalue for one raw RMW store, else None. -- fix 102"""
+        if not lv.startswith('*('):
+            return None
+        parts = getattr(self, '_lv_raw_parts', None)
+        if parts is None or '__static_fields' in parts[0]:
+            return None
+        if op in ('++', '--'):
+            src, src_ty = '1', None
+        else:
+            src_ty = None
+            if ins.op_kind(1) == OpKind.REGISTER:
+                se = dict.get(self.regs, reg_name(ins.op1_register))
+                src_ty = se.ty if se is not None else None
+        cast = self._wide_rmw_cast(getattr(self, '_lv_width', None), ins.mnemonic,
+                                   strip_outer(src), src_ty)
+        if cast is None:
+            return None
+        return '((%s*)%s %s)[0]' % (cast, parts[0], parts[1])
 
     def _wide_raw_lvalue(self, ins, width):
         """Keep the complete native write when a Boolean blob cannot split."""
@@ -1356,7 +1557,9 @@ class _InsnMixin:
         # storing a bare temp into a typed location types the temp
         if self._lv_ty is not None and _BARE_TOKEN_RX.match(src):
             self._type_hints.setdefault(src, self._lv_ty)
-        stmt = '%s = %s;' % (lv, strip_outer(src))
+        wide = self._wide_store_disp(ins, lv, src)
+        st = wide[1] if wide is not None else strip_outer(src)
+        stmt = '%s = %s;' % (wide[0] if wide is not None else lv, st)
         if self._last_stmt_text() == stmt:
             if self.asm_comments and asm:
                 self.emit(ins.ip, '', asm)
@@ -1387,7 +1590,9 @@ class _InsnMixin:
             self.stack_values.pop(lv, None)
         self._kill_stale(lv)
         if op in ('++', '--'):
-            self.emit(ins.ip, '%s = %s %s 1;' % (lv, lv, op[0]), asm)
+            dsp = self._wide_rmw_disp(ins, lv, op, '1')
+            dd = dsp if dsp is not None else lv
+            self.emit(ins.ip, '%s = %s %s 1;' % (dd, dd, op[0]), asm)
             self._rmw_flags(lv)
             return
         src = self._src_text(ins)
@@ -1396,7 +1601,9 @@ class _InsnMixin:
             v = _int_lit(src)
             if v is not None and v < 0:
                 op, src = '-', str(-v)
-        self.emit(ins.ip, '%s = %s %s %s;' % (lv, lv, op, src), asm)
+        dsp = self._wide_rmw_disp(ins, lv, op, src)
+        dd = dsp if dsp is not None else lv
+        self.emit(ins.ip, '%s = %s %s %s;' % (dd, dd, op, src), asm)
         self._rmw_flags(lv)
 
     def _rmw_flags(self, lv):

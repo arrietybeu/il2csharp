@@ -37,8 +37,12 @@ def test_direct_helper_float_return_uses_xmm0(game_decompiler):
 
 def test_packed_float_intrinsic_recovers_every_lane_independently(game_decompiler):
     text = body(game_decompiler, 109194)
+    # fix 102: the float-lane stores render width-preserving (`movss`
+    # ground truth) instead of the old byte spelling; the `0f` zeroing
+    # store keeps its byte form.
     for offset in ("0x0", "0x4", "0x8", "0xc"):
-        assert f"((byte*)obj4 + {offset})[0]" in text
+        assert f"((float*)obj4 + {offset})[0]" in text
+    assert "((byte*)obj4 + 0x0)[0] = 0f;" in text
     assert text.count("Math.Sqrt(") == 4
     assert "sub_1804ce6d8" not in text
     assert "unknown" not in text

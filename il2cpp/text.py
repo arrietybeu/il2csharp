@@ -251,6 +251,48 @@ def _deref_spans_all(s):
     return bool(m) and _paren_spans_all(m.group(1))
 
 
+_WIDE_TWIN_CASTS = frozenset((
+    'short', 'int', 'long', 'ushort', 'uint', 'ulong',
+    'float', 'double', 'char', 'bool', 'byte', 'sbyte'))
+
+
+def _canon_wide_cast(s):
+    """`((T*)inner)[0]` -> `*(inner)` for primitive pointer casts.
+
+    Fix 102 renders raw native-width stores width-preserving while the
+    write-barrier twin still renders raw, so the twin comparison meets
+    on the raw spelling. Recursive: a width cast can wrap a byte-cast
+    read (`((uint*)((byte*)b + 0x10)[0] + N)[0]`). Anything unparseable
+    passes through unchanged; non-cast parens never match (the `*`
+    before `)` is required).
+    """
+    out = []
+    i, n = 0, len(s)
+    while i < n:
+        m = None
+        if s.startswith('((', i):
+            m = re.match(r'\(\(([A-Za-z_][\w$]*)\*\)', s[i:])
+            if m is not None and m.group(1) not in _WIDE_TWIN_CASTS:
+                m = None
+        if m is not None:
+            k = i + m.end()
+            depth, j = 0, k
+            while j < n:
+                if s[j] == '(':
+                    depth += 1
+                elif s[j] == ')':
+                    if depth == 0:
+                        break
+                    depth -= 1
+                j += 1
+            if j < n and s.startswith('[0]', j + 1):
+                out.append('*(' + _canon_wide_cast(s[k:j]) + ')')
+                i = j + 4
+                continue
+        out.append(s[i])
+        i += 1
+    return ''.join(out)
+
 def _norm_twin(s):
     """Whitespace/radix-normalized statement text for plain-store vs
     write-barrier twin comparison: the same native write renders once as
@@ -259,6 +301,7 @@ def _norm_twin(s):
     if not s:
         return s
     s = re.sub(r'\s+', '', s)
+    s = _canon_wide_cast(s)
 
     def hexlit(m):
         s = m.group(0).lstrip('0') or '0'
