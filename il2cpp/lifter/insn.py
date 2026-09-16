@@ -1198,8 +1198,11 @@ class _InsnMixin:
         # fix 102: native width + (base, disp) parts for a raw
         # `*(...)` lvalue, so _write_mem/_rmw_mem can render a
         # width-preserving cast. Bookkeeping keeps raw text.
+        # fix 103: the indexed branch additionally records
+        # (index text, scale); None for plain stores.
         self._lv_width = None
         self._lv_raw_parts = None
+        self._lv_raw_idx = None
         if ins.memory_base == IReg.RIP:
             slot = ins.ip_rel_memory_address
             q = self.bin.qword(slot)
@@ -1237,6 +1240,9 @@ class _InsnMixin:
                     return fe.text
             itxt = ie.text if ie else '?'
             scale = ins.memory_index_scale or 1
+            self._lv_width = MemorySizeExt.size(ins.memory_size)
+            self._lv_raw_parts = (be.text, disp_add(disp))
+            self._lv_raw_idx = (itxt, scale)
             return '*(%s + %s*%d %s)' % (_term_up(be.text), _term_up(itxt, mul=True), scale, disp_add(disp))
         fe = self._field_expr(be, disp, size)
         if fe.kind == 'klass' and fe.text.endswith('.getClass()'):
@@ -1470,6 +1476,11 @@ class _InsnMixin:
         cast = self._wide_src_cast(getattr(self, '_lv_width', None), st, src_ty)
         if cast is None:
             return None
+        idx = getattr(self, '_lv_raw_idx', None)
+        if idx is not None:
+            return '((%s*)%s + %s*%d %s)[0]' % (
+                cast, _term_up(parts[0]), _term_up(idx[0], mul=True),
+                idx[1], parts[1]), st
         return '((%s*)%s %s)[0]' % (cast, parts[0], parts[1]), st
 
     def _wide_rmw_disp(self, ins, lv, op, src):
@@ -1490,6 +1501,11 @@ class _InsnMixin:
                                    strip_outer(src), src_ty)
         if cast is None:
             return None
+        idx = getattr(self, '_lv_raw_idx', None)
+        if idx is not None:
+            return '((%s*)%s + %s*%d %s)[0]' % (
+                cast, _term_up(parts[0]), _term_up(idx[0], mul=True),
+                idx[1], parts[1])
         return '((%s*)%s %s)[0]' % (cast, parts[0], parts[1])
 
     def _wide_raw_lvalue(self, ins, width):

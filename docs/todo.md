@@ -59,7 +59,47 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 102 (native-width raw-store lvalues, gated 2026-09-16)
+## Current work — fix 103 (native-width INDEXED raw-store lvalues, gated 2026-09-16)
+
+Same display-only rule as fix 102, extended to the indexed raw branch
+(`base + idx*scale + disp`): the index/scale pair is recorded in
+`_mem_lvalue` and the display mirrors the raw branch's own `_term_up`
+construction exactly, so output is identical modulo the cast
+(verified `_unsafify` fixpoints, incl. composite and byte*-read
+indices). Gates: **576 tests (571 + 5 new indexed cases in
+`tests/test_review102_raw_store_widths.py`); direct sweep 116,178
+methods / 0 crashes / 0 structural changes vs fix 102 (478 bodies
+changed); strict build 11,107 files / 115,658 bodies / 0 failures or
+fallbacks (`work/review103_out`); parser 0 bad files**. Reports:
+`validation_reports/review103_sweep.json`, `review103_vs102.json`
+(478 changed, 0 structural), `review103_parse.json`; built tree
+`work/review103_out`. The 64 goldens were regenerated after individual
+review of the single diff (`ViscosityVorticityJob.Execute`: indexed
+`inc dword` RMW → `int*`; its untyped `mov`-triple sibling correctly
+stays byte*). NOT promoted — `final_out/` still holds the fix-99 tree
+pending a human promotion call.
+
+- [x] Fix 103: 1,287 widened lines in 276 files, every one a
+  cast-only swap at identical indent (full tree audit, 0 unexplained,
+  0 added, 0 dropped). Out-of-range literal stores fall 189 → 118;
+  byte* stores overall 3,579 → 3,205.
+- [x] Residue after fix 103 (each verified declined by design):
+  untyped register sources (add-expr `READ + 1` with unknown type),
+  `__static_fields` blobs, reference/array/`new` RHS, wide source in
+  narrow store, width-1 stores of non-byte values (unencodable
+  natively — the value proves a wider write elsewhere).
+
+### Next priorities (fix 103 follow-ups)
+
+1. **Untyped register sources** (expression-typed `READ op LIT`
+   values): needs expression type inference, not spelling guesses.
+2. **Wide-source-in-narrow-store** and **reference stores through raw
+   pointers**: both need field-type recovery.
+3. **447 remaining shared tails** (receiver `this`-rule scoped at 10
+   `MemberwiseClone` sites), **8,067 into-block gotos**, Review 87
+   noreturn-EH/leftover lists — all stand.
+
+## Previous work — fix 102 (native-width raw-store lvalues, gated 2026-09-16)
 
 A raw `*(base + disp)` store lvalue rendered `((byte*)base + disp)[0]`,
 which fails to compile whenever the stored value is not a byte (1,524

@@ -320,3 +320,49 @@ def test_unsafify_keeps_dotted_wide_shapes():
     t = _TextPassMixin.__new__(_TextPassMixin)
     s = "((uint*)this.ropeRenderer + 0x54)[0] = 1082130432;"
     assert t._unsafify(s) == s
+
+
+def test_unsafify_keeps_indexed_wide_shapes():
+    # fix 103: the indexed display mirrors the raw branch's own
+    # `_term_up` construction, so these are fixpoints like the byte*
+    # twins (including a composite index and a byte* index read).
+    from il2cpp.dec.textpass import _TextPassMixin
+    t = _TextPassMixin.__new__(_TextPassMixin)
+    for s in ("((uint*)outChars + num5*2 + 0x0)[0] = 655373;",
+              "((float*)obj93 + obj94*8 + 0x24)[0] = 1065353216;",
+              "((uint*)num4 + (((byte*)voidPtr1 + 0x8)[0])*1 + 0x30)[0] = 65535;",
+              "((uint*)tree + (max_code * 2 + 3)*2 + 0x20)[0] = 32767;"):
+        assert t._unsafify(s) == s
+
+
+def test_write_mem_indexed_imm_widens():
+    # mov dword [rbx+rsi*4+0x20], 0xFFFFFFFF
+    lift = lift_of({"RBX": Expr("obj41", None, "int"),
+                    "RSI": Expr("obj40", None, "int")})
+    lift._write_mem(decode(bytes((0xC7, 0x44, 0xB3, 0x20, 0xFF, 0xFF, 0xFF, 0xFF))), None)
+    assert lift.out == [(0x1000, "((uint*)obj41 + obj40*4 + 0x20)[0] = 4294967295;", None)]
+
+
+def test_write_mem_indexed_reg_src_widens():
+    # mov [rbx+rsi*4+0x20], eax with int-typed eax
+    lift = lift_of({"RBX": Expr("obj41", None, "int"),
+                    "RSI": Expr("obj40", None, "int"),
+                    "RAX": Expr("num1", INT, "int")})
+    lift._write_mem(decode(bytes((0x89, 0x44, 0xB3, 0x20))), None)
+    assert lift.out == [(0x1000, "((int*)obj41 + obj40*4 + 0x20)[0] = num1;", None)]
+
+
+def test_write_mem_indexed_unknown_src_stays_raw():
+    lift = lift_of({"RBX": Expr("obj41", None, "int"),
+                    "RSI": Expr("obj40", None, "int"),
+                    "RAX": Expr("obj1", None, "obj")})
+    lift._write_mem(decode(bytes((0x89, 0x44, 0xB3, 0x20))), None)
+    assert lift.out == [(0x1000, "*(obj41 + obj40*4 + 0x20) = obj1;", None)]
+
+
+def test_rmw_indexed_widens():
+    # add dword [rbx+rsi*4+0x20], 11
+    lift = lift_of({"RBX": Expr("obj41", None, "int"),
+                    "RSI": Expr("obj40", None, "int")})
+    lift._rmw_mem(decode(bytes((0x83, 0x44, 0xB3, 0x20, 0x0B))), None, "+")
+    assert lift.out == [(0x1000, "((int*)obj41 + obj40*4 + 0x20)[0] = ((int*)obj41 + obj40*4 + 0x20)[0] + 11;", None)]
