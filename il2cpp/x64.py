@@ -1,4 +1,5 @@
 from il2cpp.prelude import *  # noqa: F401,F403
+from il2cpp.text import _int_lit
 
 GPRS = ['RAX', 'RCX', 'RDX', 'RBX', 'RSP', 'RBP', 'RSI', 'RDI',
         'R8', 'R9', 'R10', 'R11', 'R12', 'R13', 'R14', 'R15']
@@ -98,6 +99,40 @@ def _paren(t):
     return t if not (set(t) & _NEEDS_PAREN) else '(%s)' % t
 
 
+def _is_non_nan_literal(t):
+    """True when `t` parses as a numeric literal (never NaN). -- fix 106
+
+    No numeric literal spelling denotes NaN (NaN renders as
+    `float.NaN`/`double.NaN`), so an `IsNaN(<literal>)` arm is
+    provably false and the parity-jump fold drops it. Integer
+    spellings reuse `_int_lit` (hex/decimal, fix87 `0f`/`1d`
+    identities); anything else must float-parse finite. Names,
+    unknowns, member access and exotic spellings keep their arm.
+    """
+    if not t:
+        return False
+    try:
+        if _int_lit(t) is not None:
+            return True
+    except Exception:
+        pass
+    try:
+        s = t.strip()
+        if s[:1] in ('+', '-'):
+            s = s[1:]
+        if not s or s[:2].lower() == '0x':
+            return False
+        if not s[:1].isdigit() and s[:1] != '.':
+            return False
+        s = s.rstrip('uUlL')
+        if s[-1:] in ('f', 'F', 'd', 'D'):
+            s = s[:-1]
+        v = float(s)
+        return v == v
+    except (ValueError, OverflowError):
+        return False
+
+
 def flag_cond(setter, br, lt, rt):
     """C# text for a flag-specific branch, or None when it is not derivable.
 
@@ -129,8 +164,20 @@ def flag_cond(setter, br, lt, rt):
         # NaN. This is the `x != x` idiom MSVC emits for float equality.
         if not lt or not rt or lt == '?' or rt in ('?', 'null'):
             return None
+    if br in _PARITY_JUMPS and setter in _FLOAT_SETTERS:
+        # PF after an SSE compare means UNORDERED: at least one operand is
+        # NaN. This is the `x != x` idiom MSVC emits for float equality.
+        if not lt or not rt or lt == '?' or rt in ('?', 'null'):
+            return None
         ty = 'double' if setter in _DBL_SETTERS else 'float'
-        c = '%s.IsNaN(%s) || %s.IsNaN(%s)' % (ty, lt, ty, rt)
+        arms = []
+        if not _is_non_nan_literal(lt):
+            arms.append('%s.IsNaN(%s)' % (ty, lt))
+        if not _is_non_nan_literal(rt):
+            arms.append('%s.IsNaN(%s)' % (ty, rt))
+        if not arms:
+            return None
+        c = ' || '.join(arms)
         return c if br in _UNORDERED_JUMPS else '!(%s)' % c
     return None
 ARG_XMM = ['XMM0', 'XMM1', 'XMM2', 'XMM3']

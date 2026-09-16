@@ -59,7 +59,94 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 104 (object stubs for unresolved sub_ + caller casts, gated 2026-09-16)
+## Current work — fix 106 (parity-jump NaN fold drops literal arms, gated 2026-09-16)
+
+`ucomiss` + `jp` rendered `IsNaN(a) || IsNaN(b)` even when one side is
+a constant (`IsNaN(0f)` — provably false, 665 sites). No numeric
+literal spelling denotes NaN, so `_is_non_nan_literal` (new in
+`il2cpp/x64.py`, reusing `_int_lit` plus finite-float parsing) drops
+such arms in `flag_cond`; the `x != x` idiom and unknown/nullary
+operands are untouched, and all-constant pairs decline as before.
+Gates: **606 tests (598 + 8 new in
+`tests/test_review106_float_parity.py`); direct sweep 116,178 methods
+/ 0 crashes / 0 structural changes vs fix 105 (294 bodies changed);
+strict build 11,184 files / 115,658 bodies / 0 failures or fallbacks
+(`work/review106_out`); parser 0 bad files**. Reports:
+`validation_reports/review106_sweep.json`, `review106_vs105.json`
+(294 changed, 0 structural), `review106_parse.json`; built tree
+`work/review106_out`. The 64 goldens were regenerated after individual
+review of the single diff (`DateTimeConverter.ConvertTo`, double
+width). NOT promoted — `final_out/` still holds the fix-99 tree
+pending a human promotion call.
+
+- [x] Fix 106: 665 literal arms dropped in 144 files (full tree
+  audit, 0 unexplained). The single flagged hunk hand-verified
+  correct: the arm was a literal at lift time, bound to a temp only
+  later (`object obj1 = 1.79…e+308d` feeding a `comisd`).
+  `IsNaN(<const>)` falls 665 → 0 (4,968 live-value arms remain).
+- [x] Fix 106b: first-char guard (an `inf`-spelled identifier can
+  never be taken for a literal). Zero-diff proof on this corpus:
+  direct sweep 0/116,178 changed vs fix 106, rebuilt tree
+  byte-identical across all 11,184 files (`work/review106b_out`),
+  parse re-gated. Reports: `review106b_sweep.json`,
+  `review106b_vs106.json`, `review106b_parse.json`.
+- [x] Ground truth: `AudioVolumeSliders.SetMusicVolumeInternal` —
+  native `ucomiss; jp; jne` to one target; the `IsNaN(0f)` arm is
+  gone (the surviving `unknown != unknown` duplication residue is a
+  separate structuring matter, below).
+
+### Next priorities (fix 106 follow-ups)
+
+1. **Duplication residue with degraded conditions** (~2.7k
+   both-sides-unknown branches with sibling-identical bodies, e.g.
+   `else if (unknown != unknown)`): needs _seq/fold-level proof
+   (never delete — an unprovable condition can't lose its arm).
+2. **One-side-unknown comparisons** (~700+), unbound decls/arithmetic
+   (`object obj17 = unknown;`), **honest names** for the top
+   unregistered VAs (thunk finals, membarrier, interface-dispatch
+   twins), **447 remaining shared tails**, **8,067 into-block gotos**,
+   Review 87 lists — all stand.
+
+## Previous work — fix 105 (ternary-condition casts, arm leniency, do-while, gated 2026-09-16)
+
+Same caller-proven rule, one level deeper: a sub_ call in a ternary
+CONDITION proves `bool` there (arms keep the line's type), arms without
+calls pass through instead of vetoing the line, and `} while (...)`
+proves `bool` like `if`/`while`. `== null`, `&&`/`||`, arithmetic and
+call-nested conditions still decline whole-line, correctly. Gates:
+**598 tests (22-case stub file extended: ternary conds, arm leniency,
+do-while); direct sweep 116,178 methods / 0 crashes / 0 structural
+changes vs fix 104 (47 bodies changed); strict build 11,184 files /
+115,658 bodies / 0 failures or fallbacks (`work/review105_out`);
+parser 0 bad files**. Reports: `validation_reports/review105_sweep.json`,
+`review105_vs104.json` (47 changed, 0 structural),
+`review105_parse.json`; built tree `work/review105_out`. The 64
+goldens are untouched (0 overlapping MIs, no regen needed). NOT
+promoted — `final_out/` still holds the fix-99 tree pending a human
+promotion call.
+
+- [x] Fix 105: 59 cast lines in 42 files, every one a cast-only swap
+  at identical indent, 0 suspicious casts (full tree audit).
+  Ground truth: `string text4 = (bool)sub_Equals(...) ?
+  string.Format(...) : ...`, `float real22 = !((bool)sub_...(304)) ?
+  ...`, `Object object1 = (bool)sub_...(type5, ...) ? ... : ...`.
+- [x] Returns proven COMPLETE: all 99 bare `return sub_` lines sit in
+  void/object methods (pointer returns excluded by design); the 12
+  apparent counterexamples were property/nested-class misattributions
+  in the audit scaffolding, each verified by hand.
+
+### Next priorities (fix 105 follow-ups)
+
+1. **Operator-nested bool positions** (`&&`/`||` operands,
+   `== <lit>` with numeric proof, ternary-in-ternary conds):
+   needs per-operator expression typing.
+2. **Byref/pointer arguments** into stubs (`&` address-of, `void*`
+   params); **honest names** for the top unregistered VAs (thunk
+   finals, membarrier, interface-dispatch twins); **447 remaining
+   shared tails** (10 via the `this`-rule), **8,067 into-block
+   gotos**, Review 87 noreturn-EH/leftover lists — all stand.
+
+## Previous work — fix 104 (object stubs for unresolved sub_ + caller casts, gated 2026-09-16)
 
 53,984 `sub_X(...)` references pointed at methods declared nowhere
 (2,687 distinct VAs, 0 definitions tree-wide). The emitter now writes

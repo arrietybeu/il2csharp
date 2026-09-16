@@ -1082,6 +1082,7 @@ class _HighLevelMixin:
         r'^([A-Za-z_@]\w*)\s*=\s*(.*);\s*$')
     _STUB_RETURN_RX = re.compile(r'^return\s+(.*);\s*$')
     _STUB_COND_RX = re.compile(r'^(?:else\s+)?(?:if|while)\s*\((.*)\)\s*$')
+    _STUB_DOWHILE_RX = re.compile(r'^\}\s*while\s*\((.*)\)\s*;?\s*$')
     _STUB_FOREACH_RX = re.compile(
         r'^foreach\s*\(\s*(.+?)\s+([A-Za-z_@]\w*)\s+in\b')
     _STUB_CATCH_RX = re.compile(
@@ -1273,6 +1274,8 @@ class _HighLevelMixin:
         """
         if depth > 4:
             return None
+        if 'sub_' not in masked[lo:hi]:
+            return code[lo:hi]
         a, b = lo, hi
         while a < b and masked[a] in ' \t\x01':
             a += 1
@@ -1311,14 +1314,19 @@ class _HighLevelMixin:
             if c is None:
                 return None
             if self._stub_span_has_call(masked, a, q):
-                return None
+                cond = self._stub_wrap_range(
+                    code, masked, a, q, 'bool', real, depth + 1)
+                if cond is None:
+                    return None
+            else:
+                cond = code[a:q]
             arm1 = self._stub_wrap_range(
                 code, masked, q + 1, c, ty, real, depth + 1)
             arm2 = self._stub_wrap_range(
                 code, masked, c + 1, b, ty, real, depth + 1)
             if arm1 is None or arm2 is None:
                 return None
-            return code[lo:q + 1] + arm1 + code[c:c + 1] + arm2 + code[b:hi]
+            return code[lo:a] + cond + code[q:q + 1] + arm1 + code[c:c + 1] + arm2 + code[b:hi]
         vm = self._stub_call_at(masked, a)
         if vm is None or vm in real:
             return None
@@ -1440,6 +1448,8 @@ class _HighLevelMixin:
                 return None
             return ind + 'return ' + new + ';' + tail
         cm = self._STUB_COND_RX.match(s)
+        if cm is None:
+            cm = self._STUB_DOWHILE_RX.match(s)
         if cm is not None:
             v_lo, v_hi = cm.start(1), cm.end(1)
             new = self._stub_wrap_range(s, masked, v_lo, v_hi, 'bool', real)

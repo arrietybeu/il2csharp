@@ -109,8 +109,17 @@ def test_decl_skips():
 def test_decl_ternary_and_nested():
     assert cast("int x = c ? sub_1a() : sub_1b();") == \
         "int x = c ? (int)sub_1a() : (int)sub_1b();"
-    assert cast("int x = sub_c() ? sub_1a() : sub_1b();") is None
-    assert cast("int x = c ? sub_1a() : other;") is None
+    # fix 105: a call in the ternary condition proves bool there; the
+    # arms keep the line's type.
+    assert cast("int x = sub_c() ? sub_1a() : sub_1b();") == \
+        "int x = (bool)sub_c() ? (int)sub_1a() : (int)sub_1b();"
+    assert cast("string t = sub_c() ? A() : B();") == \
+        "string t = (bool)sub_c() ? A() : B();"
+    # arms without calls pass through; unparseable arms decline all.
+    assert cast("int x = c ? sub_1a() : other;") == \
+        "int x = c ? (int)sub_1a() : other;"
+    assert cast("int x = c ? sub_1a() : y + sub_1b();") is None
+    assert cast("int x = sub_c() ? sub_1a() : sub_1b();", real={"c"}) is None
     assert cast("int x = (sub_1a());") == "int x = ((int)sub_1a());"
     assert cast("int x = sub_1a(sub_1b());") == \
         "int x = (int)sub_1a(sub_1b());"
@@ -147,10 +156,12 @@ def test_condition_bool():
     assert cast("if (sub_1a2b(a, b))") == "if ((bool)sub_1a2b(a, b))"
     assert cast("while (!(sub_1a()))") == "while (!((bool)sub_1a()))"
     assert cast("else if (sub_1a())") == "else if ((bool)sub_1a())"
-    assert cast("if (sub_1a() == null)") is None
-    assert cast("if (x && sub_1a())") is None
+    assert cast("} while (sub_1a());") == "} while ((bool)sub_1a());"
     assert cast("if (c ? sub_1a() : sub_1b())") == \
         "if (c ? (bool)sub_1a() : (bool)sub_1b())"
+    assert cast("if (sub_1a() == null)") is None
+    assert cast("if (x && sub_1a())") is None
+    assert cast("if (c ? sub_1a() : sub_1b())", real={"1a"}) is None
 
 
 def test_plain_assign_map():
