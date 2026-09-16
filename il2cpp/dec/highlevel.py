@@ -1281,6 +1281,80 @@ class _HighLevelMixin:
             return None
         return rhs_ty
 
+    @staticmethod
+    def _bare_new_rhs_type(rhs):
+        """Closed non-generic `new` target carried literally by the RHS, if any."""
+        s = (rhs or '').strip()
+        if not s.startswith('new '):
+            return None
+        s = s[4:].strip()
+        depth = 0
+        cut = len(s)
+        for i, ch in enumerate(s):
+            if ch == '<':
+                depth += 1
+            elif ch == '>':
+                depth -= 1
+                if depth < 0:
+                    return None
+            elif ch == '(' and depth == 0:
+                cut = i
+                break
+            elif depth == 0 and ch in ('[', ']', '?', ';', '{', '}', '='):
+                return None
+        ty = s[:cut].strip()
+        if not ty or '<' in ty or '>' in ty:
+            return None
+        if not re.fullmatch(r'[A-Za-z_@][\w@.]*', ty):
+            return None
+        # only the last dotted component can be a parameter: qualified
+        # names like `TMPro.KerningPair` are closed, never params
+        # (fix-98 invariant). A bare T-like target (`new T()`,
+        # `new TMP_Character()`) still declines.
+        if re.fullmatch(r'T(?:\d+|[A-Z]\w*)?', ty.split('.')[-1].strip()):
+            return None
+        return ty
+
+    def _bare_closed_new_type(self, t, tn, rhs):
+        """Closed `new` spelling for a bare-param hint, if provable. -- fix 101
+
+        A tracked hint that is one bare VAR/MVAR (`T`, `T1`, `TValue` --
+        top-level 0x13/0x1e with a matching spelling) names no type at
+        all, while the same line's `new ObiPinConstraintsBatch()` /
+        `new List<int>()` is the exact closed allocation identity. The
+        declaration then takes the RHS spelling: `T x = new C(...)`
+        never compiles under any binding of `T` (no implicit conversion
+        from `C` to a bare parameter exists even with constraints), so
+        the declaration and its member-access uses can only gain
+        compilability, and no compiling method contains such a line to
+        regress. Decline on non-bare tuples (generic `List<T>` stays
+        fix-98 territory), non-bare spellings, unreadable openness,
+        open generic RHS (`new List<TKey>()`), bare `new T()` (no
+        information) and non-`new`/array/initializer RHS. Only the last
+        dotted component decides openness (`TMPro.KerningPair` is
+        closed). Never invents a type: the spelling
+        comes literally from the emitted RHS.
+        """
+        try:
+            te = (t[1] >> 16) & 0xFF
+        except Exception:
+            return None
+        if not isinstance(t, tuple) or len(t) != 2 or te not in (0x13, 0x1e):
+            return None
+        if not re.fullmatch(r'T(?:\d+|[A-Z]\w*)?', (tn or '').strip()):
+            return None
+        try:
+            if self._type_has_var(t) is not True:
+                return None
+        except Exception:
+            return None
+        rhs_ty = self._new_rhs_type(rhs)
+        if rhs_ty is None:
+            rhs_ty = self._bare_new_rhs_type(rhs)
+        elif self._args_contain_open_param(rhs_ty):
+            return None
+        return rhs_ty
+
     def _decl_type_of(self, tok, rhs='') -> str:
         """C# declaration type for one (pre-rename) local token."""
         r = (rhs or '').strip().rstrip(';').strip()
@@ -1310,6 +1384,11 @@ class _HighLevelMixin:
             closed = self._closed_rhs_new_type(t, tn, r)
         except Exception:
             closed = None
+        if closed is None:
+            try:
+                closed = self._bare_closed_new_type(t, tn, r)
+            except Exception:
+                closed = None
         if closed is not None:
             return closed
         return tn

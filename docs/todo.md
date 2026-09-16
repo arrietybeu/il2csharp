@@ -59,7 +59,70 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 100 (shared-tail resolution by caller return type, gated 2026-09-16)
+## Current work — fix 101 (bare-param declaration hints close over `new` RHS, gated 2026-09-16)
+
+A tracked hint that is one bare VAR/MVAR (`T`, `T1`, `TValue` —
+top-level 0x13/0x1e with a matching spelling, openness proved
+structurally by `_type_has_var`) names no type at all, while the same
+line's `new ObiPinConstraintsBatch()` / `new List<int>()` is the exact
+closed allocation identity (`_bare_closed_new_type` +
+`_bare_new_rhs_type` in `il2cpp/dec/highlevel.py`, wired into
+`_decl_type_of` after the fix-98 same-base path). `T x = new C(...)`
+never compiles under any binding of `T`, so no compiling method can
+regress. Gates: **544 tests (526 + 18 new in
+`tests/test_review101_bare_t_decls.py`); direct sweep 116,178 methods /
+0 crashes / 0 structural changes vs fix 100 (234 bodies changed, all
+line-neutral); strict build 11,107 files / 115,658 bodies / 0 failures
+or fallbacks (`work/review101_out`); parser 0 bad files**. Reports:
+`validation_reports/review101_sweep.json`, `review101_vs100.json` (234
+changed, 0 structural), `review101_parse.json`; built tree
+`work/review101_out`. The 64 goldens are untouched (0 overlapping MIs,
+no regen needed). NOT promoted — `final_out/` still holds the fix-99
+tree pending a human promotion call.
+
+- [x] Fix 101: bare-param hints take the RHS `new` spelling — non-generic
+  (`T value1 = new ObiPinConstraintsBatch()`), generic over bare
+  (`T value1 = new List<int>()` via the fix-98 path,
+  `TValue value1 = new List<GameObject>()`), and qualified
+  (`T value1 = new TMPro.KerningPair()` — only the last dotted
+  component decides openness, fix-98 invariant; fix 101b). Declines on
+  non-bare tuples, non-bare spellings, unreadable openness, open
+  generic RHS (`new List<TKey>()`), bare `new T()`, non-`new`/array/
+  initializer RHS, `<>c__` display-class spellings (normalized only at
+  the file boundary, not a valid mid-pipeline decl type), and T-like
+  bare targets (`new TMP_Character()`). Never invents a type: the
+  spelling comes literally from the emitted RHS.
+- [x] Provenance verified old-vs-new on all 234 changed bodies:
+  line-count-identical everywhere; every diff line is a bare-`T`
+  declaration-type change (463) or a consistent rename projection of
+  one (319 binder renames incl. `foreach` binders, 1,475 use-site
+  renames, 0 failures, 0 conflicts, 0 collisions). Every new decl type
+  matches its own line's `new` target literally (the one apparent
+  mismatch is a whitespace-only audit artifact:
+  `List<byte[]>` vs `new List<byte[]>()`).
+- [x] Residue: 8 bare-`T`-over-`new` sites in 5 files, both families
+  declined by design — 4× `T1 t11 = new __c__DisplayClassN_0()`
+  (mid-pipeline `<>c__` spelling; closing needs an emitter-coupled
+  mangled-spelling proof) and 4× TMP sites
+  (`new WeakReference<TMP_FontAsset>`, `new TMP_Character()`,
+  `new TMP_SpriteCharacter()`: `TMP_*` collides textually with the
+  bare-param regex, so the RHS reads open; closing needs a metadata
+  typedef-closedness proof, not a textual one).
+
+### Next priorities (fix 101 follow-ups)
+
+1. **8 residual sites above**: emitter-coupled `<>c__` decl spelling,
+   metadata typedef-closedness for T-like concrete RHS names.
+2. **447 remaining shared tails** (fix 100 list stands), **8,067
+   into-block gotos**, Review 87 byte-store/noreturn-EH/leftover lists
+   — all stand.
+3. Discovered and NOT changed: `_args_contain_open_param` is purely
+   textual, so concrete `TMP_*` types read as open params on the RHS
+   (tracked-tuple side is structurally proved and unaffected); the
+   `<>c__` → `__c__` file-boundary mangling runs after all decl
+   passes.
+
+## Previous work — fix 100 (shared-tail resolution by caller return type, gated 2026-09-16)
 
 A `return <call>` tail delivers the callee's value as the caller's own,
 so the true callee's closed, spec-inflated return must equal the
