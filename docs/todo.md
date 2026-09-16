@@ -59,7 +59,68 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 99 (post-render dead-pure-load DCE, gated 2026-09-15)
+## Current work — fix 100 (shared-tail resolution by caller return type, gated 2026-09-16)
+
+A `return <call>` tail delivers the callee's value as the caller's own,
+so the true callee's closed, spec-inflated return must equal the
+caller's exact metadata return (`_shared_tail_return_target` +
+`_tail_sig_key`/`_tail_subst_closed` in `il2cpp/lifter/calls.py`, wired
+into both tail-jmp paths in `il2cpp/lifter/insn.py` and
+`il2cpp/dec/analyze.py` — the analyze.py mirror is the one that emits
+production tails; insn.py covers mid-block jumps). Gates: **526 tests
+(509 + 17 new in `tests/test_review100_tail_returns.py`, incl. an
+end-to-end `_insn` twin render); direct sweep 116,178 methods / 0
+crashes / 0 structural changes vs fix 99 (64 bodies changed, net -212
+lines); strict build 11,107 files / 115,658 bodies / 0 failures or
+fallbacks (`work/review100_out`); parser 0 bad files**. Reports:
+`validation_reports/review100_sweep.json`, `review100_vs99.json` (64
+changed, 0 structural), `review100_parse.json`; built tree
+`work/review100_out`. The 64 goldens are untouched (0 overlapping MIs,
+no regen needed). NOT promoted — `final_out/` still holds the fix-99
+tree pending a human promotion call.
+
+- [x] Fix 100: keep nothing on speculation (open/unreadable rows decline
+  the whole resolution), drop closed return mismatches, resolve only on
+  one distinct rendering. Declines on void callers (fix 95 owns them),
+  open/unknown callers, empty/split survivors, open generic definitions,
+  and non-method/generic rows. Winners render through the existing
+  resolved-tail emitters. Ground truth: `GameServer.GetHSteamPipe`
+  (mi 97624) `return sub_18073e050...(GetHSteamPipe(), 0)` becomes
+  `return HSteamPipe.op_Explicit(...);`, `Int32.IConvertible.ToInt64`
+  (mi 2044) loses 8 lines of guard/phi scaffolding collapsing to
+  `return Convert.ToInt64(this.m_value);`, `CloudServices.get_LocalPlayerRef`
+  (-12) becomes `return PlayerRef.FromIndex(cloudServices1 >> 32);`,
+  `ValueTuple.CombineHashCodes` ×7 (-6 each) become
+  `return HashHelpers.Combine(...);`.
+- [x] Provenance verified on the built trees: all 13,646 lost
+  call-shaped lines are dead `Type V = typeof(X)` (fix-99 audit; the 3
+  apparent gains are renumbering artifacts); every added tree line is a
+  consistent rename of a surviving live line. Impure-line conservation
+  holds modulo locals.
+- [x] Residue: `return sub_*shared body` tails fall 511 → 447 (97 → 87
+  addresses). Deliberately honest remainder, by family: string
+  `Equals`/`op_Equality` (74, behavior-identical twins), `Compare`/
+  `CompareTo` (9), `GetHashCode`/`InternalGetHashCode` (15),
+  `Clone`/`MemberwiseClone` (10), `get_Module`/`GetRuntimeModule` (8),
+  thunk-address pairs whose finals carry no candidates, same-signature
+  twins (`GetTexture`/`GetTextureImpl`, surrogate/`IsDigit` pairs),
+  and high-count addresses needing receiver instantiation (`List.Add`,
+  `Dictionary.get_IsReadOnly`, `Nullable`) or arg-type overload proof
+  (`Convert.ToBoolean` short/ushort, `Exchange` long/IntPtr).
+
+### Next priorities (fix 100 follow-ups)
+
+1. **447 remaining tails**: receiver-driven instantiation (same-owner
+   generic families), arg-type overload disambiguation, forwarder
+   direction via body-call analysis. Never max-arity guesses.
+2. **Bare-`T` declaration LHS** (~425 sites), **8,067 into-block gotos**,
+   byte-store/noreturn-EH/leftover lists — all stand.
+3. Discovered and NOT changed: `_IMPURE` never matches generic calls
+   (`Foo<Bar>(...)`), so pre-existing DCE already treats dead generic
+   calls as droppable (see fix 99 notes); the analyze.py/insn.py tail
+   mirrors must stay in sync — fix 94/100 wire both.
+
+## Previous work — fix 99 (post-render dead-pure-load DCE, gated 2026-09-15)
 
 `_render` drops empty pure-cond `if`s (e.g. an emptied class-init guard
 `if (!(k.initialized != 0)) { }`), orphaning the pure klass loads they

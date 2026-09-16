@@ -308,6 +308,172 @@ class _CallsMixin:
             return ('%s.%s(%s)' % (_recv_fold(targs[0]), base, ', '.join(targs[1:])), m2)
         return ('%s(%s)' % (tg_name, ', '.join(targs)), m2)
 
+    def _tail_subst_closed(self, ty, spec):
+        """Closed type tuple for one signature type under a MethodSpec.
+
+        Single-level VAR/MVAR substitution through the spec's class
+        (0x13) or method (0x1e) instantiation, mirroring
+        `candidate_return_type` including byref preservation; anything
+        else passes through for `_closed_type_key` gating (nested-open
+        and unreadable rows gate to None there). Any failure declines
+        with None. -- fix 100
+        """
+        try:
+            if spec is not None and ty is not None and isinstance(ty, tuple) and len(ty) == 2:
+                te = (ty[1] >> 16) & 0xFF
+                if te in (0x13, 0x1e) and 0 <= ty[0] < len(self.meta.generic_parameters):
+                    ordinal = self.meta.generic_parameters[ty[0]][4]
+                    inst = spec[1] if te == 0x13 else spec[2]
+                    args = self.il._method_spec_type_args(inst)
+                    actual = args[ordinal] if args is not None and 0 <= ordinal < len(args) else None
+                    if actual is None:
+                        return None
+                    return (actual[0], (actual[1] & ~(1 << 29)) | (ty[1] & (1 << 29)))
+            return ty
+        except Exception:
+            return None
+
+    def _tail_sig_key(self, cand):
+        """Canonical rendering key for one shared-tail candidate.
+
+        Two candidates share a key only if the resolved-tail renderer
+        prints them identically from the same call-site state (same
+        name text, staticness, closed parameter types, callee
+        voidness). Anything unrenderable -- unreadable rows, unbound
+        VARs (open generic definitions need receiver instantiation, a
+        separate proof), unknown names, generic owners on static
+        method candidates (the bare owner spelling would drop `<T>`) --
+        declines with None, so it can only ever block a resolution,
+        never join one. -- fix 100
+        """
+        try:
+            kind = cand[0]
+        except Exception:
+            return None
+        try:
+            if kind == 'method':
+                mi = cand[1]
+                m = self.meta.methods[mi]
+                owner = self.meta.typedefs[m.declaring] if 0 <= m.declaring < len(self.meta.typedefs) else None
+                if owner is None or m.generic_container != -1 or owner.generic_container != -1:
+                    return None
+                nm = self._info_name(('method', mi))
+                if nm is None:
+                    return None
+                pkeys = []
+                for p in self.meta.method_params(m):
+                    if not (0 <= p.type < len(self.il.types)):
+                        return None
+                    k = self.il._closed_type_key(self.il.types[p.type])
+                    if k is None:
+                        return None
+                    pkeys.append(k)
+                rti = m.return_type
+                rty = self.il.types[rti] if 0 <= rti < len(self.il.types) else None
+                void = rty is not None and ((rty[1] >> 16) & 0xFF) == 0x01
+                return (('m', nm, bool(m.is_static), tuple(pkeys), bool(void)), ('method', mi))
+            if kind == 'generic':
+                si = cand[1]
+                spec = self.il.method_specs[si]
+                md = self._spec_md(si)
+                if md is None:
+                    return None
+                m = self.meta.methods[md]
+                nm = self.il.generic_method_name(si)
+                if nm is None:
+                    return None
+                pkeys = []
+                for p in self.meta.method_params(m):
+                    if not (0 <= p.type < len(self.il.types)):
+                        return None
+                    ty = self._tail_subst_closed(self.il.types[p.type], spec)
+                    if ty is None:
+                        return None
+                    k = self.il._closed_type_key(ty)
+                    if k is None:
+                        return None
+                    pkeys.append(k)
+                rti = m.return_type
+                rty = self.il.types[rti] if 0 <= rti < len(self.il.types) else None
+                void = rty is not None and ((rty[1] >> 16) & 0xFF) == 0x01
+                return (('g', nm, md, bool(m.is_static), tuple(pkeys), bool(void)), ('generic', nm, md))
+            return None
+        except Exception:
+            return None
+
+    def _shared_tail_return_target(self, cands):
+        """Resolve an ambiguous shared tail by the caller's return type.
+
+        A `return <call>` tail delivers the callee's value as the
+        caller's own, so the true callee's closed, spec-inflated return
+        must equal the caller's exact metadata return. Keep nothing on
+        speculation: open or unreadable candidate returns decline the
+        whole resolution (a fully-closed-or-decline rule -- an unbound
+        row might be the true callee), closed mismatches drop, and only
+        one distinct rendering (`_tail_sig_key`) across every survivor
+        resolves, in the render form the existing resolved-tail
+        emitters consume (`('method', mi)` for the `info` path,
+        `('generic', name, md)` for `_tail_generic_call`). Decline on
+        void callers (fix 95 owns voids, where a value filter is both
+        vacuous and unsound), on open or unknown caller returns, on
+        empty or split survivors, and on any non-method/generic row.
+        Never invents a name: winners always come from the listed set,
+        and identical renderings make the pick unobservable. -- fix 100
+        """
+        try:
+            m = getattr(self, '_current_method', None)
+            if m is None or self._caller_is_void():
+                return None
+            il = self.il
+            crt = il.types[m.return_type] if 0 <= m.return_type < len(il.types) else None
+            ckey = il._closed_type_key(crt)
+            if ckey is None:
+                return None
+            keys = []
+            for c in cands:
+                try:
+                    kind = c[0]
+                except Exception:
+                    return None
+                if kind == 'method':
+                    cm = self.meta.methods[c[1]]
+                    rt = il.types[cm.return_type] if 0 <= cm.return_type < len(il.types) else None
+                elif kind == 'generic':
+                    si = c[1]
+                    spec = il.method_specs[si]
+                    md = self._spec_md(si)
+                    if md is None:
+                        return None
+                    cm = self.meta.methods[md]
+                    rt = self._tail_subst_closed(
+                        il.types[cm.return_type] if 0 <= cm.return_type < len(il.types) else None, spec)
+                    if rt is None:
+                        return None
+                else:
+                    return None
+                if rt is None:
+                    return None
+                try:
+                    rkey = il._closed_type_key(rt)
+                except Exception:
+                    return None
+                if rkey is None:
+                    return None
+                if rkey != ckey:
+                    continue
+                built = self._tail_sig_key(c)
+                if built is None:
+                    return None
+                keys.append(built)
+            if not keys:
+                return None
+            first = keys[0][0]
+            if any(k != first for k, _r in keys):
+                return None
+            return keys[0][1]
+        except Exception:
+            return None
+
     _IMM_KINDS = (OpKind.IMMEDIATE8, OpKind.IMMEDIATE8TO16,
               OpKind.IMMEDIATE8TO32, OpKind.IMMEDIATE8TO64,
               OpKind.IMMEDIATE16, OpKind.IMMEDIATE32, OpKind.IMMEDIATE64)

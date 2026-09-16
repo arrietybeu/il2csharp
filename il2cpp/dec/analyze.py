@@ -259,7 +259,9 @@ class _AnalyzeMixin:
                             # arguments (fix 58). Both lists stay parallel.
                             tail_gen = None
                             tail_nm = None
+                            tail_ret = None
                             if info is None and cands and len(cands) > 1:
+                                tail_ret = L._shared_tail_return_target(cands)
                                 tail_gen = L._tail_hidden_generic(cands, args, arg_exprs)
                                 if tail_gen is not None:
                                     tail_nm = tail_gen[0]
@@ -269,6 +271,9 @@ class _AnalyzeMixin:
                                     if _tgi < len(arg_exprs):
                                         arg_exprs = arg_exprs[:_tgi] + arg_exprs[_tgi + 1:]
                                 L._tail_trim_stale(args, arg_exprs)
+                                if info is None and tail_ret is not None and tail_ret[0] == 'method' \
+                                        and (tail_gen is None or tail_gen[1] is None):
+                                    info = tail_ret
                             if info is not None and info[0] == 'method':
                                 m2 = L.meta.methods[info[1]]
                                 args = L._tail_method_args(info[1], args, arg_exprs)
@@ -316,6 +321,30 @@ class _AnalyzeMixin:
                                         ((L.il.types[_tg_rti][1] >> 16) & 0xFF) == 0x01
                                     L._emit_tail(ins.ip, _tg_call, None, void=_tg_void,
                                                  marker=False)
+                                elif tail_ret is not None and tail_ret[0] == 'generic':
+                                    _sv_xmm = list(getattr(L, '_xmm_pending', []) or [])
+                                    _sv_cca = getattr(L, '_call_class_args', None)
+                                    _sv_slot = dict(getattr(L, 'slot_types', {}) or {})
+                                    _sv_hints = dict(getattr(L, '_type_hints', {}) or {})
+                                    try:
+                                        _tr_call, _tr_m = L._tail_generic_call(tail_ret[1], tail_ret[2], args, arg_exprs)
+                                    except Exception:
+                                        L._xmm_pending = _sv_xmm
+                                        L._call_class_args = _sv_cca
+                                        L.slot_types = _sv_slot
+                                        L._type_hints = _sv_hints
+                                        _eff_nm = tail_nm or nm
+                                        if _eff_nm in L.RT_ARITY and len(args) > L.RT_ARITY[_eff_nm]:
+                                            args = args[:L.RT_ARITY[_eff_nm]]
+                                        elif tail_nm is None and re.fullmatch(r'sub_[0-9a-f]+', nm) and len(args) > 4:
+                                            args = args[:4]
+                                        L._emit_tail(ins.ip, '%s(%s)' % (_eff_nm, ', '.join(args)), None,
+                                                       marker=False)
+                                    else:
+                                        _tr_rti = _tr_m.return_type
+                                        _tr_void = 0 <= _tr_rti < len(L.il.types) and ((L.il.types[_tr_rti][1] >> 16) & 0xFF) == 0x01
+                                        L._emit_tail(ins.ip, _tr_call, None, void=_tr_void,
+                                                     marker=False)
                                 elif t in L.rt_wbarrier and args:
 
                                     # a write barrier can be the very last

@@ -105,7 +105,9 @@ class _InsnMixin:
                     # arguments (fix 58). Both lists stay parallel.
                     tail_gen = None
                     tail_nm = None
+                    tail_ret = None
                     if info is None and cands and len(cands) > 1:
+                        tail_ret = self._shared_tail_return_target(cands)
                         tail_gen = self._tail_hidden_generic(cands, args, arg_exprs)
                         if tail_gen is not None:
                             tail_nm = tail_gen[0]
@@ -115,6 +117,9 @@ class _InsnMixin:
                             if _tgi < len(arg_exprs):
                                 arg_exprs = arg_exprs[:_tgi] + arg_exprs[_tgi + 1:]
                         self._tail_trim_stale(args, arg_exprs)
+                        if info is None and tail_ret is not None and tail_ret[0] == 'method' \
+                                and (tail_gen is None or tail_gen[1] is None):
+                            info = tail_ret
                     if info is not None and info[0] == 'method':
                         m2 = self.meta.methods[info[1]]
                         args = self._tail_method_args(info[1], args, arg_exprs)
@@ -157,6 +162,26 @@ class _InsnMixin:
                         for r in VOLATILE:
                             self.regs.pop(r, None)
                         return
+                    if tail_ret is not None and tail_ret[0] == 'generic':
+                        _sv_xmm = list(getattr(self, '_xmm_pending', []) or [])
+                        _sv_cca = getattr(self, '_call_class_args', None)
+                        _sv_slot = dict(getattr(self, 'slot_types', {}) or {})
+                        _sv_hints = dict(getattr(self, '_type_hints', {}) or {})
+                        try:
+                            _tr_call, _tr_m = self._tail_generic_call(tail_ret[1], tail_ret[2], args, arg_exprs)
+                        except Exception:
+                            self._xmm_pending = _sv_xmm
+                            self._call_class_args = _sv_cca
+                            self.slot_types = _sv_slot
+                            self._type_hints = _sv_hints
+                            tail_ret = None
+                        else:
+                            _tr_rti = _tr_m.return_type
+                            _tr_void = 0 <= _tr_rti < len(self.il.types) and ((self.il.types[_tr_rti][1] >> 16) & 0xFF) == 0x01
+                            self._emit_tail(ip, _tr_call, asm, void=_tr_void)
+                            for r in VOLATILE:
+                                self.regs.pop(r, None)
+                            return
                     nm = self._call_name(t)
                     raise_exc = self._named_raise_throw(t, nm)
                     if raise_exc is not None:
