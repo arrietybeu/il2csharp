@@ -220,14 +220,22 @@ def test_self_recursion_guard():
     assert out[0] == "System.Threading.Thread.MemoryBarrier();"
 
 
-def test_comment_tail_kept_and_dup_temps_missed():
+def test_comment_tail_kept():
     d, m = lift_pass()
     out = run(d, m, ["object obj1 = sub_5000(a); // note",
                      "return 1;"])
     assert out == ["System.Threading.Thread.MemoryBarrier(); // note",
                    "return 1;"]
-    # sibling-scope duplicate temps: safe miss, both stay
+
+
+def test_same_scope_dup_decls_both_rewrite():
+    # fix 108: neither temp is read, so both fence decls rewrite even
+    # though the name collides. (True shadowing across sibling scopes
+    # is covered in test_review108_scoped_fence.py.)
+    d, m = lift_pass()
     out = run(d, m, ["object obj1 = sub_5000(a);",
                      "object obj1 = sub_5000(b);",
                      "return 1;"])
-    assert out[0] == "object obj1 = sub_5000(a);"
+    assert out == ["System.Threading.Thread.MemoryBarrier();",
+                   "System.Threading.Thread.MemoryBarrier();",
+                   "return 1;"]

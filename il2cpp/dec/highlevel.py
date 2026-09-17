@@ -1578,15 +1578,139 @@ class _HighLevelMixin:
         except Exception:
             return False
 
-    def _fence_line(self, s, masked, ind, idx, masks, fence_vas, void_m):
-        """One line rewritten, split, or None. Never raises."""
+    def _fence_redecl_of(self, s, nm):
+        """(kind, end) when stripped code line `s` re-declares `nm`.
+
+        Kind 0 is `T nm = ...;` (same-block scope), kind 1 a
+        foreach/catch binder (body scope, one deeper). `end` is the
+        offset just past the declared name, so the caller can check
+        whether the initializer itself reads an outer `nm`.
+        Keyword-headed matches (`return x = ...`) are assignments,
+        never declarations.
+        """
         try:
-            return self._fence_line_inner(
-                s, masked, ind, idx, masks, fence_vas, void_m)
+            dm = self._STUB_DECL_RX.match(s)
+            if dm is not None and dm.group(2) == nm:
+                if dm.group(1).strip().split()[0] not in self._STUB_KEYWORDS:
+                    return (0, dm.end(2))
+            fm = self._STUB_FOREACH_RX.match(s)
+            if fm is not None and fm.group(2) == nm:
+                return (1, fm.end(2))
+            cm = self._STUB_CATCH_RX.match(s)
+            if cm is not None and cm.group(2) == nm:
+                return (1, cm.end(2))
+            return None
         except Exception:
             return None
 
-    def _fence_line_inner(self, s, masked, ind, idx, masks, fence_vas, void_m):
+    @staticmethod
+    def _fence_line_depths(masks):
+        """Brace depth at each line start, or None on any anomaly.
+
+        Runs on masked lines (strings/comments already neutral), so
+        every remaining brace is real. A negative depth means the
+        text is not balanced single-pass input; callers decline.
+        """
+        try:
+            depths = []
+            cur = 0
+            for mk in masks:
+                lead = 0
+                for ch in mk:
+                    if ch in ' \t\x01':
+                        continue
+                    if ch != '}':
+                        break
+                    lead += 1
+                st = cur - lead
+                if st < 0:
+                    return None
+                depths.append(st)
+                cur = st + mk.count('{') - (mk.count('}') - lead)
+                if cur < 0:
+                    return None
+            return depths
+        except Exception:
+            return None
+
+    def _fence_temp_dead_scoped(self, masks, codes, idx, nm, depths):
+        """Scope-aware deadness for a fence-called temp. -- fix 108
+
+        The fix-107 method-wide check treats every same-name mention
+        as a read, so one colliding scratch temp (sibling scopes
+        re-declare: fix 97c) pins all of them. Lexical scoping proves
+        more: walking forward from the fence declaration at depth d0,
+        a mention reads the fence temp only while no intervening
+        re-declaration shadows it -- a same-block `T nm = ...`
+        rebinds it away outright, a nested declaration or
+        foreach/catch binder shadows its own subtree (tracked as
+        depths, pruned as blocks close), and mentions outside the
+        fence block decline exactly as before. A re-declaration
+        whose own initializer reads an outer `nm`, a `T nm = ...`
+        sharing its line with braces (its block depth is unplaceable
+        -- binder bodies are always exactly one deeper), or a mention
+        after a non-leading `}` (which the line-start depth cannot
+        place) all decline too.
+        Anything unrecognized declines; success needs zero genuine
+        reads. Never raises.
+        """
+        try:
+            if depths is None or idx < 0 or idx >= len(masks):
+                return False
+            d0 = depths[idx]
+            if '{' in masks[idx] or '}' in masks[idx]:
+                return False
+            shadows = []
+            for j in range(idx + 1, len(masks)):
+                mk = masks[j]
+                dj = depths[j]
+                shadows = [sd for sd in shadows if sd <= dj]
+                rd = self._fence_redecl_of(codes[j], nm)
+                if rd is not None:
+                    if dj < d0:
+                        # Outer-scope declaration: a different variable
+                        # (it neither reads nor rebinds the fence
+                        # temp). Only outer non-declaration mentions
+                        # decline, below.
+                        continue
+                    if _mentions(mk[rd[1]:], nm) and not shadows:
+                        return False
+                    if dj == d0 and rd[0] == 0:
+                        if '{' in mk or '}' in mk:
+                            return False
+                        return True
+                    if rd[0] == 0 and ('{' in mk or '}' in mk):
+                        return False
+                    shadows.append(dj + rd[0])
+                    continue
+                if not _mentions(mk, nm):
+                    continue
+                if dj < d0 or not shadows:
+                    return False
+                # A mention after a non-leading `}` binds shallower
+                # than the line-start depth, where a kept shadow may
+                # no longer apply -- unplaceable, decline.
+                k = 0
+                while k < len(mk) and mk[k] in ' \t\x01}':
+                    k += 1
+                if '}' in mk[k:]:
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _fence_line(self, s, masked, ind, idx, masks, codes, depths,
+                    fence_vas, void_m):
+        """One line rewritten, split, or None. Never raises."""
+        try:
+            return self._fence_line_inner(
+                s, masked, ind, idx, masks, codes, depths,
+                fence_vas, void_m)
+        except Exception:
+            return None
+
+    def _fence_line_inner(self, s, masked, ind, idx, masks, codes, depths,
+                          fence_vas, void_m):
         tail_line = ''
         ci = masked.find('\x01')
         if ci != -1 and s[ci:ci + 2] == '//':
@@ -1649,7 +1773,9 @@ class _HighLevelMixin:
             b -= 1
         if a != start or b - 1 != span[1]:
             return None
-        if not self._fence_temp_dead(masks, idx, nm):
+        if not self._fence_temp_dead(masks, idx, nm) and \
+                not self._fence_temp_dead_scoped(
+                    masks, codes, idx, nm, depths):
             return None
         if not self._fence_args_clean(s, masked, span[0], span[1]):
             return None
@@ -1661,10 +1787,13 @@ class _HighLevelMixin:
         The thunk (and the fence body itself) provably reads nothing and
         returns nothing, so only positions that need no value rewrite:
         bare statements, void `; return;` tails, and declarations whose
-        temp is dead method-wide. Arguments must each be side-effect
-        free (else the site keeps its stub call); conditions, returns
-        in value methods, live temps, and Thread.MemoryBarrier itself
-        keep today's rendering. Never raises.
+        temp is dead. Deadness is the fix-107 method-wide check plus
+        the fix-108 scope-aware check (same-name mentions bound to an
+        intervening re-declaration are different variables).
+        Arguments must each be side-effect free (else the site keeps
+        its stub call); conditions, returns in value methods, live
+        temps, and Thread.MemoryBarrier itself keep today's rendering.
+        Never raises.
         """
         try:
             if m is None:
@@ -1693,6 +1822,14 @@ class _HighLevelMixin:
                 return lines
             void_m = self._fence_caller_is_void(m)
             masks = [self._stub_mask_line(ln.strip()) for ln in lines]
+            codes = []
+            for ln, mk in zip(lines, masks):
+                s = ln.strip()
+                ci = mk.find('\x01')
+                if ci != -1 and s[ci:ci + 2] == '//':
+                    s = s[:ci].rstrip()
+                codes.append(s)
+            depths = self._fence_line_depths(masks)
         except Exception:
             return lines
         out = []
@@ -1703,7 +1840,7 @@ class _HighLevelMixin:
                 continue
             res = self._fence_line(
                 s, masks[idx], ln[:len(ln) - len(ln.lstrip())],
-                idx, masks, fence_vas, void_m)
+                idx, masks, codes, depths, fence_vas, void_m)
             if res is None:
                 out.append(ln)
             elif isinstance(res, list):

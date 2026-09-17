@@ -59,7 +59,67 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 107 (proved fence-thunk calls render Thread.MemoryBarrier(), gated 2026-09-17)
+## Current work — fix 108 (scope-aware deadness for fence-called temps, gated 2026-09-17)
+
+Fix 107's method-wide liveness treated every same-name mention as a
+read, so one colliding scratch temp (sibling scopes re-declare: fix
+97c) pinned all of them. `_fence_temp_dead_scoped` (new in
+`il2cpp/dec/highlevel.py`, OR-ed with the fix-107 check so nothing it
+rewrote can regress) walks forward from the fence declaration at brace
+depth d0 over masked lines: a same-block `T nm = ...` rebinds the temp
+away outright, a nested declaration or foreach/catch binder shadows its
+subtree (depths from `_fence_line_depths`, pruned as blocks close),
+outer-scope declarations are different variables, and outer mentions,
+unplaceable brace-mixed mentions, initializers reading an outer `nm`,
+and any depth anomaly decline exactly as before. `_fence_redecl_of`
+reuses `_STUB_DECL_RX` (with the `_STUB_KEYWORDS` guard, so
+`return x = ...` never counts) plus the foreach/catch binder regexes.
+Gates: **633 tests (515 portable incl. 15 new — 14 in
+`tests/test_review108_scoped_fence.py`, one split out of the flipped
+fix-107 dup-temp expectation — + 118 game); direct sweep 116,178
+methods / 0 crashes / 0 structural changes vs fix 107 (8 bodies
+changed, net -96 lines); strict build 11,184 files / 115,658 bodies /
+0 failures or fallbacks (`work/review108_out`); parser 0 bad files**.
+Reports: `validation_reports/review108_sweep.json`,
+`review108_vs107.json` (8 changed, 0 structural),
+`review108_parse.json`; built tree `work/review108_out`. The 64
+goldens are untouched (0 overlapping MIs, no regen needed). NOT
+promoted — `final_out/` still holds the fix-99 tree pending a human
+promotion call.
+
+- [x] Fix 108: 23 new `Thread.MemoryBarrier()` lines;
+  `sub_1804355f0` falls 185 → 159 lines (8 stub defs + 151 decls
+  remain). Of 8 changed methods 6 are line-neutral, 2 shrink
+  (`Task.Dispose` -13, `ReaderWriterLockSlim.
+  TryEnterUpgradeableReadLockCore` -83) through the same honest DCE
+  cascade as fix 107 (orphaned copy chains, one `using static`
+  per newly-unreferenced assembly). Ground truth: the
+  `FusionNetworkManager` colliding-`obj13` sites rewrite; the
+  `ReaderWriterLockSlim` `if`-arm fence rewrites while its
+  genuinely-live `else`-arm twin stays.
+- [x] Refinement found by probe (single-method re-lift of mi
+  103865): an outer-scope re-declaration is a different variable and
+  no longer declines the site; decided by reading all five `obj84`
+  decls' fates, with a dedicated regression test.
+- [x] Residue, all verified declined by design: genuinely-read
+  temps, effectful-argument sites (out of scope — the pass never
+  touched argument rules), `using`-var/`is`-pattern rebinds,
+  mid-line-brace placements.
+
+### Next priorities (fix 108 follow-ups)
+
+1. **Effectful-argument fence sites** (`sub_1804355f0(Foo(), ...)`
+   with dead temps): needs call-effect analysis, never blind
+   dropping.
+2. **Other top unregistered VAs** (thunk finals,
+   interface-dispatch twins from the fix-104 list): native
+   structural proof on the fence precedent, never a name guess.
+3. **Duplication residue with degraded conditions** (~2.7k
+   both-sides-unknown branches, fix-106 list), **447 remaining
+   shared tails**, **8,067 into-block gotos**, Review 87 lists —
+   all stand.
+
+## Previous work — fix 107 (proved fence-thunk calls render Thread.MemoryBarrier(), gated 2026-09-17)
 
 `lock or dword ptr [rsp],0; ret` is the full barrier MSVC emits where the
 source calls `Thread.MemoryBarrier`, reached directly or through a short
