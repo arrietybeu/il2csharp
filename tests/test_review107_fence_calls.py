@@ -139,7 +139,7 @@ def test_args_clean():
     assert d._fence_args_clean("sub_1()", "sub_1()", 5, 6) is True
     assert d._fence_args_clean("sub_1(a, Foo())", "sub_1(a, Foo())", 5, 14) is False
     assert d._fence_args_clean("sub_1(typeof(D<K, V>))",
-                               "sub_1(typeof(D<K, V>))", 5, 22) is True
+                               "sub_1(typeof(D<K, V>))", 5, 21) is True
 
 
 # --- pass shapes -------------------------------------------------------------------

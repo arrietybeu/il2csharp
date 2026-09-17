@@ -1,5 +1,6 @@
 from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.cfg import INT_TY, _match_brace
+from il2cpp.csharp import FA_LITERAL, FA_STATIC, field_attrs
 from il2cpp.metadata import MethodDef
 from il2cpp.names import safe_ident
 from il2cpp.stmt_text import _split_top
@@ -1485,16 +1486,24 @@ class _HighLevelMixin:
     _FENCE_CALL_TEXT = 'System.Threading.Thread.MemoryBarrier()'
 
     @classmethod
-    def _fence_trivial_arg(cls, text):
-        """True when dropping an argument text loses no side effects."""
+    def _fence_trivial_arg(cls, text, masked=None):
+        """True when dropping an argument text loses no side effects.
+
+        `masked` is the same argument's masked text (strings/comments
+        neutral); the fix-109 typeof-member shape is checked on it so
+        quoted text can never shape-match.
+        """
         t = (text or '').strip()
         if not t:
             return False
         if re.fullmatch(r'[A-Za-z_@][\w@.]*', t):
             return True
+        if masked is not None and cls._fence_typeof_member(
+                (masked or '').strip()):
+            return True
         if t in ('true', 'false', 'null', 'default'):
             return True
-        if t.startswith('typeof(') and t.endswith(')'):
+        if cls._fence_bare_typeof(t):
             return True
         if len(t) >= 2 and t[0] == t[-1] and t[0] in ('"', "'") \
                 and '{' not in t:
@@ -1516,30 +1525,88 @@ class _HighLevelMixin:
         except (ValueError, OverflowError):
             return False
 
+    @staticmethod
+    def _fence_typeof_end(t):
+        """Index of the `)` closing the leading `typeof(`, else None."""
+        try:
+            m = re.match(r'typeof\s*\(', t)
+            if m is None:
+                return None
+            depth = 0
+            j = m.end() - 1
+            while j < len(t):
+                ch = t[j]
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth == 0:
+                        return j
+                j += 1
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _fence_bare_typeof(t):
+        """True for exactly `typeof(X)` (balanced, whole string).
+
+        The old prefix/suffix spelling also matched `typeof(X).Get()`
+        -- a call -- dropping its effects (never fired corpus-wide:
+        zero such fence args pre-fix-109, but the hole was real).
+        """
+        try:
+            j = _HighLevelMixin._fence_typeof_end(t)
+            return j is not None and j == len(t) - 1
+        except Exception:
+            return False
+
+    @staticmethod
+    def _fence_typeof_member(t):
+        """True for exactly `typeof(X).Member` on masked text. -- fix 109
+
+        A single-level static access: no null dereference is possible
+        (unlike the already-accepted `obj.f` chains, which can NRE),
+        no calls, no indexers, no further member levels. `t` must be
+        masked (strings/comments neutral) so quoted text can never
+        shape-match. Multi-level paths, calls, indexers, operators,
+        and unbalanced input decline.
+        """
+        try:
+            j = _HighLevelMixin._fence_typeof_end(t)
+            if j is None or j + 1 >= len(t):
+                return False
+            return re.fullmatch(r'\.[A-Za-z_@]\w*', t[j + 1:]) is not None
+        except Exception:
+            return False
+
     @classmethod
     def _fence_args_clean(cls, code, masked, open_paren, close_paren):
         """True when every argument between the parens is droppable."""
         parts = []
         depth = 0
         cur = ''
+        mcur = ''
         k = open_paren + 1
         while k < close_paren:
             ch = masked[k]
             if ch == ',' and depth == 0:
-                parts.append(cur)
+                parts.append((cur, mcur))
                 cur = ''
+                mcur = ''
             else:
                 if ch in '(<[':
                     depth += 1
                 elif ch in ')>]':
                     depth = max(0, depth - 1)
                 cur += code[k]
+                mcur += masked[k]
             k += 1
-        parts.append(cur)
-        for text in parts:
+        parts.append((cur, mcur))
+        for text, mtext in parts:
             if not text.strip():
                 continue
-            if not cls._fence_trivial_arg(text):
+            if not cls._fence_trivial_arg(text, mtext):
                 return False
         return True
 
@@ -1790,10 +1857,11 @@ class _HighLevelMixin:
         temp is dead. Deadness is the fix-107 method-wide check plus
         the fix-108 scope-aware check (same-name mentions bound to an
         intervening re-declaration are different variables).
-        Arguments must each be side-effect free (else the site keeps
-        its stub call); conditions, returns in value methods, live
-        temps, and Thread.MemoryBarrier itself keep today's rendering.
-        Never raises.
+        Arguments must each be side-effect free -- plain values plus
+        the fix-109 single-level `typeof(X).Member` static access
+        (else the site keeps its stub call); conditions, returns in
+        value methods, live temps, and Thread.MemoryBarrier itself
+        keep today's rendering. Never raises.
         """
         try:
             if m is None:
@@ -1847,6 +1915,652 @@ class _HighLevelMixin:
                 out.extend(res)
             else:
                 out.append(res)
+        return out
+
+    # GPR-passed kinds for == operands. Floats ride XMM (stale GPR
+    # slots would print wrong values), structs carry ABI/padding
+    # subtleties, open generics prove nothing: all decline.
+    _EQ_GPR_KINDS = frozenset((
+        0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
+        0x0E, 0x0F, 0x10, 0x12, 0x14, 0x18, 0x19, 0x1C, 0x1D))
+
+    def _eq_addr_info(self, target):
+        """Operator proof for a shared address, else None. -- fix 110
+
+        Every candidate must be a static 2-parameter bool method named
+        `op_Equality` (with `Equals` twins allowed) or unanimously
+        `op_Inequality`. Address-sharing proves the bodies identical,
+        so the operator spelling is behavior-exact for whichever owner
+        is true -- but only where the operands' own types bind that
+        same operator (checked per site, never assumed). Cached: the
+        answer is binary-global. Never raises.
+        """
+        try:
+            cache = self.__dict__.setdefault('_eq_addr_cache', {})
+            if target in cache:
+                return cache[target]
+            res = self._eq_addr_info_inner(target)
+            cache[target] = res
+            return res
+        except Exception:
+            return None
+
+    def _eq_addr_info_inner(self, target):
+        try:
+            il = self.L.il
+            cands = il.addr_candidates.get(target) if target else None
+            if not cands or len(cands) < 2:
+                return None
+            pairs = []
+            names = set()
+            for c in cands:
+                if c[0] != 'method':
+                    return None
+                mi = c[1]
+                if not 0 <= mi < len(self.L.meta.methods):
+                    return None
+                m = self.L.meta.methods[mi]
+                if not m.is_static:
+                    return None
+                rt = il.types[m.return_type] \
+                    if 0 <= m.return_type < len(il.types) else None
+                if rt is None or ((rt[1] >> 16) & 0xFF) != 0x02:
+                    return None
+                ps = self.L.meta.method_params(m)
+                if len(ps) != 2:
+                    return None
+                pts = []
+                for p in ps:
+                    pt = il.types[p.type] \
+                        if 0 <= p.type < len(il.types) else None
+                    if pt is None or not isinstance(pt, tuple):
+                        return None
+                    pts.append(pt)
+                names.add(m.name)
+                pairs.append((pts[0], pts[1]))
+            if names <= {'op_Equality', 'Equals'} and 'op_Equality' in names:
+                op = '=='
+            elif names == {'op_Inequality'}:
+                op = '!='
+            else:
+                return None
+            return {'op': op, 'pairs': pairs}
+        except Exception:
+            return None
+
+    def _eq_typedef_map(self):
+        """Printed-type-name -> TypeDef index (short names if unique)."""
+        try:
+            if '_eq_tdmap' in self.__dict__:
+                return self.__dict__['_eq_tdmap']
+            il = self.L.il
+            full = {}
+            for td in self.L.meta.typedefs:
+                try:
+                    nm = il.type_name((td.index, 0x12 << 16))
+                except Exception:
+                    continue
+                if nm and nm != 'object':
+                    full[nm] = td.index
+            short = {}
+            bad = set()
+            for nm, ti in full.items():
+                sh = nm.split('.')[-1]
+                if sh in bad:
+                    continue
+                if sh in short:
+                    del short[sh]
+                    bad.add(sh)
+                else:
+                    short[sh] = ti
+            mp = dict(full)
+            for sh, ti in short.items():
+                mp.setdefault(sh, ti)
+            self.__dict__['_eq_tdmap'] = mp
+            return mp
+        except Exception:
+            return {}
+
+    def _eq_field_type(self, td_idx, seg, static_ok):
+        """Type tuple for field `seg` on td (+bases), else None.
+
+        Literals (consts) are pure values, allowed under either root.
+        Static fields resolve only under a static root; instance
+        fields only under an instance root. Derived hides base.
+        """
+        try:
+            il = self.L.il
+            chain = il.base_chain_tds(td_idx)
+            for ti in chain:
+                if not 0 <= ti < len(self.L.meta.typedefs):
+                    continue
+                td = self.L.meta.typedefs[ti]
+                for fi in range(td.field_start,
+                                td.field_start + td.field_count):
+                    if not 0 <= fi < len(self.L.meta.fields):
+                        continue
+                    f = self.L.meta.fields[fi]
+                    if f.name != seg:
+                        continue
+                    a = field_attrs(il, f)
+                    if a & FA_LITERAL:
+                        pass
+                    elif static_ok:
+                        if not (a & FA_STATIC):
+                            continue
+                    elif a & FA_STATIC:
+                        continue
+                    ft = il.types[f.type] \
+                        if 0 <= f.type < len(il.types) else None
+                    if ft is None or not isinstance(ft, tuple):
+                        return None
+                    return ft
+            return None
+        except Exception:
+            return None
+
+    def _eq_spelling_td(self, spelling, tdmap):
+        """TypeDef for a printed type spelling, else None.
+
+        Generic spellings decline: an open `List<T>`-style map key
+        never equals a closed `List<int>` operand spelling, and
+        matching one would conflate instantiations.
+        """
+        try:
+            t = (spelling or '').strip()
+            if not t or '<' in t:
+                return None
+            return tdmap.get(t)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _eq_int_literal(t):
+        """C# keyword spelling for an integer literal, else None.
+
+        Follows literal typing (first fitting of int / uint / long /
+        ulong, suffix-forced); a literal fitting no integral type, or
+        any float spelling, declines. The spelling joins normal pair
+        matching, so a literal only ever rewrites beside a proven
+        same-typed sibling.
+        """
+        try:
+            s = (t or '').strip()
+            neg = False
+            if s[:1] in ('+', '-'):
+                neg = s[:1] == '-'
+                s = s[1:]
+            if not s:
+                return None
+            force = None
+            low = s.lower()
+            if low.endswith(('ul', 'lu')):
+                force, s = 'ulong', s[:-2]
+            elif low.endswith('u'):
+                force, s = 'uint', s[:-1]
+            elif low.endswith('l'):
+                force, s = 'long', s[:-1]
+            if not s:
+                return None
+            if s[:2] in ('0x', '0X'):
+                v = int(s, 16)
+            elif s[:2] in ('0b', '0B'):
+                v = int(s, 2)
+            elif re.fullmatch(r'[0-9]+', s):
+                v = int(s, 10)
+            else:
+                return None
+            if neg:
+                v = -v
+            if force == 'ulong':
+                ok = 0 <= v <= 2 ** 64 - 1
+            elif force == 'uint':
+                ok = 0 <= v <= 2 ** 32 - 1
+            elif force == 'long':
+                ok = -(2 ** 63) <= v <= 2 ** 63 - 1
+            elif force is not None:
+                return None
+            else:
+                ok = True
+            if not ok:
+                return None
+            if force is not None:
+                return force
+            a = abs(v)
+            if a <= 2 ** 31 - 1 or (neg and a == 2 ** 31):
+                return 'int'
+            if not neg and a <= 2 ** 32 - 1:
+                return 'uint'
+            if a <= 2 ** 63 - 1 or (neg and a == 2 ** 63):
+                return 'long'
+            if not neg and a <= 2 ** 64 - 1:
+                return 'ulong'
+            return None
+        except Exception:
+            return None
+
+    def _eq_operand_spelling(self, text, mtext, m, declmap, tdmap):
+        """Proven operand type spelling, else None. -- fix 110
+
+        String literals spell `string`; bare `this` spells its
+        declaring type (reference types only); bare temps read their
+        unique method-wide declaration (`_stub_assign_types`:
+        multi-declared names are absent, so sibling collisions
+        decline); dotted paths walk metadata fields from `this`, a
+        temp, or `typeof(X)` (instance/static discipline per root,
+        literals allowed). Calls, indexers, operators, addresses,
+        generics, and comments decline.
+        """
+        try:
+            il = self.L.il
+            t = (text or '').strip()
+            mk = (mtext or '').strip()
+            if not t or t.startswith('&') or '\x01' in mk:
+                return None
+            if re.fullmatch(r'"[^"]*"', t):
+                return 'string'
+            lit = self._eq_int_literal(t)
+            if lit is not None:
+                return lit
+            if t == 'this':
+                if m is None or getattr(m, 'is_static', False):
+                    return None
+                td = m.declaring
+                if not 0 <= td < len(self.L.meta.typedefs):
+                    return None
+                if self.L.meta.typedefs[td].is_valuetype:
+                    return None
+                return il.type_name((td, 0x12 << 16))
+            if re.fullmatch(r'[A-Za-z_@]\w*', t):
+                if t in ('true', 'false', 'null', 'typeof'):
+                    return None
+                if t not in declmap:
+                    return None
+                return declmap[t].strip() or None
+            m0 = re.match(r'typeof\s*\(', t)
+            if m0 is not None:
+                j = self._fence_typeof_end(t)
+                if j is None or not t[j + 1:].startswith('.'):
+                    return None
+                inner = t[m0.end():j].strip()
+                td = self._eq_spelling_td(inner, tdmap)
+                if td is None:
+                    return None
+                tail = t[j + 2:].split('.')
+                static_ok = True
+            else:
+                if not re.fullmatch(r'[A-Za-z_@][\w@.]*', t):
+                    return None
+                segs = t.split('.')
+                if len(segs) < 2:
+                    return None
+                for sg in segs:
+                    if not re.fullmatch(r'[A-Za-z_@]\w*', sg):
+                        return None
+                if segs[0] == 'this':
+                    if m is None or getattr(m, 'is_static', False):
+                        return None
+                    td = m.declaring
+                    if not 0 <= td < len(self.L.meta.typedefs):
+                        return None
+                    static_ok = False
+                else:
+                    if segs[0] not in declmap:
+                        return None
+                    td = self._eq_spelling_td(declmap[segs[0]], tdmap)
+                    if td is None:
+                        return None
+                    static_ok = False
+                tail = segs[1:]
+            cur = None
+            for sg in tail:
+                if cur is None:
+                    ft = self._eq_field_type(td, sg, static_ok)
+                else:
+                    td2 = self._eq_spelling_td(cur, tdmap)
+                    if td2 is None:
+                        return None
+                    ft = self._eq_field_type(td2, sg, False)
+                if ft is None:
+                    return None
+                cur = il.type_name(ft)
+            return cur
+        except Exception:
+            return None
+
+    @staticmethod
+    def _eq_split_args(code, masked, open_paren, close_paren):
+        """[(raw, masked)] top-level comma parts between the parens."""
+        try:
+            parts = []
+            depth = 0
+            cur = ''
+            mcur = ''
+            k = open_paren + 1
+            while k < close_paren:
+                ch = masked[k]
+                if ch == ',' and depth == 0:
+                    parts.append((cur, mcur))
+                    cur = ''
+                    mcur = ''
+                else:
+                    if ch in '(<[':
+                        depth += 1
+                    elif ch in ')>]':
+                        depth = max(0, depth - 1)
+                    cur += code[k]
+                    mcur += masked[k]
+                k += 1
+            parts.append((cur, mcur))
+            return parts
+        except Exception:
+            return None
+
+    @staticmethod
+    def _eq_parenize(text, mtext):
+        """Operand text, parenthesized unless it binds atomically."""
+        try:
+            t = (text or '').strip()
+            if not t:
+                return None
+            mk = (mtext or '').strip()
+            if re.fullmatch(r'[A-Za-z_@][\w@.]*', mk):
+                return t
+            if len(t) >= 2 and t[0] == t[-1] and t[0] in ('"', "'"):
+                return t
+            if _HighLevelMixin._eq_int_literal(t) is not None:
+                return t
+            if mk.endswith(')'):
+                return t
+            j = _HighLevelMixin._fence_typeof_end(mk)
+            if j is not None and re.fullmatch(
+                    r'(?:\.[A-Za-z_@]\w*)+', mk[j + 1:]):
+                return t
+            return '(' + t + ')'
+        except Exception:
+            return None
+
+    @staticmethod
+    def _eq_paren_span(masked, open_idx):
+        """(open, close) of balanced parens at open_idx, else None."""
+        try:
+            depth = 0
+            for k in range(open_idx, len(masked)):
+                if masked[k] == '(':
+                    depth += 1
+                elif masked[k] == ')':
+                    depth -= 1
+                    if depth == 0:
+                        return (open_idx, k)
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _eq_split_bool(masked, lo, hi):
+        """Top-level &&/|| operand spans within [lo, hi)."""
+        try:
+            parts = []
+            depth = 0
+            cur = lo
+            k = lo
+            while k < hi:
+                ch = masked[k]
+                if ch in '(<[':
+                    depth += 1
+                elif ch in ')>]':
+                    depth = max(0, depth - 1)
+                elif depth == 0 and (masked.startswith('&&', k)
+                                     or masked.startswith('||', k)):
+                    parts.append((cur, k))
+                    k += 2
+                    cur = k
+                    continue
+                k += 1
+            parts.append((cur, hi))
+            return parts
+        except Exception:
+            return None
+
+    def _eq_operand_match(self, masked, olo, ohi, sub_start, call_close):
+        """(olo, ohi) when the operand is bangs/parens + call, else None.
+
+        The text before the call may only hold `!`, grouping parens,
+        and blanks; the text after only closers and blanks, balanced
+        with the opens. Anything else (a comparison, an enclosing
+        call's argument list) is a different position. Verified from
+        the call span outward, so the call's own parens can never be
+        mistaken for grouping.
+        """
+        try:
+            if not (olo <= sub_start and call_close < ohi):
+                return None
+            for k in range(olo, sub_start):
+                if masked[k] not in '!(\t \x01':
+                    return None
+            for k in range(call_close + 1, ohi):
+                if masked[k] not in ')\t \x01':
+                    return None
+            if masked[olo:sub_start].count('(') != \
+                    masked[call_close + 1:ohi].count(')'):
+                return None
+            return (olo, ohi)
+        except Exception:
+            return None
+
+    def _eq_line(self, s, masked, ind, m, declmap, tdmap, bool_spell):
+        """One line with == / != folded, else None. Never raises."""
+        try:
+            return self._eq_line_inner(
+                s, masked, ind, m, declmap, tdmap, bool_spell)
+        except Exception:
+            return None
+
+    def _eq_line_inner(self, s, masked, ind, m, declmap, tdmap,
+                       bool_spell):
+        pos = 0
+        while pos < len(masked):
+            mm = self._SUB_CALL_RX.search(masked, pos)
+            if mm is None:
+                return None
+            pos = mm.end()
+            try:
+                va = self._stub_call_at(masked, mm.start())
+                info = self._eq_addr_info(
+                    int(va, 16)) if va is not None else None
+            except Exception:
+                va, info = None, None
+            if info is None:
+                continue
+            span = self._stub_call_span(masked, mm.start() + 4 + len(va))
+            if span is None:
+                continue
+            res = self._eq_hit(
+                s, masked, ind, m, declmap, tdmap, bool_spell,
+                mm.start(), va, info, span)
+            if res is not None:
+                return res
+        return None
+
+    def _eq_hit(self, s, masked, ind, m, declmap, tdmap, bool_spell,
+                start, va, info, span):
+        ci = masked.find('\x01')
+        tail_line = ''
+        if ci != -1 and ci > span[1] and s[ci:ci + 2] == '//':
+            tail_line = ' ' + s[ci:].strip()
+            s = s[:ci].rstrip()
+            masked = masked[:len(s)]
+        # bool region per position: whole if/while test, bool decl
+        # RHS, bool return value. Ternary arms, call arguments, and
+        # bare computed-and-dropped statements decline.
+        head = s[:start]
+        region = None
+        cm = re.match(r'^(?:(?:}\s*)?else\s+)?if\s*\(', head) or \
+            re.match(r'^\}\s*while\s*\(', head) or \
+            re.match(r'^while\s*\(', head)
+        if cm is not None:
+            test = self._eq_paren_span(masked, cm.end() - 1)
+            if test is None:
+                return None
+            rest = masked[test[1] + 1:]
+            ci2 = rest.find('\x01')
+            if ci2 != -1:
+                rest = rest[:ci2]
+            if rest.strip() not in ('', '{'):
+                return None
+            region = (test[0] + 1, test[1])
+        else:
+            dm = self._STUB_DECL_RX.match(s)
+            if dm is not None and dm.group(1).strip() in bool_spell:
+                v_lo, v_hi = dm.start(3), dm.end(3)
+                a, b = v_lo, v_hi
+                while a < b and masked[a] in ' \t\x01':
+                    a += 1
+                while b > a and masked[b - 1] in ' \t\x01':
+                    b -= 1
+                if a < b:
+                    region = (a, b)
+            if region is None:
+                rm = self._STUB_RETURN_RX.match(s)
+                if rm is not None and self._eq_caller_is_bool(m):
+                    region = (rm.start(1), rm.end(1))
+        if region is None:
+            return None
+        rlo, rhi = region
+        if not (rlo <= start and span[1] < rhi):
+            return None
+        parts = self._eq_split_args(s, masked, span[0], span[1])
+        if not parts or len(parts) < 2:
+            return None
+        (a_raw, a_mk), (b_raw, b_mk) = parts[0], parts[1]
+        if not a_raw.strip() or not b_raw.strip():
+            return None
+        for extra_raw, extra_mk in parts[2:]:
+            if not extra_raw.strip():
+                continue
+            if not self._fence_trivial_arg(extra_raw, extra_mk):
+                return None
+        sa = self._eq_operand_spelling(a_raw, a_mk, m, declmap, tdmap)
+        sb = self._eq_operand_spelling(b_raw, b_mk, m, declmap, tdmap)
+        if sa is None or sb is None:
+            return None
+        hit = None
+        for p0, p1 in info['pairs']:
+            try:
+                ok0 = self.L.il.type_name(p0) == sa
+                ok1 = self.L.il.type_name(p1) == sb
+            except Exception:
+                ok0 = ok1 = False
+            if not (ok0 and ok1):
+                continue
+            if not self._eq_gpr_pair(p0, p1):
+                continue
+            hit = True
+            break
+        if hit is None:
+            return None
+        ops = self._eq_split_bool(masked, rlo, rhi)
+        if not ops:
+            return None
+        match = None
+        for olo, ohi in ops:
+            if olo <= start and span[1] < ohi:
+                match = self._eq_operand_match(
+                    masked, olo, ohi, start, span[1])
+                break
+        if match is None:
+            return None
+        ns, ne = match
+        pa = self._eq_parenize(a_raw, a_mk)
+        pb = self._eq_parenize(b_raw, b_mk)
+        if pa is None or pb is None:
+            return None
+        # The [!/(/) layers the match verified stay verbatim; only
+        # the call itself becomes the operator.
+        pre = s[ns:start]
+        post = s[span[1] + 1:ne]
+        return ind + s[:ns] + pre + pa + ' ' + info['op'] + ' ' + \
+            pb + post + s[ne:] + tail_line
+
+    def _eq_gpr_pair(self, p0, p1):
+        """True when both param tuples ride GPRs (no XMM/struct/open)."""
+        try:
+            for pt in (p0, p1):
+                if not isinstance(pt, tuple):
+                    return False
+                if ((pt[1] >> 16) & 0xFF) not in self._EQ_GPR_KINDS:
+                    return False
+                if (pt[1] >> 29) & 1:
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _eq_caller_is_bool(self, m):
+        try:
+            il = self.L.il
+            rt = il.types[m.return_type] \
+                if m is not None and 0 <= m.return_type < len(il.types) \
+                else None
+            return rt is not None and ((rt[1] >> 16) & 0xFF) == 0x02
+        except Exception:
+            return False
+
+    def _shared_equality_ops(self, lines, m):
+        """Fold unanimous == / != shared calls to operators. -- fix 110
+
+        An address whose every candidate is a static 2-parameter bool
+        `op_Equality` (`Equals` twins allowed) or unanimously
+        `op_Inequality` executes the same machine code whichever owner
+        is true, so the operator spelling is behavior-exact -- with no
+        attribution to any one owner. Each operand must still prove
+        the exact same operand type for some candidate (string
+        literals, uniquely-declared temps, `this`/temp/`typeof`
+        member paths through metadata; calls, indexers, operators,
+        addresses, generics, and floats/structs decline), and the call
+        must sit in a proven-bool position (whole if/while/do-while
+        test, top-level &&/|| operand thereof, `bool` declaration
+        RHS, bool return). Trailing stale slots must be droppable.
+        Never raises.
+        """
+        try:
+            if m is None:
+                return lines
+            if not any('sub_' in ln for ln in lines):
+                return lines
+            il = self.L.il
+            try:
+                bool_spell = {il.type_name((0, 0x02 << 16))}
+            except Exception:
+                bool_spell = {'bool'}
+            masks = [self._stub_mask_line(ln.strip()) for ln in lines]
+            codes = [ln.strip() for ln in lines]
+            declmap = self._stub_assign_types(lines, m)
+            tdmap = self._eq_typedef_map()
+        except Exception:
+            return lines
+        out = []
+        for idx, ln in enumerate(lines):
+            s = ln.strip()
+            if 'sub_' not in s:
+                out.append(ln)
+                continue
+            ind = ln[:len(ln) - len(ln.lstrip())]
+            cur_s, cur_mk = s, masks[idx]
+            # A line can carry several independent == sites (`a &&
+            # b` with two shared calls): rewrite each in turn, back
+            # to front is unnecessary since every iteration
+            # re-derives spans from the current text. Bounded: a
+            # pathological line keeps its remainder.
+            for _ in range(4):
+                res = self._eq_line(
+                    cur_s, cur_mk, ind, m, declmap, tdmap, bool_spell)
+                if res is None:
+                    break
+                cur_s = res[len(ind):] if res.startswith(ind) \
+                    else res.strip()
+                cur_mk = self._stub_mask_line(cur_s)
+            out.append(ind + cur_s if cur_s != s else ln)
         return out
 
     def _shared_stub_casts(self, lines, m):

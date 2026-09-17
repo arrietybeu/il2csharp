@@ -59,7 +59,148 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 108 (scope-aware deadness for fence-called temps, gated 2026-09-17)
+## Current work — fix 110 (unanimous == / != shared calls fold to operators, gated 2026-09-18)
+
+Six shared addresses (~2,726 uses) carry only static 2-parameter bool
+`op_Equality` candidates (`Equals` twins allowed) or unanimous
+`op_Inequality` (census: `0x181af7520` String 2,282,
+`0x18061a510` 17-cand != 201, plus four small ones; the 252-cand
+mixed `0x1807ee180` and 1,806-cand `0x18063ac90` decline by
+non-unanimity). Address-sharing proves one machine code, so the
+operator spelling is behavior-exact with no owner attribution — but
+each operand must still prove the exact same operand type for some
+candidate, or `a == b` could bind a different overload (notably
+`object.==`/ReferenceEquals for object-typed temps). `_eq_addr_info`
+(new in `il2cpp/dec/highlevel.py`, cached) proves unanimity (all
+`method` candidates, static, 2 params, bool return, GPR-safe param
+kinds per matched pair — floats ride XMM, structs carry ABI risk);
+`_eq_operand_spelling` proves operand types (string/int literals,
+uniquely-declared temps via `_stub_assign_types`, `this`/temp/
+`typeof` member paths through metadata fields with
+instance/static/literal discipline); `_shared_equality_ops` (wired
+between the fence pass and the stub casts, so no `(bool)` cast is
+ever synthesized for a rewritten site) folds proven-bool positions
+only (whole if/while/do-while tests, top-level &&/|| operands,
+`!`-chains, `bool` decl RHS, bool returns; ternary arms, call
+arguments, bare statements, and non-bool decls decline). Integer
+literals self-type by C# literal rules. Along the way the legacy
+bare-`typeof(` check was found to also match `typeof(X).Get()`
+(zero corpus sites, closed with `_fence_bare_typeof` in fix 109).
+Gates: **662 tests (544 portable incl. ~29 new in
+`tests/test_review110_equality_ops.py` + 118 game, 64 goldens
+verified live against fixtures); direct sweep 116,178 methods / 0
+crashes / 0 structural changes vs fix 109 (312 bodies changed, all
+line-neutral); strict build 11,184 files / 115,658 bodies / 0
+failures or fallbacks (`work/review110_out`); parser 0 bad files**.
+Reports: `validation_reports/review110_sweep.json`,
+`review110_vs109.json` (312 changed, 0 structural),
+`review110_parse.json`; built tree `work/review110_out`. The 64
+goldens were regenerated after individual review of the single
+overlapping diff (mi 15013 `set_columnName`: the `!((bool)sub_…)`
+condition becomes `this.m_ColumnName != value` — private string
+field plus setter string param, exact). NOT promoted — `final_out/`
+still holds the fix-99 tree pending a human promotion call.
+
+- [x] Fix 110: ~846 new `==`/`!=` lines (per-method normalized
+  multiset audit: the ONLY added lines tree-wide are operators plus
+  3 `using System.Threading;`; every removed line is a
+  shared-equality call, a dead copy/decl cascade, a dropped stub
+  entry, or brace realignment). Ground truth: 3-level field paths
+  rewrite (`this.playerInput.m_CurrentActionMap.m_Name ==
+  "Interrogation"`) while property twins stay
+  (`this.playerInput.currentControlScheme` — getters are calls).
+- [x] Residue, all verified declined by design: property/call/
+  indexer operands (expression typing open), object-vs-string mixed
+  pairs (would bind ReferenceEquals), non-bool positions,
+  `0x180434690`-class unregistered dispatch blobs (8,046 uses —
+  decoded: jmp thunk onto an unregistered virtual-dispatch
+  routine; `0x180002210/380` are interface search loops into the
+  `0x18043DC60` slow path — no honest name exists for any of
+  them, shapes recorded, `sub_` rendering stays).
+- [x] Bugs found by tests while building: an operator-precedence
+  slip in the region guard, a trim-based operand matcher that ate
+  the call's own close paren, an unreachable typeof branch, and a
+  head-gate rejecting `!`/parens before the operand path ran.
+
+### Next priorities (fix 110 follow-ups)
+
+1. **Call/indexer operands for ==** (`ToLower()`,
+   `playerIds[i]`): needs expression return-type/element-type
+   proof — the general expression-typing problem (fix-105 item 1).
+2. **Receiver-driven instance twins** (`TaskAwaiter.GetResult`
+   vs `ConfiguredTaskAwaiter.GetResult`, 529 uses; 367
+   multi-owner-instance addresses, 3,579 uses): exact receiver
+   type proof at lifter level, never a guess.
+3. **Unregistered dispatch blobs** (above): naming needs a
+   registered/exported identity that does not exist; revisit only
+   with new ground truth.
+4. **Duplication residue** (~2.7k both-sides-unknown branches),
+   **447 remaining shared tails**, **8,067 into-block gotos**,
+   Review 87 lists — all stand.
+
+## Previous work — fix 109 (single-level typeof-member fence args, gated 2026-09-18)
+
+Of 151 remaining fence sites, 127 have only plain or
+`typeof(X).Member` arguments (census over the fix-108 tree: all 140
+typeof-member args are single-level static accesses on hot framework
+types — Encoding, TraceInternal, Socket, Uri, Xml*, RegistryKey…).
+`_fence_trivial_arg` (in `il2cpp/dec/highlevel.py`) now accepts
+exactly `typeof(X).Member` via `_fence_typeof_member` (balanced-paren
+scan in `_fence_typeof_end`, one dotted name, checked on masked text
+so quoted text can never shape-match). Soundness: no null dereference
+is possible (static access only — strictly fewer load effects than
+the already-shipped `obj.f` chains), no calls/indexers/further
+levels; the tempering precedent is fix 72d's `_PURE_LOAD_RX`, which
+already defines typeof-member chains as pure loads for DCE (fix 109
+stays on the conservative single-level subset: zero multi-level sites
+observed). Along the way the legacy bare-`typeof(`-prefix check was
+tightened to whole-string balanced (`_fence_bare_typeof`): it also
+matched `typeof(X).Get()`, silently dropping a call (zero corpus
+sites ever matched that shape — verified over the pre-fence tree —
+but the hole was real; regression-tested). Gates: **639 tests (521
+portable incl. 16 new in `tests/test_review109_typeof_args.py` — one
+fix-107 expectation corrected for the tightened check — + 118 game);
+direct sweep 116,178 methods / 0 crashes / 0 structural changes vs
+fix 108 (76 bodies changed, net -335 lines); strict build 11,184
+files / 115,658 bodies / 0 failures or fallbacks
+(`work/review109_out`); parser 0 bad files**. Reports:
+`validation_reports/review109_sweep.json`,
+`review109_vs108.json` (76 changed, 0 structural),
+`review109_parse.json`; built tree `work/review109_out`. The 64
+goldens are untouched (0 overlapping MIs, no regen needed). NOT
+promoted — `final_out/` still holds the fix-99 tree pending a human
+promotion call.
+
+- [x] Fix 109: ~131 new `Thread.MemoryBarrier()` lines (per-method
+  normalized multiset audit: the ONLY added lines tree-wide are
+  barriers + 3 `using System.Threading;`; every removed line is a
+  fence decl, a dead copy/decl cascade, a dropped
+  `0x1804355f0` stub entry, a pure-load decl
+  (`getClass()`/`typeof`, per `_PURE_LOAD_RX` doctrine), or brace
+  realignment). `sub_1804355f0` falls 159 → 25 lines.
+- [x] Residue, all verified declined by design (17 decls + 8 stub
+  defs): pointer arithmetic/deref (`(p + 0x88)`,
+  `((byte*)obj7 + 0x0)[0]` — 9 sites), integer arithmetic
+  (`*`, `>>`, `+` — 5 sites; temp-name typing is not purity
+  proof), call args (`obj.getClass()` — pure per doctrine but
+  call-shaped; needs a `_PURE_LOAD_RX`-consistent arg rule),
+  live-temp plain/zero-arg sites.
+
+### Next priorities (fix 109 follow-ups)
+
+1. **Call-shaped pure args** (`obj.getClass()` and friends):
+   align `_fence_trivial_arg` with `_PURE_LOAD_RX` (member chains,
+   no calls/Indexers) — the doctrine already exists, needs its own
+   gate.
+2. **Other top unregistered VAs** (thunk finals,
+   interface-dispatch twins from the fix-104 list): native
+   structural proof on the fence precedent, never a name guess.
+3. **Duplication residue with degraded conditions** (~2.7k
+   both-sides-unknown branches, fix-106 list), **447 remaining
+   shared tails**, **8,067 into-block gotos**, Review 87 lists —
+   all stand.
+
+## Previous work — fix 108 (scope-aware deadness for fence-called temps, gated 2026-09-17)
 
 Fix 107's method-wide liveness treated every same-name mention as a
 read, so one colliding scratch temp (sibling scopes re-declare: fix

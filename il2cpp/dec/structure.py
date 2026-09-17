@@ -164,6 +164,7 @@ class _StructureMixin:
         # call and the phi copies go with it)
         raw = self._delegate_cache_fold(raw)
         raw = self._fence_void_calls(raw, m)
+        raw = self._shared_equality_ops(raw, m)
         raw = self._shared_stub_casts(raw, m)
         rendered = self._name_interface_dispatch(self._render(raw))
         # fix 99: `_render` drops empty pure-cond `if`s (e.g. an emptied
