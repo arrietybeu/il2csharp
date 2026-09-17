@@ -109,6 +109,17 @@ What gets resolved inside bodies:
 | jump tables                       | decode-window proof pass (70KB methods keep their tables) + one-`lea`-per-function reuse walk + sparse group-table case maps + no case renumbering on throw-stub pruning: switches 559 -> 758, `no_lea` never a real bucket; small (<=2-label) switches render as if/else, flat `==`-chains of 3+ arms synthesize `switch` (+40) |
 | flag conditions / movzx masks     | `flags` stamps its writing instruction: JS/JNS after TEST and JP after SSE compares render `x < 0` / NaN checks (`unknown` conditions -51.5%), unmodelled writers degrade to `unknown` instead of naming stale text; `& 0xFF/*z*/` masks strip via a literal-aware paren walk with mandatory-delimiter checks (14,365 -> 0) |
 | arrays/strings                    | `.Length`, element indexing                      |
+| unresolved shared bodies          | 53,984 `sub_X(...)` references with no definition anywhere get one throwing `__SharedBodyStubs` class per assembly plus caller-proven `(T)` casts (declaration type, whole-condition `bool`, method return, unique-mapped assigns — 12,716 cast lines); nested-argument and value positions keep the honest object spelling |
+| shared-tail returns               | `return <call>` resolves the callee when its closed return must equal the caller's exact metadata return (`HSteamPipe.op_Explicit(...)`, `Convert.ToInt64(this.m_value)`); value tails in exact-`void` callers split to call-then-return; 511 → 447 remaining honest tails |
+| bare-`T` declarations             | a tracked hint that is one bare `VAR`/`MVAR` takes the same line's closed `new` spelling (`T x = new List<int>()`); `T x = new C(...)` never compiles under any binding, so no compiling method regresses |
+| native-width raw stores           | `*(base + disp)` store lvalues spell the instruction's native width (`((uint*)p + 0x0)[0] = 4294967294;`, float lanes, indexed forms) instead of always-`byte*`; out-of-range literal stores 1,524 → 118 |
+| ternary-condition casts           | a `sub_` call in a ternary condition proves `bool` there (arms keep the line's type); armless lines pass through, `} while (...)` proves `bool` like `if`/`while` |
+| parity-jump NaN arms              | `ucomiss` + `jp` renders `IsNaN(a) \|\| IsNaN(b)` minus provably-false literal arms (`IsNaN(0f)` — no literal spelling denotes NaN; 665 dropped, `x != x` untouched) |
+| full memory barriers              | the unregistered `lock or [rsp],0; ret` helper (reached directly or through ≤3 jmp hops, never a hardcoded address) renders `Thread.MemoryBarrier()` in value-free positions with side-effect-free args; scope-aware deadness rescues colliding scratch temps (1,279 sites); single-level `typeof(X).Member` static args join the trivial set |
+| unanimous == / !=                 | an address whose every candidate is a static 2-parameter bool `op_Equality` (`Equals` twins allowed) or unanimously `op_Inequality` executes identical machine code, so `a == b` / `a != b` is behavior-exact with no owner attribution — each operand still proves the exact same operand type (literals, uniquely-declared temps, metadata member paths), so object-typed temps keep the stub instead of misbinding to `ReferenceEquals` |
+| C# keyword escaping               | reserved words as identifiers escape with trailing underscore (`.namespace` → `.namespace_`, `string interface;` → `string interface_;`) via the existing `safe_ident`, declarations and uses agreeing exactly; the Roslyn probe's parse layer went 10,778 → 40 → 0 on this plus array brackets |
+| fresh-array brackets              | `new T[N][i]` parses as an invalid rank specifier and `new T[N](idx)[0]` (single-argument ldelema shape) as an invalid call; wrapping the creation (`(new T[N])[i]`, `(new T[N])[idx]`) preserves allocation/size/index verbatim (709 sites) |
+| legal type declarations           | interfaces misread as classes (ECMA mandates abstract+interface together) render `partial interface` with modifier-free members (DIM bodies kept); abstract+sealed utility classes (all member-static, census-proven) render `static partial class`; user delegates render `delegate R Name(params);` via Invoke; static-ness propagates to properties/events |
 
 ## Usage
 
@@ -454,16 +465,17 @@ failed).
 
 ## Validation
 
-Current gates (fix-97 tree): **483 tests (365 portable + 118 game)**;
-a strict 11,107-file/115,658-body build with no failures or fallbacks, a 0-error syntax parse
-of every C# file, and a 116,178-method direct sweep plus a dedicated 11,737-constructor sweep
+Current gates (fix-113 tree): **682 tests (564 portable + 118 game)**;
+a strict 11,181-file/113,938-body build with no failures or fallbacks, a 0-error syntax parse
+of every C# file, and a 116,178-method direct sweep
 with 0 crashes or structural-metric changes. Exact reports are in
-`validation_reports/review84/` (baseline), `validation_reports/review97e_sweep.json`,
-`review97e_vs97.json`, `review97e_parse.json` (fix-97 gates),
-`validation_reports/review97e_promotion_verification.json` (11,200 files,
-aggregate `93a4eb7b…9d87a2`, 0 mismatches); the older trajectories below are
-historical. At Review 84 the same strict build held with **358 tests**; review deltas to the
-current tree are declarations plus name-only changes (fixes 85–97).
+`validation_reports/review84/` (baseline), `validation_reports/review113_sweep.json`,
+`review113_vs112.json`, `review113_parse.json` (fix-113 gates; every fix
+100–113 has its own `reviewNN_*` triplet — see `docs/todo.md` for the log),
+`validation_reports/review99_promotion_verification.json` (11,200 files,
+aggregate `c1426378…89391f2`, 0 mismatches — `final_out/` still holds the
+promoted fix-99 tree pending a human promotion call); the older trajectories below are
+historical. At Review 84 the same strict build held with **358 tests**.
 
 Two independent corpus gates, run against the built tree:
 
@@ -504,6 +516,25 @@ Two independent corpus gates, run against the built tree:
    declarations); fix 97e regenerated with 0 body changes).
 
 Both run offline over the output tree; no game binary, no rebuild.
+
+A third, newer gate compiles the whole tree with Roslyn (`dotnet
+build`, .NET 10 SDK, all assemblies as one project with the
+per-assembly `__SharedBodyStubs` classes deduplicated probe-only):
+it sees what the parse gate cannot — undeclared names, bad
+conversions, illegal declarations. Method: count root breaks, not
+error instances (one bad line cascades hundreds of follow-ons);
+first-error-per-file histogram ranks the defect classes. Trajectory
+on the parse layer: **10,778 error instances / 48 files → 40 / 2
+(fix 111) → 0 (fix 112)**; full tree 87,224 / 5,461 → 68,528 /
+4,097 (fix 113). What remains is ranked in `docs/todo.md` (missing
+types, bodiless methods, `unsafe` modifiers, unimplemented members,
+then the body layer). Two caveats this probe taught us: declaration
+errors suppress method-body binding, so goto/definite-assignment
+errors stay masked until declarations are fixed (an isolated
+into-block `goto` is CS0159-hard-illegal — labels are block-scoped
+for `goto`); and per-assembly `.csproj` files exist but carry no
+cross-assembly references yet, so the probe sidesteps them with one
+project.
 
 ## Not (yet) done
 
@@ -559,10 +590,11 @@ intermediate it requires is where silent wrongness would live.
 
 `python tools/csharp_smoke.py --out work/csharp-smoke --dotnet dotnet` generates
 small C# fragments from the real lifter, compiles and runs them, and builds an
-actual emitter-generated unsafe project. Requires the .NET 8 SDK, not the game.
+actual emitter-generated unsafe project. Requires a .NET SDK, not the game.
 It is deliberately separate from the tree-sitter gate and is not a build of
 `final_out/`. The runtime smoke includes the real CFG loop emitter. It last ran
-for Review 80; no .NET SDK was available to rerun it for Reviews 81–97 (or the
-package split, which `work/split/rebuild_verify.py` proves byte-identical to the
-gated Review 89 tree). See `docs/reviews/REVIEW84.md`, `docs/reviews/REVIEW87.md`,
+for Review 80; it was not rerun for Reviews 81–113 (a .NET 10 SDK is present
+in this environment as of fix 111, but the smoke's compiled-pattern checks
+cover different ground than the whole-tree Roslyn probe above, which is the
+current compilation gate). See `docs/reviews/REVIEW84.md`, `docs/reviews/REVIEW87.md`,
 and `docs/todo.md` for current validation and compilation blockers.

@@ -44,25 +44,8 @@ class Emitter:
         self.emit_failed = 0
 
     # -- type header ------------------------------------------------------
-    def type_decl_line(self, td: TypeDef) -> List[str]:
-        f = td.flags
-        vis = TYPE_VIS.get((f >> 0) & 7, '')
-        if td.declaring < 0 and (f & 7) > 1:
-            vis = 'internal '  # a nested form on a top-level row: unreadable
-        lines = []
-        if (f & 0x20) and not (f & 0x80):  # interface, not abstract-class
-            kw = vis + 'partial interface'
-        elif td.is_enum:
-            kw = vis + 'enum'
-        elif td.is_valuetype:
-            kw = vis + 'partial struct'
-        else:
-            kw = vis + 'abstract sealed partial class'
-            if not (f & 0x80):
-                kw = kw.replace('abstract ', '')
-            if not (f & 0x100):
-                kw = kw.replace('sealed ', '')
-        name = td.name
+    def _type_generic_params(self, td: TypeDef) -> str:
+        """`<T, ...>` from the typedef's generic container, else ''."""
         gparams = ''
         if td.generic_container != -1 and not td.is_enum:
             gc = self.meta.generic_containers[td.generic_container]
@@ -72,8 +55,40 @@ class Emitter:
                 if gi < len(self.meta.generic_parameters):
                     gp.append(self.meta.generic_parameters[gi][1])
             gparams = '<%s>' % ', '.join(gp) if gp else ''
+        return gparams
+
+    def type_decl_line(self, td: TypeDef) -> List[str]:
+        f = td.flags
+        vis = TYPE_VIS.get((f >> 0) & 7, '')
+        if td.declaring < 0 and (f & 7) > 1:
+            vis = 'internal '  # a nested form on a top-level row: unreadable
+        lines = []
+        if f & 0x20:
+            # interfaces are implicitly abstract: 0x80 is always set
+            # alongside 0x20, so excluding abstract here misread nearly
+            # every interface as a class (fix 113).
+            kw = vis + 'partial interface'
+        elif td.is_enum:
+            kw = vis + 'enum'
+        elif td.is_valuetype:
+            kw = vis + 'partial struct'
+        elif (f & 0x80) and (f & 0x100):
+            # abstract + sealed with no instance content anywhere
+            # (census over the fixture) is a static utility class.
+            kw = vis + 'static partial class'
+        else:
+            kw = vis + 'partial class'
+            if f & 0x80:
+                kw = vis + 'abstract ' + kw[len(vis):]
+            if f & 0x100:
+                kw = vis + 'sealed ' + kw[len(vis):]
+        name = td.name
+        gparams = self._type_generic_params(td)
         base = []
-        if td.parent >= 0 and not td.is_enum and not td.is_valuetype:
+        if td.parent >= 0 and not td.is_enum and not td.is_valuetype \
+                and not (td.flags & 0x20):
+            # interfaces inherit interfaces only (via interfaces[]
+            # below); a class-typed parent slot on one is malformed.
             pt = self.il.types[td.parent] if td.parent < len(self.il.types) else None
             pn = self.il.type_name(pt) if pt else None
             if pn and pn != 'object':
@@ -200,6 +215,11 @@ class Emitter:
         # final cleanup for abstract
         if (f & 0x400) and (f & 0x40) and (td.flags & 0x80):
             mods = vis + 'abstract ' if m.flags & 0x400 else mods
+        if td.flags & 0x20:
+            # interface members take no access/instance modifiers
+            # (default-interface-method bodies stay under LangVersion
+            # latest); statics keep theirs.
+            mods = 'static ' if m.is_static else ''
         rt = self.il.types[m.return_type] if 0 <= m.return_type < len(self.il.types) else None
         rtname = self.il.type_name(rt) if rt else 'void'
         if rtname == 'void':
@@ -266,8 +286,110 @@ class Emitter:
             self._us_cache[td.index] = cached
         return cached
 
+    _delegate_cache: Dict[int, bool] = {}
+
+    def _is_delegate_td(self, td: TypeDef) -> bool:
+        """True for user delegate types (MulticastDelegate subclasses).
+
+        System.Delegate/MulticastDelegate themselves stay classes.
+        Cached: base chains are binary-global.
+        """
+        try:
+            hit = self._delegate_cache.get(td.index)
+            if hit is not None:
+                return hit
+            res = False
+            if (td.namespace, td.name) not in (
+                    ('System', 'Delegate'),
+                    ('System', 'MulticastDelegate')):
+                try:
+                    chain = self.il.base_chain_tds(td.index)
+                except Exception:
+                    chain = ()
+                for ti in chain[1:]:
+                    t2 = self.meta.typedefs[ti] \
+                        if 0 <= ti < len(self.meta.typedefs) else None
+                    if t2 is not None and t2.name in (
+                            'MulticastDelegate', 'Delegate'):
+                        res = True
+                        break
+            self._delegate_cache[td.index] = res
+            return res
+        except Exception:
+            return False
+
+    def _delegate_invoke(self, td: TypeDef):
+        """The instance Invoke MethodDef of a delegate typedef, else None."""
+        try:
+            for mi in self.meta.type_methods(td):
+                m = self.meta.methods[mi]
+                if m.name == 'Invoke' and not m.is_static:
+                    return m
+            return None
+        except Exception:
+            return None
+
+    def _delegate_viable(self, td: TypeDef) -> bool:
+        """True when the typedef can render as a delegate declaration.
+
+        Needs the instance Invoke (the signature source) and no
+        fields, properties, events, or nested types (a `delegate`
+        declaration cannot carry them). Cached per emitter.
+        """
+        try:
+            hit = self._delegate_cache.get(('viable', td.index))
+            if hit is not None:
+                return hit
+            res = self._delegate_invoke(td) is not None \
+                and not list(self.meta.type_fields(td)) \
+                and not td.property_count and not td.event_count \
+                and not td.nested_count
+            self._delegate_cache[('viable', td.index)] = res
+            return res
+        except Exception:
+            return False
+
+    def emit_delegate(self, td: TypeDef, out: List[str], pre: str) -> bool:
+        """`delegate R Name(params);` for a user delegate type.
+
+        The runtime-provided .ctor/Invoke/BeginInvoke/EndInvoke
+        members are covered by the declaration itself.
+        """
+        try:
+            inv = self._delegate_invoke(td)
+            vis = TYPE_VIS.get((td.flags >> 0) & 7, '')
+            if td.declaring < 0 and (td.flags & 7) > 1:
+                vis = 'internal '
+            rt = self.il.types[inv.return_type] \
+                if 0 <= inv.return_type < len(self.il.types) else None
+            rtname = self.il.type_name(rt) if rt else 'void'
+            ps = []
+            for p in self.meta.method_params(inv):
+                pt = self.il.types[p.type] \
+                    if 0 <= p.type < len(self.il.types) else None
+                tn = self.il.type_name(pt) if pt else 'object'
+                byref = (pt[1] >> 29) & 1 if pt else 0
+                ps.append('%s%s %s' % ('ref ' if byref else '', tn,
+                                       safe_ident(p.name)))
+            nm = safe_ident(sanitize(td.name)) + \
+                self._type_generic_params(td)
+            unsafe = 'unsafe ' if '*' in rtname or any(
+                '*' in p for p in ps) else ''
+            out.append('')
+            if (td.flags & 0x2000) and not td.is_enum \
+                    and not td.is_valuetype:
+                out.append(pre + '[Serializable]')
+            out.append('%s%s%sdelegate %s %s(%s);' % (
+                pre, vis, unsafe, rtname, nm, ', '.join(ps)))
+            return True
+        except Exception:
+            return False
+
     def emit_type(self, td: TypeDef, out: List[str], indent='    ') -> bool:
         pre = indent
+        if self._is_delegate_td(td) and self._delegate_viable(td):
+            self.emit_delegate(td, out, pre)
+            return True
         hdr = self.type_decl_line(td)
         out.append('')
         comment = []
@@ -345,14 +467,26 @@ class Emitter:
             for x in ev[2:5]:
                 if x is not None and x >= 0 and 0 <= td.method_start + x < len(self.meta.methods):
                     accessor_idxs.add(td.method_start + x)
-            out.append(pre + '    public event %s %s;' % (
+            present = [self._rel_method(td, x) for x in ev[2:5]]
+            present = [a for a in present if a is not None]
+            estatic = 'static ' if present and all(
+                a.is_static for a in present) else ''
+            out.append(pre + '    %s%sevent %s %s;' % (
+                '' if td.flags & 0x20 else 'public ', estatic,
                 self.il.type_name(self.il.types[ev[1]]) if ev[1] < len(self.il.types) else 'Action',
                 safe_ident(sanitize(csharp_type_name(self.meta.getstr(ev[0]))))))
         # methods
+        skip_delegate = self._is_delegate_td(td) \
+            and self._delegate_viable(td)
         for mi in self.meta.type_methods(td):
             if mi in accessor_idxs:
                 continue
             m = self.meta.methods[mi]
+            if skip_delegate and (m.name in ('.ctor', '.cctor', 'Invoke')
+                                  or m.name.startswith(
+                                      ('BeginInvoke', 'EndInvoke'))):
+                # covered by the delegate declaration itself
+                continue
             self.emit_method(m, td, out, pre + '    ')
         # nested types
         for k in range(td.nested_count):
@@ -501,14 +635,21 @@ class Emitter:
         sbody = self._lift_body(setter, td) if setter else None
         pname = safe_ident(sanitize(csharp_type_name(self.meta.getstr(pr[0]))))
         ptype = self.prop_type(getter)
-        acc = '' if '.' in pname else 'public '
+        acc = '' if ('.' in pname or (td.flags & 0x20)) else 'public '
+        # staticness follows the accessors: a property is static only
+        # when every present accessor is (mixed static/instance
+        # accessors cannot be expressed on one property).
+        static = ''
+        present = [a for a in (getter, setter) if a is not None]
+        if present and all(a.is_static for a in present):
+            static = 'static '
         off = (bk_offs or {}).get(self.meta.getstr(pr[0]), '')
         if gbody is None and sbody is None:
-            out.append('%s    %s%s %s { %s%s }%s' % (
-                pre, acc, ptype, pname,
+            out.append('%s    %s%s%s %s { %s%s }%s' % (
+                pre, acc, static, ptype, pname,
                 'get; ' if getter else '', 'set; ' if setter else '', off))
             return
-        out.append('%s    %s%s %s%s' % (pre, acc, ptype, pname, off))
+        out.append('%s    %s%s%s %s%s' % (pre, acc, static, ptype, pname, off))
         out.append('%s    {' % pre)
         for kind, body in (('get', gbody), ('set', sbody)):
             if (getter if kind == 'get' else setter) is None:
@@ -526,7 +667,8 @@ class Emitter:
     def emit_method(self, m: MethodDef, td: TypeDef, out: List[str], pre: str):
         is_ctor = m.name in ('.ctor', '.cctor')
         sig = self.ctor_sig(m, td) if is_ctor else self.method_sig(m, td)
-        abstract = (td.flags & 0x80) and (m.flags & 0x400) and not (m.flags & 0x40)
+        abstract = (td.flags & 0x80) and (m.flags & 0x400) and not (m.flags & 0x40) \
+            and not (td.flags & 0x20)
         body = self._lift_body(m, td, abstract)
         ctor_init = None
         if is_ctor:
@@ -757,6 +899,7 @@ class Emitter:
                      '    <AssemblyName>%s</AssemblyName>\n'
                      '    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>\n'
                      '    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n'
+                     '    <LangVersion>latest</LangVersion>\n'
                      '    <NoWarn>CS0169;CS0649;CS0108;CS0114;CS8019</NoWarn>\n'
                      '  </PropertyGroup>\n'
                      '</Project>\n' % asm_name)

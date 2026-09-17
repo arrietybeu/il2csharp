@@ -2555,6 +2555,192 @@ class _HighLevelMixin:
         except Exception:
             return lines
 
+    _NEW_RX = re.compile(r'\bnew\b')
+
+    @staticmethod
+    def _nab_bracket_span(masked, open_idx):
+        """(open, close) of balanced [...] at open_idx, else None."""
+        try:
+            depth = 0
+            for k in range(open_idx, len(masked)):
+                if masked[k] == '[':
+                    depth += 1
+                elif masked[k] == ']':
+                    depth -= 1
+                    if depth == 0:
+                        return (open_idx, k)
+            return None
+        except Exception:
+            return None
+
+    _NEW_RX = re.compile(r'\bnew\b')
+
+    @staticmethod
+    def _nab_bracket_span(masked, open_idx):
+        """(open, close) of balanced [...] at open_idx, else None."""
+        try:
+            depth = 0
+            for k in range(open_idx, len(masked)):
+                if masked[k] == '[':
+                    depth += 1
+                elif masked[k] == ']':
+                    depth -= 1
+                    if depth == 0:
+                        return (open_idx, k)
+            return None
+        except Exception:
+            return None
+
+    def _nab_line(self, s, masked, ind):
+        """One line with fresh-array brackets repaired, else None."""
+        try:
+            return self._nab_line_inner(s, masked, ind)
+        except Exception:
+            return None
+
+    def _nab_line_inner(self, s, masked, ind):
+        out = []
+        k = 0
+        n = len(masked)
+        changed = False
+        guard = 0
+        while k < n:
+            guard += 1
+            if guard > 4 * n + 16:
+                out.append(s[k:])
+                break
+            m = self._NEW_RX.search(masked, k)
+            if m is None:
+                out.append(s[k:])
+                break
+            ns = m.start()
+            out.append(s[k:ns])
+            k = ns
+            q = m.end()
+            while q < n and masked[q] in ' \t\x01':
+                q += 1
+            t = q
+            if t >= n or not (masked[t].isalpha() or masked[t] in '@_'):
+                out.append(s[k:q])
+                k = q
+                continue
+            adepth = 0
+            while t < n:
+                ch = masked[t]
+                if ch == '<':
+                    adepth += 1
+                    t += 1
+                    continue
+                if ch == '>':
+                    if adepth == 0:
+                        break
+                    adepth -= 1
+                    t += 1
+                    continue
+                if adepth > 0:
+                    if ch in '();':
+                        break
+                    t += 1
+                    continue
+                if ch.isalnum() or ch in '@_.$:?':
+                    t += 1
+                    continue
+                break
+            while t < n and masked[t] in ' \t\x01':
+                t += 1
+            if t >= n or masked[t] != '[':
+                # Not an array creation (`new Foo()`, `new Foo Bar`):
+                # copy past `new` so any interior stays scannable.
+                out.append(s[k:q])
+                k = q
+                continue
+            span = self._nab_bracket_span(masked, t)
+            if span is None:
+                out.append(s[k:t + 1])
+                k = t + 1
+                continue
+            so, sc = span
+            j = sc + 1
+            while j < n and masked[j] in ' \t\x01':
+                j += 1
+            if j < n and masked[j] == '[':
+                out.append('(')
+                out.append(s[ns:sc + 1])
+                out.append(')')
+                changed = True
+                k = sc + 1
+                continue
+            if j < n and masked[j] == '(':
+                cs = self._eq_paren_span(masked, j)
+                if cs is None:
+                    out.append(s[k:j + 1])
+                    k = j + 1
+                    continue
+                parts = self._eq_split_args(s, masked, cs[0], cs[1])
+                if parts is None or len(
+                        [p for p in parts if p[0].strip()]) != 1:
+                    out.append(s[k:j + 1])
+                    k = j + 1
+                    continue
+                d = cs[1] + 1
+                while d < n and masked[d] in ' \t\x01':
+                    d += 1
+                if d >= n or masked[d] != '[':
+                    out.append(s[k:j + 1])
+                    k = j + 1
+                    continue
+                ds = self._nab_bracket_span(masked, d)
+                if ds is None:
+                    out.append(s[k:d + 1])
+                    k = d + 1
+                    continue
+                inner = masked[ds[0] + 1:ds[1]].strip().lower()
+                if inner not in ('0', '0x0'):
+                    out.append(s[k:d + 1])
+                    k = d + 1
+                    continue
+                idx = s[cs[0] + 1:cs[1]].strip()
+                out.append('(')
+                out.append(s[ns:sc + 1])
+                out.append(')[')
+                out.append(idx)
+                out.append(']')
+                changed = True
+                k = ds[1] + 1
+                continue
+            out.append(s[k:q])
+            k = q
+        if not changed:
+            return None
+        return ind + ''.join(out)
+
+    def _fresh_array_brackets(self, lines):
+        """Parenthesize fresh-array creations before brackets. -- fix 112
+
+        `new T[N][i]` parses as an invalid rank specifier and
+        `new T[N](idx)[0]` (single argument, ldelema shape) as an
+        invalid call. Wrapping the creation -- `(new T[N])[i]` and
+        `(new T[N])[idx]` -- is meaning-preserving everywhere (the
+        allocation, size, and index texts survive verbatim) while the
+        lines become valid C#. Anything else (multi-arg calls, bare
+        `new T[N](args)` without a deref, unbalanced spans) declines.
+        Never raises.
+        """
+        try:
+            out = []
+            for ln in lines:
+                s = ln.strip()
+                if 'new' not in s:
+                    out.append(ln)
+                    continue
+                res = self._nab_line(
+                    s, self._stub_mask_line(s),
+                    ln[:len(ln) - len(ln.lstrip())])
+                out.append(ln if res is None else res)
+            return out
+        except Exception:
+            return lines
+
     def _shared_equality_ops(self, lines, m):
         """Fold unanimous == / != shared calls to operators. -- fix 110
 

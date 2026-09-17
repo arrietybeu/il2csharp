@@ -59,7 +59,74 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 111 (C# keyword escaping, gated 2026-09-18)
+## Current work — fix 113 (legal type declarations, gated 2026-09-18)
+
+The Roslyn probe's semantic layer is dominated by declaration
+shapes, all emitted wrong the same way. `type_decl_line` read
+`0x20 & ~0x80` for interfaces — but ECMA mandates abstract+interface
+together, so nearly all 636 interfaces rendered as classes (fixing
+CS1721/CS0527/CS1722/CS0737 at the root: all four codes go to zero).
+Abstract+sealed renders `static partial class` (census: all 1,015
+have no instance fields/methods/properties/events, no bases or
+interfaces — zero tradeoff). User delegates (616, via MulticastDelegate
+parentage) render `delegate R Name(params);` through Invoke (generic
+arity mirrors the `List_1<T>` class convention so references match;
+.ctor/Invoke/BeginInvoke/EndInvoke suppressed as compiler-provided;
+falls back to class rendering if Invoke/fields/props/events/nested
+are ever missing/present). Interface members lose access/instance
+modifiers (DIM bodies kept under a new `<LangVersion>latest</LangVersion>`
+in the csproj template); properties/events propagate accessor
+staticness (all-static on the 431/19 absseal ones; mixed would fall
+back). Gates: **682 tests (564 portable incl. 6 new in
+`tests/test_review113_type_decls.py` + 118 game); direct sweep 116,178 methods / 0 crashes / 0 structural changes vs
+fix 112 (0 bodies changed — emitter-only); strict build 11,181 files
+/ 113,938 bodies / 0 failures or fallbacks (`work/review113_out`);
+parser 0 bad files**. Reports: `validation_reports/review113_sweep.json`,
+`review113_vs112.json` (0 changed, 0 structural),
+`review113_parse.json`; built tree `work/review113_out`. The 64
+goldens are untouched (0 overlapping MIs; fingerprints refreshed).
+NOT promoted — `final_out/` still holds the fix-99 tree pending a
+human promotion call.
+
+- [x] Fix 113: 2,001 files changed — exactly 1,015 `static`,
+  636 `interface`, 615 `delegate` headers (census-exact), plus
+  modifier-stripped members; 3 orphaned `__SharedBodyStubs.cs`
+  dropped (delegate-suppressed bodies took the only refs).
+- [x] Recompile probe: **87,224 → 68,528 instances, 5,461 → 4,097
+  files; CS1721/CS0527/CS0418/CS0644/CS1722/CS0708 all go to
+  exactly zero** (CS0708 needed the property/event staticness
+  follow-through: 900 → 0). ZipEntry.cs (12 delegate-shape errors
+  after fix 112) is fully clean.
+- [x] Residue is the next program: missing types (CS0246 20.7k:
+  usings, nested qualification, open generics, absent types),
+  bodiless methods (CS0501 15.1k), unsafe modifiers (CS0214 7.3k),
+  unimplemented members (CS0534 7.1k), overrides (CS0533/CS0535),
+  ctors (CS1520), overload collisions, ref/out ABI — then the
+  unmasked body layer (gotos, definite assignment).
+
+## Previous work — fix 112 (fresh-array bracket repair, gated 2026-09-18)
+
+`new T[N][i]` parses as an invalid rank specifier and
+`new T[N](idx)[0]` (single argument, ldelema shape) as an invalid
+call (the last 2 parse-failing files). `_fresh_array_brackets`
+(new dec text pass) parenthesizes the creation — `(new T[N])[i]`,
+`(new T[N])[idx]` — meaning-preserving everywhere (allocation,
+size, and index survive verbatim; verified parsing with Roslyn).
+Multi-arg calls, bare calls without a deref, and unbalanced spans
+decline. Gates: **676 tests (558 portable incl. 8 new in
+`tests/test_review112_array_brackets.py` + 118 game); direct sweep
+116,178 methods / 0 crashes / 0 structural changes vs fix 111 (181
+bodies changed, all line-neutral); strict build 11,184 files /
+115,658 bodies / 0 failures or fallbacks (`work/review112_out`);
+parser 0 bad files**. Reports: `validation_reports/review112_sweep.json`,
+`review112_vs111.json` (181 changed, 0 structural),
+`review112_parse.json`; built tree `work/review112_out`. The 64
+goldens are untouched (0 overlapping MIs; fingerprints refreshed
+with fix 113's). Provenance: 709/709 paired paren insertions, zero
+other diff lines. SqlDecimal.cs fully clean; ZipEntry.cs left 12
+delegate-shape errors for fix 113 (which cleared them).
+
+## Previous work — fix 111 (C# keyword escaping, gated 2026-09-18)
 
 The Roslyn whole-tree compile probe (new methodology: `dotnet
 build` over all 11,184 files as one project, `__SharedBodyStubs`

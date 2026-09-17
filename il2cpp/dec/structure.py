@@ -167,6 +167,7 @@ class _StructureMixin:
         raw = self._shared_equality_ops(raw, m)
         raw = self._shared_stub_casts(raw, m)
         raw = self._escape_keywords(raw)
+        raw = self._fresh_array_brackets(raw)
         rendered = self._name_interface_dispatch(self._render(raw))
         # fix 99: `_render` drops empty pure-cond `if`s (e.g. an emptied
         # class-init guard `if (!(k.initialized != 0)) { }`), orphaning the
