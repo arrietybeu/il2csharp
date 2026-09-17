@@ -59,7 +59,67 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 106 (parity-jump NaN fold drops literal arms, gated 2026-09-16)
+## Current work — fix 107 (proved fence-thunk calls render Thread.MemoryBarrier(), gated 2026-09-17)
+
+`lock or dword ptr [rsp],0; ret` is the full barrier MSVC emits where the
+source calls `Thread.MemoryBarrier`, reached directly or through a short
+`jmp` thunk (`0x1804355f0`, the fix-104 follow-up membarrier suspect —
+1,465 sites). `_is_fence_body` (new in `il2cpp/lifter/state.py`) proves
+exactly that shape: locked `OR`, RSP base, zero displacement, dword
+width, zero immediate (both `0x83` and `0x81` encodings), `ret`
+terminating the extent; registered/exported/non-exec/unreadable targets
+decline. `_fence_target` follows the thunk (itself or <=3 jmp hops),
+memoized, never a hardcoded address. `_fence_void_calls` (new in
+`il2cpp/dec/highlevel.py`, wired in `il2cpp/dec/structure.py` after the
+delegate fold, before the stub casts) rewrites only positions that need
+no value: bare statements, void `; return;` tails (split in two), and
+declarations whose temp is dead method-wide. Every argument must be
+side-effect-free (plain temps/fields, literals, typeof, strings);
+conditions, value returns, live temps, and `Thread.MemoryBarrier` itself
+keep today's rendering. Gates: **618 tests (500 portable incl. 12 new
+in `tests/test_review107_fence_calls.py` + 118 game); direct sweep
+116,178 methods / 0 crashes / 0 structural changes vs fix 106b (544
+bodies changed, net -2,202 lines); strict build 11,184 files / 115,658
+bodies / 0 failures or fallbacks (`work/review107_out`); parser 0 bad
+files**. Reports: `validation_reports/review107_sweep.json`,
+`review107_vs106b.json` (544 changed, 0 structural),
+`review107_parse.json`; built tree `work/review107_out`. The 64
+goldens are untouched (0 overlapping MIs, no regen needed). NOT
+promoted — `final_out/` still holds the fix-99 tree pending a human
+promotion call.
+
+- [x] Fix 107: 1,279 `Thread.MemoryBarrier()` lines (3 pre-existing
+  resolved calls + 1,276 rewrites); `sub_1804355f0` falls 1,465 → 185
+  lines. Of 544 changed methods 386 are line-neutral, 157 shrink
+  (dead-decl plus the honest DCE cascade its orphaned copies allow),
+  1 grows by design (bare `...; return;` splits in two:
+  `Socket.Connect`). Ground truth: `Thread.MemoryBarrier`'s own body
+  (RVA 0x1D1F380) is one call to `0x1804429c0` and is deliberately NOT
+  rewritten (self-guard); `Fusion.AtomicInt`'s seven members drop
+  their dead `object objN = sub_1804355f0(...)` decls and the
+  now-unused `using static __SharedBodyStubs;`.
+- [x] Residue, all verified declined by design: 174 decls whose temp
+  is live or textually collides with a reused scratch temp later in
+  the method (safe-miss direction — e.g. `FusionNetworkManager`
+  `obj13` reused as `_StartGame_d__58`), 9 `__SharedBodyStubs`
+  definitions that must stay, effectful-arg and value-position sites.
+- [x] into_block gotos identical 8,071 (both sweeps), parse re-gated
+  on the built tree.
+
+### Next priorities (fix 107 follow-ups)
+
+1. **Remaining `sub_1804355f0` residue above** (live-temp value
+   positions): needs value-proof the fence returns nothing at the
+   call site, never deletion of a live temp.
+2. **Other top unregistered VAs** (thunk finals, interface-dispatch
+   twins from the fix-104 list): each needs native structural proof
+   on the sqrt-wrapper/fence precedent, never a name guess.
+3. **Duplication residue with degraded conditions** (~2.7k
+   both-sides-unknown branches, fix-106 list), **one-side-unknown
+   comparisons** (~700+), **447 remaining shared tails**, **8,067
+   into-block gotos**, Review 87 lists — all stand.
+
+## Previous work — fix 106 (parity-jump NaN fold drops literal arms, gated 2026-09-16)
 
 `ucomiss` + `jp` rendered `IsNaN(a) || IsNaN(b)` even when one side is
 a constant (`IsNaN(0f)` — provably false, 665 sites). No numeric

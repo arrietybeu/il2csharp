@@ -99,6 +99,102 @@ class _StateMixin:
                 returned = True
         return spilled and rooted and named and loaded and returned
 
+    def _is_fence_body(self, target):
+        """Recognize the unregistered full-fence helper by proof. -- fix 107
+
+        Exactly `lock or dword ptr [rsp],0; ret`: a locked RMW of its own
+        stack slot (the full barrier MSVC emits where the source calls
+        `Thread.MemoryBarrier`) then return. The store preserves the
+        slot (`x|0 == x`), no register is read or written, and the
+        immediate must be zero (anything else would corrupt the return
+        address slot it touches); `ret` terminates the extent, so no
+        bounds analysis is needed. Registered/exported owners decline,
+        as does anything unreadable. Ground truth:
+        `System.Threading.Thread.MemoryBarrier`'s own recovered body is
+        one call to 0x1804429c0 (RVA 0x1D1F380). Results are memoized;
+        never hardcode an address.
+        """
+        cache = getattr(self, "_fence_cache", None)
+        if cache is None:
+            cache = self._fence_cache = {}
+        if target in cache:
+            return cache[target]
+        res = self._is_fence_body_inner(target)
+        cache[target] = res
+        return res
+
+    def _is_fence_body_inner(self, target):
+        try:
+            if not HAVE_ICED or not target:
+                return False
+            if self.il.addr_candidates.get(target):
+                return False
+            if target in self.bin.exports:
+                return False
+            if not self.bin.is_exec_va(target):
+                return False
+            code = self.bin.read(target, 16)
+            if not code:
+                return False
+            dec = Decoder(64, code, DecoderOptions.NONE)
+            dec.ip = target
+            ii = [next(iter(dec)) for _ in range(2)]
+        except Exception:
+            return False
+        try:
+            i0 = ii[0]
+            if i0.mnemonic != Mnemonic.OR or not i0.has_lock_prefix:
+                return False
+            if i0.op0_kind != OpKind.MEMORY or i0.memory_base != IReg.RSP:
+                return False
+            if i0.memory_displacement != 0:
+                return False
+            if MemorySizeExt.size(i0.memory_size) != 4:
+                return False
+            if i0.op1_kind in (OpKind.IMMEDIATE8,
+                               OpKind.IMMEDIATE8TO32):
+                if getattr(i0, "immediate8", 1) != 0:
+                    return False
+            elif i0.op1_kind == OpKind.IMMEDIATE32:
+                if getattr(i0, "immediate32", 1) != 0:
+                    return False
+            else:
+                return False
+            return ii[1].mnemonic == Mnemonic.RET
+        except Exception:
+            return False
+
+    def _fence_target(self, va):
+        """Fence VA reached from `va` (itself or <=3 jmp hops), else None."""
+        try:
+            if not va:
+                return None
+            if self._is_fence_body(va):
+                return va
+            cur = va
+            for _ in range(3):
+                if not self.bin.is_exec_va(cur):
+                    return None
+                code = self.bin.read(cur, 8)
+                if not code:
+                    return None
+                try:
+                    dec = Decoder(64, code, DecoderOptions.NONE)
+                    dec.ip = cur
+                    ins = next(iter(dec))
+                except Exception:
+                    return None
+                if ins.mnemonic != Mnemonic.JMP \
+                        or ins.op0_kind != OpKind.NEAR_BRANCH64 \
+                        or ins.len > 6:
+                    return None
+                cur = ins.near_branch_target
+                if self._is_fence_body(cur):
+                    return cur
+            return None
+        except Exception:
+            return None
+
     def _init_runtime_ids(self):
         """Identify il2cpp runtime helper functions by structural signature."""
         self.rt_init_meta = None

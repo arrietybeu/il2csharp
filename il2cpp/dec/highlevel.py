@@ -3,6 +3,7 @@ from il2cpp.cfg import INT_TY, _match_brace
 from il2cpp.metadata import MethodDef
 from il2cpp.names import safe_ident
 from il2cpp.stmt_text import _split_top
+from il2cpp.expr import _mentions
 
 class _HighLevelMixin:
     def _jumps_into(self, lines, lo, hi) -> bool:
@@ -1480,6 +1481,236 @@ class _HighLevelMixin:
                 return None
             return ind + s[:v_lo] + new + s[v_hi:] + tail
         return None
+
+    _FENCE_CALL_TEXT = 'System.Threading.Thread.MemoryBarrier()'
+
+    @classmethod
+    def _fence_trivial_arg(cls, text):
+        """True when dropping an argument text loses no side effects."""
+        t = (text or '').strip()
+        if not t:
+            return False
+        if re.fullmatch(r'[A-Za-z_@][\w@.]*', t):
+            return True
+        if t in ('true', 'false', 'null', 'default'):
+            return True
+        if t.startswith('typeof(') and t.endswith(')'):
+            return True
+        if len(t) >= 2 and t[0] == t[-1] and t[0] in ('"', "'") \
+                and '{' not in t:
+            return True
+        try:
+            int(t, 0)
+            return True
+        except ValueError:
+            pass
+        try:
+            c = t
+            if c[:1] in ('+', '-'):
+                c = c[1:]
+            c = c.rstrip('uUlL')
+            if c[-1:] in ('f', 'F', 'd', 'D', 'm', 'M'):
+                c = c[:-1]
+            float(c)
+            return True
+        except (ValueError, OverflowError):
+            return False
+
+    @classmethod
+    def _fence_args_clean(cls, code, masked, open_paren, close_paren):
+        """True when every argument between the parens is droppable."""
+        parts = []
+        depth = 0
+        cur = ''
+        k = open_paren + 1
+        while k < close_paren:
+            ch = masked[k]
+            if ch == ',' and depth == 0:
+                parts.append(cur)
+                cur = ''
+            else:
+                if ch in '(<[':
+                    depth += 1
+                elif ch in ')>]':
+                    depth = max(0, depth - 1)
+                cur += code[k]
+            k += 1
+        parts.append(cur)
+        for text in parts:
+            if not text.strip():
+                continue
+            if not cls._fence_trivial_arg(text):
+                return False
+        return True
+
+    def _fence_is_self(self, m):
+        """True when m IS Thread.MemoryBarrier (never self-recurse)."""
+        try:
+            if (m.name or '') != 'MemoryBarrier':
+                return False
+            td = self.L.meta.typedefs[m.declaring]
+            if ((td.namespace or ''), (td.name or '')) != \
+                    ('System.Threading', 'Thread'):
+                return False
+            return True
+        except Exception:
+            return True
+
+    def _fence_caller_is_void(self, m):
+        try:
+            il = self.L.il
+            rt = il.types[m.return_type] \
+                if 0 <= m.return_type < len(il.types) else None
+            return rt is not None and ((rt[1] >> 16) & 0xFF) == 0x01
+        except Exception:
+            return False
+
+    @staticmethod
+    def _fence_temp_dead(masks, idx, nm):
+        """True when `nm` occurs nowhere else method-wide (masked)."""
+        try:
+            for j, mk in enumerate(masks):
+                if j == idx or not mk:
+                    continue
+                if _mentions(mk, nm):
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _fence_line(self, s, masked, ind, idx, masks, fence_vas, void_m):
+        """One line rewritten, split, or None. Never raises."""
+        try:
+            return self._fence_line_inner(
+                s, masked, ind, idx, masks, fence_vas, void_m)
+        except Exception:
+            return None
+
+    def _fence_line_inner(self, s, masked, ind, idx, masks, fence_vas, void_m):
+        tail_line = ''
+        ci = masked.find('\x01')
+        if ci != -1 and s[ci:ci + 2] == '//':
+            tail_line = ' ' + s[ci:].strip()
+            s = s[:ci].rstrip()
+            masked = masked[:len(s)]
+        pos, found = 0, None
+        while pos < len(masked):
+            m = self._SUB_CALL_RX.search(masked, pos)
+            if m is None:
+                break
+            vm = self._stub_call_at(masked, m.start())
+            if vm is not None and vm in fence_vas:
+                found = (m.start(), vm)
+                break
+            pos = m.end()
+        if found is None:
+            return None
+        start, va = found
+        span = self._stub_call_span(masked, start + 4 + len(va))
+        if span is None:
+            return None
+        rest = s[span[1] + 1:]
+        rest_m = masked[span[1] + 1:]
+        tail = ''
+        is_ret = False
+        mb = re.fullmatch(r';([\s\x01]*)', rest_m)
+        if mb is not None:
+            tail = rest[mb.start(1):]
+        elif void_m:
+            mr = re.fullmatch(r';\s*return;([\s\x01]*)', rest_m)
+            if mr is None:
+                return None
+            is_ret = True
+            tail = rest[mr.start(1):]
+        else:
+            return None
+        head = s[:start]
+        if head.strip() == '':
+            if not self._fence_args_clean(s, masked, span[0], span[1]):
+                return None
+            if is_ret:
+                return [ind + self._FENCE_CALL_TEXT + ';',
+                        ind + 'return;' + tail + tail_line]
+            return ind + self._FENCE_CALL_TEXT + ';' + tail + tail_line
+        dm = self._STUB_DECL_RX.match(s)
+        if dm is None:
+            return None
+        ty = dm.group(1).strip()
+        if ty.split()[0] in self._STUB_KEYWORDS:
+            return None
+        if self._stub_top_eq(masked[dm.start(3):dm.end(3)]) is not None:
+            return None
+        nm = dm.group(2)
+        v_lo, v_hi = dm.start(3), dm.end(3)
+        a, b = v_lo, v_hi
+        while a < b and masked[a] in ' \t\x01':
+            a += 1
+        while b > a and masked[b - 1] in ' \t\x01':
+            b -= 1
+        if a != start or b - 1 != span[1]:
+            return None
+        if not self._fence_temp_dead(masks, idx, nm):
+            return None
+        if not self._fence_args_clean(s, masked, span[0], span[1]):
+            return None
+        return ind + self._FENCE_CALL_TEXT + ';' + tail + tail_line
+
+    def _fence_void_calls(self, lines, m):
+        """Name proved fence-thunk calls `Thread.MemoryBarrier()`. -- fix 107
+
+        The thunk (and the fence body itself) provably reads nothing and
+        returns nothing, so only positions that need no value rewrite:
+        bare statements, void `; return;` tails, and declarations whose
+        temp is dead method-wide. Arguments must each be side-effect
+        free (else the site keeps its stub call); conditions, returns
+        in value methods, live temps, and Thread.MemoryBarrier itself
+        keep today's rendering. Never raises.
+        """
+        try:
+            if m is None:
+                return lines
+            fence_vas = set()
+            for ln in lines:
+                if 'sub_' not in ln:
+                    continue
+                mk = self._stub_mask_line(ln.strip())
+                pos = 0
+                while pos < len(mk):
+                    mm = self._SUB_CALL_RX.search(mk, pos)
+                    if mm is None:
+                        break
+                    vm = self._stub_call_at(mk, mm.start())
+                    if vm is not None and vm not in fence_vas:
+                        try:
+                            if self.L._fence_target(int(vm, 16)) is not None:
+                                fence_vas.add(vm)
+                        except Exception:
+                            pass
+                    pos = mm.end()
+            if not fence_vas:
+                return lines
+            if self._fence_is_self(m):
+                return lines
+            void_m = self._fence_caller_is_void(m)
+            masks = [self._stub_mask_line(ln.strip()) for ln in lines]
+        except Exception:
+            return lines
+        out = []
+        for idx, ln in enumerate(lines):
+            s = ln.strip()
+            if 'sub_' not in s:
+                out.append(ln)
+                continue
+            res = self._fence_line(
+                s, masks[idx], ln[:len(ln) - len(ln.lstrip())],
+                idx, masks, fence_vas, void_m)
+            if res is None:
+                out.append(ln)
+            elif isinstance(res, list):
+                out.extend(res)
+            else:
+                out.append(res)
+        return out
 
     def _shared_stub_casts(self, lines, m):
         """Caller-proven `(T)` casts over unresolved `sub_X` calls. -- fix 104
