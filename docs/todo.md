@@ -59,7 +59,66 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 110 (unanimous == / != shared calls fold to operators, gated 2026-09-18)
+## Current work — fix 111 (C# keyword escaping, gated 2026-09-18)
+
+The Roslyn whole-tree compile probe (new methodology: `dotnet
+build` over all 11,184 files as one project, `__SharedBodyStubs`
+deduplicated probe-only) showed 10,778 errors collapsing to root
+breaks in just 48 files — 44 of them one class: reserved words as
+identifiers (`.namespace` ×194, `.in` ×5, `.interface` ×3, field
+`string interface`), which tree-sitter parses but Roslyn rejects
+(CS1001 + cascades). The fix routes every metadata-name declaration
+(type headers, enum members, methods incl. explicit-`IFoo.Bar`,
+fields, events, ctors, properties) through the existing
+`safe_ident` (trailing-underscore convention, already used for
+params), and adds `_escape_keywords` (dec text pass after the stub
+casts): a reserved word after `.`/`->` is never a keyword use, so
+masked-line rewriting is exact; strings/comments never match and
+already-escaped names never re-match. `nameof()` emission tracks the
+escaped spelling. Metadata census: 6 keyword fields, 1,283
+keyword params (all `object`/`method`-style delegate plumbing,
+already consistent), zero keyword typedefs/methods/namespaces.
+Gates: **668 tests (550 portable incl. 6 new in
+`tests/test_review111_keywords.py` + 118 game); direct sweep
+116,178 methods / 0 crashes / 0 structural changes vs fix 110 (81
+bodies changed, all line-neutral); strict build 11,184 files /
+115,658 bodies / 0 failures or fallbacks (`work/review111_out`);
+parser 0 bad files**. Reports: `validation_reports/review111_sweep.json`,
+`review111_vs110.json` (81 changed, 0 structural),
+`review111_parse.json`; built tree `work/review111_out`. The 64
+goldens are untouched (0 overlapping MIs, no regen needed). NOT
+promoted — `final_out/` still holds the fix-99 tree pending a human
+promotion call.
+
+- [x] Fix 111: residual `(\.|->)keyword` census is ZERO tree-wide
+  (masked scan, 11,184 files); decl/uses agree exactly
+  (`private bool async;` + all 8 `this.async_` uses verified in
+  FileStream.cs).
+- [x] Recompile probe: **10,778 → 40 error instances, 48 → 2
+  files**. Everything keyword-related is gone; the survivors are
+  the `new X[N](args)` / `new X[N][i]` mistranslation family
+  (ZipEntry.cs, SqlDecimal.cs) — fix 112.
+- [x] Also proven by probe: into-block `goto` is CS0159-hard-illegal
+  (labels are block-scoped for goto; fails with no decls and into
+  `try` alike) — no cleverness at the goto level, only
+  tail-duplication/hoisting work counts toward compilation.
+
+### Next priorities (fix 111 follow-ups)
+
+1. **Fix 112: `new X[N][i]` 2D-index mistranslation** (751 lines,
+   e.g. `new char[1][0x0] = 32`) **and `new X[N](args)`**
+   indirect-call misrender (30 lines). Precise lifter shapes.
+2. **Semantic layer** (surfaced by the probe once parse falls):
+   definite assignment, conversions, duplicate locals — measure
+   after fix 112; the goto program (8,071 sites) feeds
+   CS0165-class errors.
+3. **Project wiring**: per-assembly `.csproj` files exist but
+   carry no cross-assembly references (the probe sidestepped this
+   with one project).
+4. Receiver-driven instance twins, call/indexer `==` operands,
+   duplication residue, 447 shared tails — all stand.
+
+## Previous work — fix 110 (unanimous == / != shared calls fold to operators, gated 2026-09-18)
 
 Six shared addresses (~2,726 uses) carry only static 2-parameter bool
 `op_Equality` candidates (`Equals` twins allowed) or unanimous

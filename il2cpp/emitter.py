@@ -86,7 +86,7 @@ class Emitter:
                     base.append(self.il.type_name(t))
         if td.is_valuetype and not td.is_enum and not base:
             pass
-        hdr = '%s %s%s' % (kw, sanitize(name), gparams)
+        hdr = '%s %s%s' % (kw, safe_ident(sanitize(name)), gparams)
         if base:
             hdr += ' : ' + ', '.join(base)
         lines.append(hdr)
@@ -99,7 +99,7 @@ class Emitter:
                 continue  # value__
             f = self.meta.fields[fi]
             v = self.default_value_of(fi)
-            out.append('        %s = %s,' % (sanitize(f.name), v if v is not None else '?'))
+            out.append('        %s = %s,' % (safe_ident(sanitize(f.name)), v if v is not None else '?'))
         return out
 
     def default_value_of(self, field_row) -> Optional[str]:
@@ -205,6 +205,12 @@ class Emitter:
         if rtname == 'void':
             pass
         name = sanitize(csharp_type_name(m.name))
+        # explicit-interface `IFoo.Bar`: escape the member component only.
+        if '.' in name:
+            head, _, tail = name.rpartition('.')
+            name = head + '.' + safe_ident(tail)
+        else:
+            name = safe_ident(name)
         gp = ''
         if m.generic_container != -1:
             gc = self.meta.generic_containers[m.generic_container]
@@ -286,7 +292,7 @@ class Emitter:
             ft = self.il.types[f.type] if 0 <= f.type < len(self.il.types) else None
             if ft is None:
                 continue
-            fn = sanitize(f.name)
+            fn = safe_ident(sanitize(f.name))
             fa = field_attrs(self.il, f)
             is_static_field = bool(fa & FA_STATIC)
             off_note = self.field_off_note(td, fi, is_static_field)
@@ -341,7 +347,7 @@ class Emitter:
                     accessor_idxs.add(td.method_start + x)
             out.append(pre + '    public event %s %s;' % (
                 self.il.type_name(self.il.types[ev[1]]) if ev[1] < len(self.il.types) else 'Action',
-                sanitize(csharp_type_name(self.meta.getstr(ev[0])))))
+                safe_ident(sanitize(csharp_type_name(self.meta.getstr(ev[0]))))))
         # methods
         for mi in self.meta.type_methods(td):
             if mi in accessor_idxs:
@@ -401,7 +407,7 @@ class Emitter:
     def ctor_sig(self, m: MethodDef, td: TypeDef) -> str:
         """Instance/static constructor signature: public ClassName() /
         static ClassName() -- no return type, no .ctor name."""
-        cname = sanitize(re.sub(r'`\d+$', '', td.name))
+        cname = safe_ident(sanitize(re.sub(r'`\d+$', '', td.name)))
         if m.name == '.cctor':
             return 'static %s()' % cname
         vis = METH_VIS.get((m.flags >> 0) & 7, 'public ')
@@ -493,7 +499,7 @@ class Emitter:
         setter = self._rel_method(td, pr[2])
         gbody = self._lift_body(getter, td) if getter else None
         sbody = self._lift_body(setter, td) if setter else None
-        pname = sanitize(csharp_type_name(self.meta.getstr(pr[0])))
+        pname = safe_ident(sanitize(csharp_type_name(self.meta.getstr(pr[0]))))
         ptype = self.prop_type(getter)
         acc = '' if '.' in pname else 'public '
         off = (bk_offs or {}).get(self.meta.getstr(pr[0]), '')

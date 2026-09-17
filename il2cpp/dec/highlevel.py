@@ -2506,6 +2506,55 @@ class _HighLevelMixin:
         except Exception:
             return False
 
+    _KEYWORD_TAIL_RX = None  # built lazily: (./->)(keyword)\b
+
+    @classmethod
+    def _keyword_tail_rx(cls):
+        try:
+            if cls._KEYWORD_TAIL_RX is None:
+                from il2cpp.names import CSHARP_KEYWORDS
+                alts = sorted(CSHARP_KEYWORDS, key=len, reverse=True)
+                cls._KEYWORD_TAIL_RX = re.compile(
+                    r'(\.|->)(' + '|'.join(alts) + r')\b')
+            return cls._KEYWORD_TAIL_RX
+        except Exception:
+            return None
+
+    def _escape_keywords(self, lines):
+        """Escape C# keywords in member tails: `.x` -> `.x_`. -- fix 111
+
+        A reserved word after a dot is never a keyword use, so this is
+        textual and safe; strings/comments are neutral on masked lines
+        and never match. Matches the emitter side, which routes every
+        metadata-name declaration through `safe_ident` (same trailing-
+        underscore spelling, same keyword set): declarations and uses
+        agree exactly, and non-keyword lines are byte-identical.
+        Never raises.
+        """
+        try:
+            rx = self._keyword_tail_rx()
+            if rx is None:
+                return lines
+            out = []
+            for ln in lines:
+                s = ln.strip()
+                if '.' not in s and '->' not in s:
+                    out.append(ln)
+                    continue
+                mk = self._stub_mask_line(s)
+                hits = [(m.start(2), m.group(2)) for m in rx.finditer(mk)]
+                if not hits:
+                    out.append(ln)
+                    continue
+                ind = ln[:len(ln) - len(ln.lstrip())]
+                code = s
+                for st, nm in reversed(hits):
+                    code = code[:st + len(nm)] + '_' + code[st + len(nm):]
+                out.append(ind + code)
+            return out
+        except Exception:
+            return lines
+
     def _shared_equality_ops(self, lines, m):
         """Fold unanimous == / != shared calls to operators. -- fix 110
 

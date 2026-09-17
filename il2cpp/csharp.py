@@ -1,4 +1,5 @@
 from il2cpp.prelude import *  # noqa: F401,F403
+from il2cpp.names import safe_ident
 
 MEMBER_VIS = {0: '', 1: 'private ', 2: 'private protected ', 3: 'internal ',
               4: 'protected ', 5: 'protected internal ', 6: 'public ',
@@ -148,7 +149,9 @@ def nameof_sugar(lines: List[str], members) -> List[str]:
                         and min(j + 1, n) < n and raw[j + 1] in '),':
                     m = _NAMEOF_LIT_RX.match(lit)
                     if m and m.group(1) in members and m.group(1) not in _NAMEOF_DENY:
-                        res.append('nameof(%s.%s)' % (members[m.group(1)], m.group(1)))
+                        # the enum member declaration escapes keywords
+                        # (safe_ident), so the nameof text must match it.
+                        res.append('nameof(%s.%s)' % (members[m.group(1)], safe_ident(m.group(1))))
                         i = j + 1
                         continue
                 res.append(lit)
