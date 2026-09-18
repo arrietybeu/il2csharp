@@ -134,7 +134,12 @@ class _TypesMixin:
             full = sanitize_qualifier(csharp_type_name(self.typedef_full(d)))
             if full.startswith('__StaticArrayInitTypeSize='):
                 full = '__StaticArrayInitTypeSize_' + full[len('__StaticArrayInitTypeSize='):]
-            base = full.split('.')[-1] if depth > 0 else full
+            # Full paths at every depth: a last-segment-only generic
+            # argument (`ErrorEventArgs` for
+            # `Newtonsoft.Json.Serialization.ErrorEventArgs`) is
+            # unresolvable outside its namespace. The file boundary
+            # shortens whatever its usings make unambiguous.
+            base = full
         else:
             base = 'object'
         args = self._inst_args(class_inst, depth)

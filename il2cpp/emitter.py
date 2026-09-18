@@ -1,7 +1,7 @@
 from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.arm64 import Arm64Lifter, is_arm64_binary
 from il2cpp.common import compressed_int, csharp_type_name, i32, i64, read_compressed_uint, u16, u32, u64
-from il2cpp.csharp import FA_INITONLY, FA_LITERAL, FA_STATIC, FIELD_VIS, METH_VIS, TYPE_VIS, UsingTracker, field_attrs, nameof_sugar, strip_namespaces
+from il2cpp.csharp import FA_INITONLY, FA_LITERAL, FA_STATIC, FIELD_VIS, METH_VIS, TYPE_VIS, UsingTracker, field_attrs, nameof_sugar, strip_namespaces, collision_heads
 from il2cpp.lifter import Lifter
 from il2cpp.metadata import ImageDef, MethodDef, TypeDef
 from il2cpp.names import repr_f32, repr_f64, safe_ident, sanitize, sanitize_qualifier
@@ -373,13 +373,16 @@ class Emitter:
         rtname = self.il.type_name(rt) if rt else 'void'
         if rtname == 'void':
             pass
-        name = sanitize(csharp_type_name(m.name))
         # explicit-interface `IFoo.Bar`: escape the member component only.
-        if '.' in name:
-            head, _, tail = name.rpartition('.')
+        # The qualifier keeps its generic structure: a blanket sanitize()
+        # here would eat the commas (`IDictionary<TKey, TValue>`), so split
+        # first and sanitize each half through its own rule.
+        raw = csharp_type_name(m.name)
+        if '.' in raw:
+            head, _, tail = raw.rpartition('.')
             name = sanitize_qualifier(self._arity_qualifier(head, td)) + '.' + safe_ident(tail)
         else:
-            name = safe_ident(name)
+            name = safe_ident(raw)
         gp = ''
         if m.generic_container != -1:
             gc = self.meta.generic_containers[m.generic_container]
@@ -998,7 +1001,8 @@ class Emitter:
                 tr.add_text(l)
             uses_set = set(tr.used)   # own ns too: in scope inside its block
             if uses_set:
-                buf = strip_namespaces(buf, uses_set)
+                dup = collision_heads("\n".join(buf), ns, uses_set, self._short_ns_index())
+                buf = strip_namespaces(buf, uses_set, ns, dup)
             members = self._nameof_members(uses_set)
             if members:
                 # the enum must be referenced elsewhere in the file too:
@@ -1070,6 +1074,22 @@ class Emitter:
                      '  </PropertyGroup>\n'
                      '</Project>\n' % asm_name)
         return written
+
+    def _short_ns_index(self):
+        """short typedef name (sans arity) -> namespaces. Built once per
+        emitter; metadata does not change during a build."""
+        idx = getattr(self, "_short_ns_idx", None)
+        if idx is None:
+            idx = {}
+            for td in self.meta.typedefs:
+                try:
+                    nm = (td.name or "").split("`")[0]
+                except Exception:
+                    continue
+                if nm:
+                    idx.setdefault(nm, set()).add(getattr(td, "namespace", ""))
+            self._short_ns_idx = idx
+        return idx
 
     def _nameof_members(self, ns_set) -> dict:
         """member name -> enum short name for top-level enums in the given

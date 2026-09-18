@@ -33,10 +33,11 @@ def _td(index, name, ns="System.Collections.Generic"):
 
 
 def _emitter_with_ifaces():
-    e = make_emitter(typedefs=[None] * 4)
+    e = make_emitter(typedefs=[None] * 5)
     e.meta.typedefs[1] = _td(1, "IEnumerator`1")
     e.meta.typedefs[2] = _td(2, "IEnumerable`1")
     e.meta.typedefs[3] = _td(3, "IEnumerator", ns="System.Collections")
+    e.meta.typedefs[4] = _td(4, "IDictionary`2")
     return e
 
 
@@ -73,6 +74,15 @@ def test_explicit_method_sig_suffixes_qualifier():
                "System.Collections.Generic.IEnumerator<System.Object>.get_Current")
     assert e.method_sig(m, td_base()).endswith(
         "System.Collections.Generic.IEnumerator_1<object>.get_Current()")
+
+
+def test_explicit_method_keeps_multi_arg_commas():
+    from test_review114_method_flags import method
+    e = _emitter_with_ifaces()
+    m = method(1 | 0x40 | 0x20 | 0x100,
+               "System.Collections.Generic.IDictionary<TKey,TValue>.Add")
+    assert e.method_sig(m, td_base()).endswith(
+        "System.Collections.Generic.IDictionary_2<TKey, TValue>.Add()")
 
 
 def _emitter_with_tuple_ifaces():

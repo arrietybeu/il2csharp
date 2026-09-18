@@ -1,22 +1,23 @@
 # il2csharp
 
-**Current source: fix 122 (promoted)**, following the legal-type-declaration fixes in
+**Current source: fix 123 (promoted)**, following the legal-type-declaration fixes in
 fix 113. See [current work](docs/todo.md) for validation and remaining errors.
 Method declarations now decode virtual, abstract, final and new-slot metadata
 flags correctly, generic constructors match their declaring type names, every
 pointer-typed declaration carries `unsafe`, generic references spell the
 declared `_N` identifier, explicit interface qualifiers resolve through the
 declaring type's own interface list, namespace-qualified spellings feed
-`using` generation, nested types render their owner paths, and stub temps
-with a uniquely-proven receiver call take their owner's type.
-The full test suite passes **752 tests**, including 118 native-fixture
+`using` generation, nested types render their owner paths, stub temps with a
+uniquely-proven receiver call take their owner's type, and using-strip keeps
+ambiguous heads qualified.
+The full test suite passes **759 tests**, including 118 native-fixture
 regressions and a Roslyn compilation of generated declaration patterns. The
 strict build covered 11,181 files / 113,938 bodies with 0 failures, the syntax
-gate is clean, and the whole-tree compiler probe stands at **10,794 errors**
-(down from 34,262 across fixes 115–122 with every delta attributed; CS0115,
-CS0214, CS0540 and CS9334 fully zero).
+gate is clean, and the whole-tree compiler probe stands at **10,602 errors**
+(down from 34,262 across fixes 115–123 with every delta attributed; CS0115,
+CS0214, CS0246, CS0540 and CS9334 fully zero).
 
-`final_out/` is the fix-122 output promoted 2026-09-17 (11,274 files). The complete
+`final_out/` is the fix-123 output promoted 2026-09-17 (11,274 files). The complete
 recovered game **does not yet compile**. Clean parsing and passing regression
 tests do not establish semantic equivalence or a working drop-in source tree.
 
@@ -190,8 +191,8 @@ output (`il2cpp/metadata.py` + `binary.py` frontends, `il2cpp/runtime/` for
 2026-09-08), `tools/` (validator kit plus the former loose `compare_*`/`count_diffs`/`test_import*` scripts;
 `scan_stale.py` lives in `tools/`, `SHA256SUMS.txt` in `validation_reports/`),
 `tests/`, `validation_reports/` (current evidence in `review122_*`; older files
-are historical), `final_out/` (the complete fix-122 strict-built/
-syntax-gated output, promoted from `work/review122_out/`), and `testgame/` (the supplied Shift At
+are historical), `final_out/` (the complete fix-123 strict-built/
+syntax-gated output, promoted from `work/review123_out/`), and `testgame/` (the supplied Shift At
 Midnight DLL/metadata, tracked via Git LFS and included only in this private repo
 at the user's request; do not redistribute them or make the repo public). Backup zips live in
 the parent folder. Pre-consolidation history in `docs/archive/` still
@@ -465,16 +466,16 @@ failed).
 
 ## Validation
 
-Current gates (fix-122 tree): **752 tests (634 portable + 118 game)**;
+Current gates (fix-123 tree): **759 tests (641 portable + 118 game)**;
 a strict 11,181-file/113,938-body build with no failures or fallbacks, a 0-error syntax parse
 of every C# file, and a 116,178-method direct sweep
 with 0 crashes or structural-metric changes. Exact reports are in
-`validation_reports/review84/` (baseline), `validation_reports/review122_sweep.json`,
-`review122_vs121.json`, `review122_parse.json` (fix-122 gates; every fix
-100–122 has its own `reviewNN_*` set — see `docs/todo.md` for the log),
-`validation_reports/review122_promotion_verification.json` (11,274 files,
-aggregate `3a513e9a…13b49de`, 0 mismatches — `final_out/` holds the
-promoted fix-122 tree); the older trajectories below are
+`validation_reports/review84/` (baseline), `validation_reports/review123_sweep.json`,
+`review123_vs122.json`, `review123_parse.json` (fix-123 gates; every fix
+100–123 has its own `reviewNN_*` set — see `docs/todo.md` for the log),
+`validation_reports/review123_promotion_verification.json` (11,274 files,
+aggregate `45711645…3791d3c6`, 0 mismatches — `final_out/` holds the
+promoted fix-123 tree); the older trajectories below are
 historical. At Review 84 the same strict build held with **358 tests**.
 
 Two independent corpus gates, run against the built tree:

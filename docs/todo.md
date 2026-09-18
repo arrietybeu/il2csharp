@@ -59,14 +59,39 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work: post-promotion residue (fix 122 promoted, see below)
+## Current work: post-promotion residue (fix 123 promoted, see below)
 
-`final_out/` holds the fix-122 tree (probe steady at 10,794). Open lanes:
-collision-aware using/strip (short `Event` binds `UnityEngine.Event` over
-`InputForUI.Event` — CS0426 +1; plus the fix-119 `Object` ambiguity);
-accessibility honesty (CS0053 +6); the masked body-pointer-local layer
-(needs expression typing first); missing types (CS0246: 43); project wiring.
+`final_out/` holds the fix-123 tree (10,794 → 10,602 errors). Open lanes:
+accessibility honesty (CS0053 222: newly-visible nested types are less
+accessible than the public API exposing them — changing modifiers would be
+invention; needs per-site accessor analysis); the masked
+body-pointer-local layer (needs expression typing first); project wiring.
 The complete game is not yet compilable.
+
+## Previous work — fix 123 (collision-aware using/strip; gated + promoted 2026-09-17)
+
+CS0104 triage (140 sites) showed shortening rebinds references two ways:
+duplicate short names across imported namespaces (`Hashtable`,
+`Object`, `Random`) and heads matching a visible namespace final segment
+(`HID.HIDDeviceDescriptor`). `collision_heads` (new in `il2cpp/csharp.py`,
+mirroring `rep()`) flags exactly the heads shortening could produce, proven
+per file against the metadata short-name table (global-ns rows excluded —
+usings win over globals empirically); `strip_namespaces` keeps those full
+chains. Generic arguments render full paths at every depth (the `ErrorEventArgs`
+bare-arg gap), and explicit *method* qualifiers split before sanitizing
+(`IDictionary<TKey,TValue>` kept its commas). Gates: **759 tests** (6 in
+`tests/test_review123_collisions.py` — 5 unit + 1 game-backed); strict
+rebuild 11,181 files / 113,938 bodies / 0 failures (`work/review123_out`);
+parser 0 bad files; direct sweep 116,178 methods / 0 crashes / 0 structural
+changes vs fix 122; probe **10,794 → 10,602 (−192)**: CS0104 140→3,
+CS0246 43→0, CS0305/CS0308/CS0426/CS0538 →0, CS0535 −13, against CS0053 +21
+(accessibility unmasking, characterized above). One golden diff reviewed
+(fulldepth args only) before regen; one game-test expectation corrected to
+the faithful `System.EventHandler_1<...>` spelling. Reports:
+`validation_reports/review123_*`. Promoted 2026-09-17: `final_out/` now
+holds `work/review123_out` (11,274 files, aggregate `45711645…3791d3c6`, 0
+mismatches; the fix-122 tree is kept at `bckups/final_out_fix122`).
+Post-promotion parse recheck 0 bad files.
 
 Comparison temps (`obj227 < 6`) are CLOSED with no code change: a full
 `.pdata`-extent native scan of `InventoryManager.Update` finds no compare,

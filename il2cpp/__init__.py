@@ -6,7 +6,7 @@ from il2cpp.binary import (Binary, ELF, PE, Section, load_binary, u8)
 from il2cpp.cfg import (Block, INT_TY, LBL, _ELSEIF_CMP_RX, _FLOWBREAK_RX, _FLOWTAIL_RX, _ITF_CALL_RX, _ITF_SLOT_RX, _ITF_TYPEOF_RX, _LBLDEF_LINE_RX, _LIT_RX, _LOOP_HDR_RX, _OBJOP_RX, _Sink, _TEMP_RX, _abandon_at_region_close, _arm_open_of_close, _can_fall, _construct_arms, _ends_flow, _falls_to, _has_arrow, _header_idx, _hoist_point, _in_string, _match_brace, _objop_fold, _split_args)
 from il2cpp.cli import (find_game_files, main, time_ms)
 from il2cpp.common import (_BACKTICK_RX, _GEN_SPLIT_RX, _MIDAT_RX, _SYS_CSHARP, align, compressed_int, csharp_type_name, i16, i32, i64, read_compressed_uint, u16, u32, u64)
-from il2cpp.csharp import (FA_HASRVA, FA_INITONLY, FA_LITERAL, FA_STATIC, FIELD_VIS, MEMBER_VIS, METH_VIS, TYPE_VIS, UsingTracker, _NAMEOF_DENY, _NAMEOF_LIT_RX, _NS_CHAIN_RX, field_attrs, nameof_sugar, strip_namespaces)
+from il2cpp.csharp import (FA_HASRVA, FA_INITONLY, FA_LITERAL, FA_STATIC, FIELD_VIS, MEMBER_VIS, METH_VIS, TYPE_VIS, UsingTracker, _NAMEOF_DENY, _NAMEOF_LIT_RX, _NS_CHAIN_RX, collision_heads, field_attrs, nameof_sugar, strip_namespaces)
 from il2cpp.dec import (Decompiler)
 from il2cpp.emitter import (Emitter)
 from il2cpp.expr import (Expr, _ARR_BIAS_RX, _BARE_HINT_RX, _BARE_TOKEN_RX, _BINDABLE_KINDS, _BOOL_TY, _FLAGS_KEY, _INT_TY, _R4_TY, _R8_TY, _RECV_UNSHAPED_RX, _REFARG_RX, _RegState, _USE_BIND_MIN, _WORDCH, _byref_arg_render, _is_unresolved_gp, _mentions, _recv_fold, _recv_shaped, e_const)
@@ -69,6 +69,7 @@ __all__ = [
     'TYPE_VIS',
     'TypeDef',
     'UsingTracker',
+    'collision_heads',
     'VOLATILE',
     'V_TABLES_MIN',
     '_ARR_BIAS_RX',

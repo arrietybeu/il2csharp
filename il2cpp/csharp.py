@@ -75,7 +75,55 @@ class UsingTracker:
 _NS_CHAIN_RX = re.compile(r'(?<![\w.])([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)')
 
 
-def strip_namespaces(lines: List[str], uses: set) -> List[str]:
+def _visible_ns(ns, file_ns, uses):
+    if not ns:
+        return True
+    if ns in uses or ns == file_ns:
+        return True
+    return bool(file_ns) and file_ns.startswith(ns + ".")
+
+
+def _ambiguous_head(head, file_ns, uses, short_to_ns, ns_finals):
+    for key in (head, re.sub(r"_\d+$", "", head)):
+        nss = set(short_to_ns.get(key, ()))
+        # Global-namespace typedefs never win against using-imported names
+        # (the probe's ambiguity census never shows them); counting them
+        # would keep every common short name qualified.
+        if sum(1 for ns in nss if ns and _visible_ns(ns, file_ns, uses)) >= 2:
+            return True
+    return head in ns_finals
+
+
+def collision_heads(buf_text, file_ns, uses, short_to_ns):
+    """Short heads that shortening must never produce, mirroring rep():
+    for every dotted chain and every using-prefix strip rep() would apply,
+    the remaining head must resolve unambiguously (one visible typedef and
+    no visible namespace final-segment match). Computed on masked text so
+    strings/comments can only over-keep."""
+    try:
+        masked = UsingTracker._STR_RX.sub("", buf_text)
+    except Exception:
+        masked = buf_text
+    vis_ns = set(uses or ())
+    if file_ns:
+        parts = file_ns.split(".")
+        for k in range(1, len(parts) + 1):
+            vis_ns.add(".".join(parts[:k]))
+    ns_finals = set(ns.split(".")[-1] for ns in vis_ns if ns)
+    order = sorted(uses or (), key=lambda u: (-len(u), u))
+    dup = set()
+    for m in UsingTracker._DOTID_RX.finditer(masked):
+        chain = m.group(0)
+        for u in order:
+            if chain.startswith(u + "."):
+                rest = chain[len(u) + 1:]
+                head = rest.split(".")[0]
+                if _ambiguous_head(head, file_ns, uses, short_to_ns, ns_finals):
+                    dup.add(head)
+    return dup
+
+
+def strip_namespaces(lines: List[str], uses: set, file_ns="", dup=()) -> List[str]:
     """Drop the namespace prefix of every dotted reference the file's own
     using set imports (longest imported prefix wins), so a body carrying
     `UnityEngine.Transform` under `using UnityEngine;` reads `Transform`.
@@ -116,6 +164,8 @@ def strip_namespaces(lines: List[str], uses: set) -> List[str]:
                         # the namespace instead of the nested owner, so the
                         # full chain stays.
                         if rest.split('.')[0] == u.split('.')[-1]:
+                            return chain
+                        if rest.split('.')[0] in dup:
                             return chain
                         return rest
                 return chain
