@@ -1,21 +1,46 @@
 from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.common import compressed_int, csharp_type_name, i32, read_compressed_uint, u32, u64
 from il2cpp.csharp import FA_LITERAL, FA_STATIC, field_attrs
+from il2cpp.names import sanitize_qualifier
 
 class _TypesMixin:
+    def _nested_owner(self, ti: int):
+        """Owner typedef index for a nested type, or None. The typedef
+        `declaring` field is -1 for top-level rows and out of range for
+        nested ones, so owners resolve only through the forward
+        `nested_types` table (inverted once per instance)."""
+        rev = self.__dict__.get('_nested_owner_cache')
+        if rev is None:
+            rev = {}
+            for oi, ot in enumerate(self.meta.typedefs):
+                ns, nc = getattr(ot, 'nested_start', -1), getattr(ot, 'nested_count', 0)
+                if nc > 0:
+                    try:
+                        for ni in self.meta.nested_types[ns:ns + nc]:
+                            rev.setdefault(ni, oi)
+                    except Exception:
+                        pass
+            self.__dict__['_nested_owner_cache'] = rev
+        return rev.get(ti)
+
     def typedef_full(self, ti: int) -> str:
         if not (0 <= ti < len(self.meta.typedefs)):
             return '?'
         td = self.meta.typedefs[ti]
         parts = [td.name]
-        d = td.declaring
         seen = 0
-        while 0 <= d < len(self.meta.typedefs) and seen < 8:
+        # the namespace lives on the outermost owner; nested rows carry
+        # none of their own (emitting the inner one's yields an unrooted
+        # path no using can import).
+        ns = td.namespace
+        d = self._nested_owner(ti)
+        while d is not None and seen < 8:
             dt = self.meta.typedefs[d]
             parts.append(dt.name)
-            d = dt.declaring
             seen += 1
-        ns = td.namespace
+            if getattr(dt, 'namespace', ''):
+                ns = dt.namespace
+            d = self._nested_owner(d)
         base = '.'.join(reversed(parts))
         return (ns + '.' + base) if ns else base
 
@@ -53,15 +78,20 @@ class _TypesMixin:
                 if td is None:
                     nm = 'object'
                 else:
-                    nm = csharp_type_name(self.typedef_full(data))
-                if nm.startswith('__StaticArrayInitTypeSize='):
-                    # IL2CPP spells these compiler-generated size types with
-                    # `=N`; the decls are emitted sanitized as `_N`, so match
-                    nm = '__StaticArrayInitTypeSize_' + nm[len('__StaticArrayInitTypeSize='):]
-                elif nm.startswith('$ArrayType='):
-                    # Mono emits the same blob structs as `$ArrayType=N`
-                    # (sanitized decl spelling `_ArrayType_N`)
-                    nm = '_ArrayType_' + nm[len('$ArrayType='):]
+                    # sanitize each path segment exactly like declarations
+                    # do: a nested owner such as
+                    # `<PrivateImplementationDetails>{guid}` must spell the
+                    # same identifier its declaration does, or references
+                    # never bind to it.
+                    nm = sanitize_qualifier(csharp_type_name(self.typedef_full(data)))
+                # IL2CPP spells these compiler-generated size types with
+                # `=N` (and Mono `$ArrayType=N`); the decls are emitted
+                # sanitized as `_N`, so match. Blob structs nest under
+                # <PrivateImplementationDetails>, so the terminal segment
+                # matches — never the string start, which an owner prefix
+                # would defeat (leaving an unparseable `=`).
+                nm = re.sub(r'__StaticArrayInitTypeSize=(\d+)', r'__StaticArrayInitTypeSize_\1', nm)
+                nm = re.sub(r'\$ArrayType=(\d+)', r'_ArrayType_\1', nm)
         elif te == 0x0f:  # ptr
             inner = self.type_from_ptr(data)
             nm = self.type_name(inner, depth + 1) + '*'
@@ -99,17 +129,130 @@ class _TypesMixin:
         t = self.type_from_ptr(type_ptr)
         te = self._type_enum(t)
         d = t[0] if t else 0
+        full = None
         if te in (0x11, 0x12) and 0 <= d < len(self.meta.typedefs):
-            base = csharp_type_name(self.typedef_full(d))
-            if base.startswith('__StaticArrayInitTypeSize='):
-                base = '__StaticArrayInitTypeSize_' + base[len('__StaticArrayInitTypeSize='):]
-            base = base.split('.')[-1] if depth > 0 else base
+            full = sanitize_qualifier(csharp_type_name(self.typedef_full(d)))
+            if full.startswith('__StaticArrayInitTypeSize='):
+                full = '__StaticArrayInitTypeSize_' + full[len('__StaticArrayInitTypeSize='):]
+            base = full.split('.')[-1] if depth > 0 else full
         else:
             base = 'object'
         args = self._inst_args(class_inst, depth)
         if args is None:
             return base
+        # distribute over the FULL owner path at every depth: the legacy
+        # last-segment form leaves nested arguments on the wrong segment
+        # (`Entry<TKey, TValue>` for non-generic `Entry`), which depth>0
+        # hits through array elements and generic arguments alike.
+        if full is not None:
+            dist = self._distribute_nested_args(d, full, args)
+            if dist is not None:
+                return dist
         return '%s<%s>' % (base, ', '.join(args))
+
+    def _type_param_names(self, td) -> list:
+        try:
+            if getattr(td, 'generic_container', -1) == -1:
+                return []
+            gc = self.meta.generic_containers[td.generic_container]
+            out = []
+            for k in range(gc[1]):
+                gi = gc[3] + k
+                if gi < len(self.meta.generic_parameters):
+                    out.append(self.meta.generic_parameters[gi][1])
+            return out
+        except Exception:
+            return []
+
+    def _nested_own_params(self, td):
+        """A nested type's OWN generic parameter names: its container holds
+        the owner's mirrored leading parameters followed by exactly
+        `backtick` own ones (`ConstraintComparer`1` carries `(T, K)` for
+        owner `(T)`). A container without backtick that mirrors is fully
+        shared (`DispatchDelegate`), contributing none. Returns None when
+        the split is unprovable (including non-nested rows)."""
+        try:
+            oi = self._nested_owner(td.index)
+            if oi is None:
+                return None
+            own_all = self._type_param_names(td)
+            if not own_all:
+                # No container to split: backtick (if any) decides below.
+                return None
+            m = re.match(r'^(.*)`(\d+)$', td.name or '')
+            if not m:
+                outer = self._type_param_names(self.meta.typedefs[oi])
+                if len(own_all) <= len(outer) and list(own_all) == list(outer[:len(own_all)]):
+                    return []
+                return None
+            b = int(m.group(2))
+            if len(own_all) < b:
+                return None
+            prefix, own = own_all[:len(own_all) - b], own_all[len(own_all) - b:]
+            outer = self._type_param_names(self.meta.typedefs[oi])
+            if list(prefix) == list(outer[:len(prefix)]):
+                return own
+            return None
+        except Exception:
+            return None
+
+    def _typedef_arity(self, td) -> int:
+        # Nested arity is the OWN parameter count (mirror prefix excluded).
+        try:
+            oi = self._nested_owner(td.index)
+            if oi is not None:
+                own = self._nested_own_params(td)
+                if own is not None:
+                    return len(own)
+        except Exception:
+            pass
+        try:
+            m = re.match(r'^(.*)`(\d+)$', td.name or '')
+        except Exception:
+            return 0
+        return int(m.group(2)) if m else 0
+
+    def _distribute_nested_args(self, d, base, args):
+        """Render `Owner_N<..>.Inner_M<..>` for a generic instantiation of a
+        nested type: instantiation arguments fill outer parameters first,
+        then the inner's own. Returns None unless the segment arities sum
+        exactly to the argument count, in which case every segment spells
+        the declared `_N` identifier. Non-nested and mismatched shapes keep
+        the legacy single-argument-list rendering."""
+        try:
+            if not (0 <= d < len(self.meta.typedefs)):
+                return None
+            chain = [d]
+            seen = 0
+            dd = self._nested_owner(d)
+            while dd is not None and seen < 8:
+                chain.append(dd)
+                seen += 1
+                dd = self._nested_owner(dd)
+            if len(chain) < 2:
+                return None
+            arities = [self._typedef_arity(self.meta.typedefs[ti]) for ti in reversed(chain)]
+            if sum(arities) != len(args):
+                return None
+            # base segments in source order; the last dotted component of
+            # each rendered segment carries that segment's own suffix.
+            segs = base.split('.')
+            if len(segs) < len(chain):
+                return None
+            out = []
+            pos = 0
+            for seg, ar in zip(segs[-len(chain):], arities):
+                short = seg.split('.')[-1]
+                if ar:
+                    out.append('%s<%s>' % (short, ', '.join(args[pos:pos + ar])))
+                    pos += ar
+                else:
+                    out.append(short)
+            if segs[:-len(chain)]:
+                out = ['.'.join(segs[:-len(chain)])] + out
+            return '.'.join(out)
+        except Exception:
+            return None
 
     def _inst_args(self, inst_ptr, depth):
         if not inst_ptr:

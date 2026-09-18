@@ -1,15 +1,42 @@
 # CLAUDE.md
 
-## Current source and validation authority — fix-99 live tree (Review 84 baseline, fixes 85–99)
+## Current source and validation authority — fix 122 promoted tree
+
+The working source contains fixes 114 (method dispatch flags, generic
+constructor names), 115 (unsafe on pointer-signature methods/ctors), 116
+(unsafe on pointer-typed fields/properties; CS0214 fully zero), 117
+(generic `_N` reference spellings matching declarations, incl. explicit
+interface qualifiers; CS0115 fully zero), 118 (tuple-based explicit
+qualifiers + structure-aware qualifier sanitize; CS9334 fully zero), 119
+(namespace-qualified spellings feeding `using` generation), 120 (nested
+owner paths via `nested_types`), 121 (mirror-nested own-suffix +
+owner-first distribution), and 122 (receiver-proven stub temps take the
+unique owner's type with a caller-proven cast). 752 tests pass. Fix 122
+completed the full gate — strict rebuild 11,181 files / 113,938 bodies with
+0 failures, parser 0 bad files, direct sweep 116,178 methods / 0 crashes /
+0 structural changes vs fix 121 (49 retype+cast+rename bodies), probe steady
+at 10,794 (cascade-masked today, removes future CS1061s at zero cost) — and
+was promoted 2026-09-17: `final_out/` holds `work/review122_out` (11,274
+files, aggregate `3a513e9a…13b49de`; the fix-121 tree is kept at
+`bckups/final_out_fix121`). See `docs/todo.md` for exact evidence and the
+remaining compiler backlog.
 
 Read `docs/reviews/REVIEW84.md`–`REVIEW87.md`, `docs/todo.md`'s Current work section, and
 `docs/archive/reviews-log.md` section 0bf first. `final_out/` is the complete strict-built
-fix-99 output promoted 2026-09-15 (11,200 files, aggregate `c1426378…89391f2`),
+fix-122 output promoted 2026-09-17 (11,274 files, aggregate `3a513e9a…13b49de`),
 not the Review 84 file set alone, b42/b76, or a partial candidate. Historical paragraphs below retain
 the reasoning behind older changes; their old "current" labels are not release authority.
-`validation_reports/review84/summary.json` (baseline) plus `validation_reports/review99_sweep.json`,
-`review99_vs98.json`, `review99_parse.json`, and `review99_promotion_verification.json`
-are authoritative for the live tree.
+`validation_reports/review84/summary.json` (baseline) plus `validation_reports/review122_sweep.json`,
+`review122_vs121.json`, `review122_parse.json`, and `review122_promotion_verification.json`
+are authoritative for the promoted tree. Fix-114 evidence lives in
+`validation_reports/review114_*`; fix-115 gates, probe, and promotion record
+in `validation_reports/review115_*`; fix-116 in `validation_reports/review116_*`;
+fix-117 in `validation_reports/review117_*`;
+fix-118 in `validation_reports/review118_*`;
+fix-119 in `validation_reports/review119_*`;
+fix-120 in `validation_reports/review120_*`;
+fix-121 in `validation_reports/review121_*`;
+fix-122 in `validation_reports/review122_*`.
 
 **Current invariants:**
 - `base_chain_tds` maps IL2CPP_TYPE_OBJECT only through one unique

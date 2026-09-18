@@ -627,5 +627,5 @@ class _RegistrationMixin:
         0x01: 'void', 0x02: 'bool', 0x03: 'char', 0x04: 'sbyte', 0x05: 'byte',
         0x06: 'short', 0x07: 'ushort', 0x08: 'int', 0x09: 'uint', 0x0a: 'long',
         0x0b: 'ulong', 0x0c: 'float', 0x0d: 'double', 0x0e: 'string',
-        0x12: 'object', 0x16: 'TypedReference', 0x18: 'IntPtr', 0x19: 'UIntPtr',
+        0x12: 'object', 0x16: 'System.TypedReference', 0x18: 'System.IntPtr', 0x19: 'System.UIntPtr',
     }

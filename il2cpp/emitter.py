@@ -4,7 +4,7 @@ from il2cpp.common import compressed_int, csharp_type_name, i32, i64, read_compr
 from il2cpp.csharp import FA_INITONLY, FA_LITERAL, FA_STATIC, FIELD_VIS, METH_VIS, TYPE_VIS, UsingTracker, field_attrs, nameof_sugar, strip_namespaces
 from il2cpp.lifter import Lifter
 from il2cpp.metadata import ImageDef, MethodDef, TypeDef
-from il2cpp.names import repr_f32, repr_f64, safe_ident, sanitize
+from il2cpp.names import repr_f32, repr_f64, safe_ident, sanitize, sanitize_qualifier
 from il2cpp.runtime.core import Il2Cpp
 from il2cpp.runtime.meta import meta_lit_repr
 from il2cpp.text import MANGLED_IDENT_RX, reindent
@@ -46,6 +46,16 @@ class Emitter:
     # -- type header ------------------------------------------------------
     def _type_generic_params(self, td: TypeDef) -> str:
         """`<T, ...>` from the typedef's generic container, else ''."""
+        # A nested container holds mirrored owner parameters plus its
+        # own trailing ones: declare only the own suffix (possibly none).
+        # Unprovable splits keep the legacy full-container rendering.
+        try:
+            if self.il._nested_owner(td.index) is not None:
+                own = self.il._nested_own_params(td)
+                if own is not None:
+                    return '<%s>' % ', '.join(own) if own else ''
+        except Exception:
+            pass
         gparams = ''
         if td.generic_container != -1 and not td.is_enum:
             gc = self.meta.generic_containers[td.generic_container]
@@ -56,6 +66,159 @@ class Emitter:
                     gp.append(self.meta.generic_parameters[gi][1])
             gparams = '<%s>' % ', '.join(gp) if gp else ''
         return gparams
+
+    _arity_qualifier_cache = None
+
+    def _arity_qualifier(self, dotted, td=None):
+        """Append the metadata arity suffix to an explicit-interface qualifier
+        (`NS.IFoo<T>` -> `NS.IFoo_1<T>`) so it spells the same identifier the
+        interface declaration does. Qualifiers come from metadata name strings
+        that never record arity, so arity is proved by matching (namespace,
+        dotted path, top-level argument count) against exactly one typedef
+        row; anything else declines unchanged."""
+        if '<' not in dotted or '>' not in dotted:
+            return dotted
+        try:
+            exact = self._iface_qualifier(dotted, td)
+            if exact is not None:
+                return exact
+            cache = self._arity_qualifier_cache
+            if cache is None:
+                cache = {}
+                for td in self.meta.typedefs:
+                    try:
+                        nm = td.name or ''
+                    except Exception:
+                        continue
+                    if '`' not in nm:
+                        continue
+                    m = re.match(r'^(.*)`(\d+)$', nm)
+                    if not m:
+                        continue
+                    short, arity = m.group(1), int(m.group(2))
+                    parts = [short]
+                    seen = 0
+                    ns = getattr(td, 'namespace', '')
+                    try:
+                        dd = self.il._nested_owner(td.index)
+                        while dd is not None and seen < 8:
+                            dt = self.meta.typedefs[dd]
+                            parts.append((dt.name or '').split('`')[0])
+                            seen += 1
+                            # the namespace lives on the outermost owner;
+                            # nested rows carry none of their own.
+                            if getattr(dt, 'namespace', ''):
+                                ns = dt.namespace
+                            dd = self.il._nested_owner(dd)
+                    except Exception:
+                        pass
+                    path = '.'.join(reversed(parts))
+                    cache.setdefault((ns, path), []).append(arity)
+                self._arity_qualifier_cache = cache
+            head, rest = dotted.split('<', 1)
+            args = '<' + rest
+            depth = commas = 0
+            has_arg = False
+            for ch in args[1:]:
+                if ch == '<':
+                    depth += 1
+                elif ch == '>':
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif ch == ',' and depth == 0:
+                    commas += 1
+                elif ch not in ', ':
+                    has_arg = True
+            if not has_arg:
+                return dotted
+            argc = commas + 1
+            # a nested qualifier (`N.Outer.Inner<X>`) may split namespace
+            # from path at any dot; accept only a globally unique proof.
+            segs = head.split('.')
+            proofs = []
+            for k in range(len(segs)):
+                ns = '.'.join(segs[:k])
+                path = '.'.join(segs[k:])
+                cands = [a for a in cache.get((ns, path), []) if a == argc]
+                if len(cands) == 1:
+                    proofs.append('%s%s_%d%s' % (ns + '.' if ns else '', path, argc, args))
+            if len(proofs) != 1:
+                return dotted
+            return proofs[0]
+        except Exception:
+            return dotted
+
+    def _iface_qualifier(self, dotted, td=None):
+        """Render an explicit-interface qualifier from the declaring type's
+        own interface list (binary truth) instead of the arity-less metadata
+        name string. Matches (namespace, short name, top-level argument
+        count) against each implemented interface tuple and, on exactly one
+        match, returns that tuple's rendered spelling — identical to the
+        base-list spelling, nested arguments included. Returns None to let
+        the typedef-name proof below decide, or to decline unchanged."""
+        if td is None:
+            return None
+        try:
+            head, rest = dotted.split('<', 1)
+            args = '<' + rest
+            if '.' in head:
+                qns, _, qpath = head.rpartition('.')
+            else:
+                qns, qpath = '', head
+            depth = commas = 0
+            has_arg = False
+            for ch in args[1:]:
+                if ch == '<':
+                    depth += 1
+                elif ch == '>':
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif ch == ',' and depth == 0:
+                    commas += 1
+                elif ch not in ', ':
+                    has_arg = True
+            if not has_arg:
+                return None
+            qargc = commas + 1
+            hits = []
+            for k in range(getattr(td, 'interfaces_count', 0)):
+                ii = self.meta.interfaces[td.interfaces_start + k]
+                tup = self.il.types[ii] if 0 <= ii < len(self.il.types) else None
+                if tup is None:
+                    continue
+                rendered = self.il.type_name(tup)
+                if '<' not in rendered or '>' not in rendered:
+                    continue
+                rhead, rrest = rendered.split('<', 1)
+                if '.' in rhead:
+                    rns, _, rpath = rhead.rpartition('.')
+                else:
+                    rns, rpath = '', rhead
+                rpath = re.sub(r'_\d+$', '', rpath)
+                rdepth = rcommas = 0
+                rhas = False
+                for ch in ('<' + rrest)[1:]:
+                    if ch == '<':
+                        rdepth += 1
+                    elif ch == '>':
+                        if rdepth == 0:
+                            break
+                        rdepth -= 1
+                    elif ch == ',' and rdepth == 0:
+                        rcommas += 1
+                    elif ch not in ', ':
+                        rhas = True
+                if not rhas:
+                    continue
+                if rpath == qpath and (not qns or rns == qns) and rcommas + 1 == qargc:
+                    hits.append(rendered)
+            if len(hits) != 1:
+                return None
+            return hits[0]
+        except Exception:
+            return None
 
     def type_decl_line(self, td: TypeDef) -> List[str]:
         f = td.flags
@@ -182,44 +345,30 @@ class Emitter:
 
     # -- members ------------------------------------------------------------
     def method_sig(self, m: MethodDef, td: TypeDef) -> str:
-        parts = []
         f = m.flags
-        vis = METH_VIS.get((f >> 0) & 7, '')
-        if (f & 0x400) and (td.flags & 0x80):
-            pass
-        mods = vis
+        vis = METH_VIS.get(f & 7, '')
+        # CLI MethodAttributes: Final=0x20, Virtual=0x40,
+        # NewSlot=0x100, Abstract=0x400. TypeAttributes use different bits.
+        explicit = '.' in m.name
+        mods = '' if explicit else vis
         if m.is_static:
             mods += 'static '
-        if f & 0x400:
-            mods += 'virtual '
-            if f & 0x40:
-                pass
-            if (td.flags & 0x80) and (f & 0x400) and not (f & 0x40):
-                mods = mods.replace('virtual ', 'override ') if not (f & 0x100) else mods
-            if f & 0x40 and not (f & 0x80):
-                pass
-        if f & 0x400 and (f & 0x100):
-            mods += 'sealed '
-        if (td.flags & 0x80) and (f & 0x400) and not (f & 0x40):
-            mods = vis + ('static ' if m.is_static else '') + 'override '
-            if f & 0x100:
-                mods += 'sealed '
-        if (f & 0x400) and (td.flags & 0x80) == 0 and (f & 0x40) == 0:
-            mods = mods  # virtual new
-        # abstract
-        if (td.flags & 0x80) and (f & 0x400) and not (f & 0x40) and (f & 0x400):
-            if f & 0x400 and not (f & 0x40) and (td.flags & 0x80):
-                pass
-        if f & 0x400 and not (f & 0xFC) and False:
-            pass
-        # final cleanup for abstract
-        if (f & 0x400) and (f & 0x40) and (td.flags & 0x80):
-            mods = vis + 'abstract ' if m.flags & 0x400 else mods
         if td.flags & 0x20:
-            # interface members take no access/instance modifiers
-            # (default-interface-method bodies stay under LangVersion
-            # latest); statics keep theirs.
             mods = 'static ' if m.is_static else ''
+            if m.is_static and f & 0x400:
+                mods += 'abstract '
+        elif not explicit:
+            if f & 0x400:
+                mods += 'abstract '
+                if f & 0x40 and not f & 0x100:
+                    mods += 'override '
+            elif f & 0x40 and not m.is_static:
+                if not f & 0x100:
+                    mods += 'sealed override ' if f & 0x20 else 'override '
+                elif not f & 0x20:
+                    mods += 'virtual '
+                # Final+NewSlot implements an interface without exposing
+                # an overridable C# member; it is not a sealed override.
         rt = self.il.types[m.return_type] if 0 <= m.return_type < len(self.il.types) else None
         rtname = self.il.type_name(rt) if rt else 'void'
         if rtname == 'void':
@@ -228,7 +377,7 @@ class Emitter:
         # explicit-interface `IFoo.Bar`: escape the member component only.
         if '.' in name:
             head, _, tail = name.rpartition('.')
-            name = head + '.' + safe_ident(tail)
+            name = sanitize_qualifier(self._arity_qualifier(head, td)) + '.' + safe_ident(tail)
         else:
             name = safe_ident(name)
         gp = ''
@@ -250,6 +399,8 @@ class Emitter:
             dv = self.parse_default(*self.meta.param_default_values[m.parameter_start + k],
                                     param=True) if (m.parameter_start + k) in self.meta.param_default_values else None
             ps.append('%s%s %s%s' % (pmod, tn, safe_ident(p.name), (' = %s' % dv) if dv else ''))
+        if '*' in rtname or any('*' in s for s in ps):
+            mods += 'unsafe '
         return '%s%s %s%s(%s)' % (mods, rtname, name, gp, ', '.join(ps))
 
     _us_cache: Dict[int, bool] = {}
@@ -378,7 +529,9 @@ class Emitter:
             out.append('')
             if (td.flags & 0x2000) and not td.is_enum \
                     and not td.is_valuetype:
-                out.append(pre + '[Serializable]')
+                # qualified so the using tracker imports System; the file
+                # boundary strips it back when unambiguous.
+                out.append(pre + '[System.Serializable]')
             out.append('%s%s%sdelegate %s %s(%s);' % (
                 pre, vis, unsafe, rtname, nm, ', '.join(ps)))
             return True
@@ -396,7 +549,7 @@ class Emitter:
         if td.generic_container != -1:
             pass
         if (td.flags & 0x2000) and not td.is_enum and not td.is_valuetype:
-            out.append(pre + '[Serializable]')
+            out.append(pre + '[System.Serializable]')
         out.append(pre + hdr[0])
         out.append(pre + '{')
         if td.is_enum:
@@ -416,6 +569,7 @@ class Emitter:
                 continue
             fn = safe_ident(sanitize(f.name))
             fa = field_attrs(self.il, f)
+            ftname = self.il.type_name(ft)
             is_static_field = bool(fa & FA_STATIC)
             off_note = self.field_off_note(td, fi, is_static_field)
             bk = _BKF.match(f.name)
@@ -435,7 +589,7 @@ class Emitter:
                 dv = self.default_value_of(fi)
                 if dv is not None:
                     out.append(pre + '    %sconst %s %s = %s;' % (
-                        vis, self.il.type_name(ft), fn, dv))
+                        vis, ftname, fn, dv))
                     continue
                 # a literal we cannot decode: `const T X;` does not compile
                 is_static_field = True
@@ -445,14 +599,16 @@ class Emitter:
                 mods += 'static '
             if fa & FA_INITONLY:
                 mods += 'readonly '
+            if '*' in ftname:
+                mods += 'unsafe '
             # [SerializeField] only means something on a field Unity would
             # not serialize by itself, i.e. a non-public instance field
             attr = ''
             if not is_static_field and (fa & 7) != 6 \
                     and self._unity_serialized(td, f.name):
-                attr = '[SerializeField] '
+                attr = '[UnityEngine.SerializeField] '
             out.append(pre + '    %s%s%s %s;%s' % (
-                attr, mods, self.il.type_name(ft), fn, off_note))
+                attr, mods, ftname, fn, off_note))
         # properties: accessors render inside the property, not as methods
         accessor_idxs = set()
         for k in range(td.property_count):
@@ -541,11 +697,16 @@ class Emitter:
     def ctor_sig(self, m: MethodDef, td: TypeDef) -> str:
         """Instance/static constructor signature: public ClassName() /
         static ClassName() -- no return type, no .ctor name."""
-        cname = safe_ident(sanitize(re.sub(r'`\d+$', '', td.name)))
+        # Match the emitted type identifier, including its arity suffix.
+        # C# constructors omit <T>, but must retain Box_1 in Box_1<T>.
+        cname = safe_ident(sanitize(td.name))
         if m.name == '.cctor':
             return 'static %s()' % cname
         vis = METH_VIS.get((m.flags >> 0) & 7, 'public ')
-        return '%s%s(%s)' % (vis, cname, self.render_params(m))
+        params = self.render_params(m)
+        if '*' in params:
+            return '%sunsafe %s(%s)' % (vis, cname, params)
+        return '%s%s(%s)' % (vis, cname, params)
 
     def ctor_base_initializer(self, td: TypeDef) -> Optional[str]:
         """: base() when the parent is a real class (not object/valuetype)."""
@@ -633,7 +794,12 @@ class Emitter:
         setter = self._rel_method(td, pr[2])
         gbody = self._lift_body(getter, td) if getter else None
         sbody = self._lift_body(setter, td) if setter else None
-        pname = safe_ident(sanitize(csharp_type_name(self.meta.getstr(pr[0]))))
+        raw_pname = csharp_type_name(self.meta.getstr(pr[0]))
+        if '.' in raw_pname:
+            phead, _, ptail = raw_pname.rpartition('.')
+            pname = sanitize_qualifier(self._arity_qualifier(phead, td)) + '.' + safe_ident(ptail)
+        else:
+            pname = safe_ident(sanitize(raw_pname))
         ptype = self.prop_type(getter)
         acc = '' if ('.' in pname or (td.flags & 0x20)) else 'public '
         # staticness follows the accessors: a property is static only
@@ -643,13 +809,14 @@ class Emitter:
         present = [a for a in (getter, setter) if a is not None]
         if present and all(a.is_static for a in present):
             static = 'static '
+        unsafe = 'unsafe ' if '*' in ptype else ''
         off = (bk_offs or {}).get(self.meta.getstr(pr[0]), '')
         if gbody is None and sbody is None:
-            out.append('%s    %s%s%s %s { %s%s }%s' % (
-                pre, acc, static, ptype, pname,
+            out.append('%s    %s%s%s%s %s { %s%s }%s' % (
+                pre, acc, static, unsafe, ptype, pname,
                 'get; ' if getter else '', 'set; ' if setter else '', off))
             return
-        out.append('%s    %s%s%s %s%s' % (pre, acc, static, ptype, pname, off))
+        out.append('%s    %s%s%s%s %s%s' % (pre, acc, static, unsafe, ptype, pname, off))
         out.append('%s    {' % pre)
         for kind, body in (('get', gbody), ('set', sbody)):
             if (getter if kind == 'get' else setter) is None:
@@ -667,8 +834,7 @@ class Emitter:
     def emit_method(self, m: MethodDef, td: TypeDef, out: List[str], pre: str):
         is_ctor = m.name in ('.ctor', '.cctor')
         sig = self.ctor_sig(m, td) if is_ctor else self.method_sig(m, td)
-        abstract = (td.flags & 0x80) and (m.flags & 0x400) and not (m.flags & 0x40) \
-            and not (td.flags & 0x20)
+        abstract = bool(m.flags & 0x400) and not is_ctor
         body = self._lift_body(m, td, abstract)
         ctor_init = None
         if is_ctor:

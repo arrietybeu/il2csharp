@@ -109,7 +109,15 @@ def strip_namespaces(lines: List[str], uses: set) -> List[str]:
                 chain = m.group(0)
                 for u in order:
                     if chain.startswith(u + '.'):
-                        return chain[len(u) + 1:]
+                        rest = chain[len(u) + 1:]
+                        # Self-shadow: the stripped prefix ends where the
+                        # remainder begins (`HID.HIDDeviceDescriptor` from
+                        # `...HID.HID...`). Shortening rebinds the head to
+                        # the namespace instead of the nested owner, so the
+                        # full chain stays.
+                        if rest.split('.')[0] == u.split('.')[-1]:
+                            return chain
+                        return rest
                 return chain
 
             out.append(_NS_CHAIN_RX.sub(rep, code))

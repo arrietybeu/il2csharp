@@ -2798,6 +2798,274 @@ class _HighLevelMixin:
             out.append(ind + cur_s if cur_s != s else ln)
         return out
 
+    _RECV_CALL_RX = re.compile(r'^([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(')
+    _RECV_STR_RX = re.compile(r'^"(?:[^"\\]|\\.)*"$')
+    _RECV_INT_RX = re.compile(r"^(\d+)(u|l|ul|lu)?$", re.IGNORECASE)
+    _RECV_FLOAT_RX = re.compile(r"^(\d+\.\d*|\.\d+|\d+)(e[+-]?\d+)?(f|d)?$", re.IGNORECASE)
+    # literal kind -> parameter base names with an implicit conversion.
+    # Deliberately narrow: floating suffixes, decimals, chars beyond the
+    # plain spellings, and null decline (overload resolution would need
+    # better-conversion ranking, not just applicability).
+    _RECV_NUM_OK = {
+        "int-lit": ("sbyte", "byte", "short", "ushort", "int", "uint",
+                    "long", "ulong", "float", "double", "object"),
+        "uint-lit": ("byte", "ushort", "uint", "ulong", "float", "double",
+                     "object"),
+        "long-lit": ("long", "ulong", "float", "double", "object"),
+        "float-lit": ("float", "double", "object"),
+        "double-lit": ("double", "object"),
+        "string": ("string", "object"),
+        "bool": ("bool", "object"),
+        "char-lit": ("char", "ushort", "int", "uint", "long", "ulong",
+                     "float", "double", "object"),
+    }
+
+    @classmethod
+    def _recv_lit_kind(cls, arg):
+        a = (arg or "").strip()
+        if cls._RECV_STR_RX.match(a):
+            return "string"
+        if a in ("true", "false"):
+            return "bool"
+        m = cls._RECV_INT_RX.match(a)
+        if m:
+            suf = (m.group(2) or "").lower()
+            try:
+                v = int(m.group(1))
+            except Exception:
+                return None
+            if suf in ("u", "ul", "lu"):
+                return "uint-lit" if v <= 2**32 - 1 else None
+            if suf == "l":
+                return "long-lit" if v <= 2**63 - 1 else None
+            if suf:
+                return None
+            if v <= 2**31 - 1:
+                return "int-lit"
+            return "uint-lit" if v <= 2**32 - 1 else "long-lit"
+        m = cls._RECV_FLOAT_RX.match(a)
+        if m:
+            suf = (m.group(3) or "").lower()
+            if suf == "f":
+                return "float-lit"
+            if suf in ("", "d"):
+                return "double-lit"
+            return None
+        if len(a) == 3 and a[0] == "'" and a[2] == "'":
+            return "char-lit"
+        return None
+
+    @staticmethod
+    def _recv_split_args(s):
+        parts, depth, cur, instr, q = [], 0, "", False, ""
+        for ch in s:
+            if instr:
+                cur += ch
+                if ch == q:
+                    instr = False
+                continue
+            if ch in "\"'":
+                instr, q, cur = True, ch, cur + ch
+            elif ch in "(<[":
+                depth += 1
+                cur += ch
+            elif ch in ")>]":
+                depth -= 1
+                cur += ch
+            elif ch == "," and depth == 0:
+                parts.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        parts.append(cur)
+        return parts
+
+    def _recv_owner_index(self):
+        """(name, argc) -> method rows for instance, non-generic,
+        non-accessor methods. Built once per decompiler; metadata does not
+        change during a build."""
+        idx = self.__dict__.get("_recv_owner_index_cache")
+        if idx is not None:
+            return idx
+        idx = {}
+        try:
+            for mi, m in enumerate(self.L.meta.methods):
+                if m.is_static or m.generic_container != -1:
+                    continue
+                nm = m.name or ""
+                if "." in nm or nm.startswith(("get_", "set_", "add_", "remove_")) \
+                        or nm in (".ctor", ".cctor"):
+                    continue
+                try:
+                    ps = list(self.L.meta.method_params(m))
+                except Exception:
+                    continue
+                idx.setdefault((nm, len(ps)), []).append(mi)
+        except Exception:
+            pass
+        self.__dict__["_recv_owner_index_cache"] = idx
+        return idx
+
+    def _recv_param_ok(self, pt, kind):
+        try:
+            if ((pt[1] >> 29) & 1) or kind not in self._RECV_NUM_OK:
+                return False
+            tn = self.L.il.type_name(pt)
+            base = tn.split(".")[-1].split("<")[0]
+            return base in self._RECV_NUM_OK[kind]
+        except Exception:
+            return False
+
+    def _recv_has_default(self, m, k):
+        try:
+            return (m.parameter_start + k) in self.L.meta.param_default_values
+        except Exception:
+            return False
+
+    def _recv_applicable(self, m, kinds):
+        """True when a normal-form call with the given literal kinds can bind
+        to m: exact arity by conversion, or fewer args with provable defaults
+        for the trailing parameters (a trailing SZARRAY could also take
+        `params` expansion, which this honest pass does not model, so any
+        larger-arity shape without full defaults declines)."""
+        try:
+            ps = list(self.L.meta.method_params(m))
+        except Exception:
+            return False
+        if len(kinds) > len(ps):
+            return False
+        for p, k in zip(ps, kinds):
+            pt = self.L.il.types[p.type] if 0 <= p.type < len(self.L.il.types) else None
+            if pt is None or not self._recv_param_ok(pt, k):
+                return False
+        for k in range(len(kinds), len(ps)):
+            if not self._recv_has_default(m, k):
+                return False
+        return True
+
+    def _unique_receiver_owner(self, name, kinds):
+        """Declaring-type spelling when exactly one metadata method matches
+        (name, literal applicability); else None. Cached per decompiler."""
+        try:
+            cache = self.__dict__.setdefault("_recv_owner_cache", {})
+            key = (name, tuple(kinds))
+            if key in cache:
+                return cache[key]
+            owners = set()
+            for mi in self._recv_owner_index().get((name, len(kinds)), []):
+                m = self.L.meta.methods[mi]
+                if not self._recv_applicable(m, kinds):
+                    continue
+                td = self.L.meta.typedefs[m.declaring]
+                owners.add(self._declaring_type_spelling(td))
+            res = next(iter(owners)) if len(owners) == 1 else None
+            if res is not None and (not self._stub_type_ok(res) or self._OPEN_PARAM_RX.search(res)):
+                res = None
+            cache[key] = res
+            return res
+        except Exception:
+            return None
+
+    def _declaring_type_spelling(self, td):
+        te = 0x11 if getattr(td, "is_valuetype", False) else 0x12
+        return self.L.il.type_name((td.index, (te << 16)))
+
+    def _stub_receiver_types(self, lines):
+        """temp -> proven owner type for `object X = sub_(...)` decls whose
+        only other mention is one bare `X.Method(literals)` receiver call
+        resolving to exactly one metadata owner. Never raises."""
+        try:
+            return self._stub_receiver_types_inner(lines)
+        except Exception:
+            return {}
+
+    def _stub_receiver_types_inner(self, lines):
+        masked_all = [self._stub_mask_line(l) for l in lines]
+        decls = {}
+        for i, l in enumerate(lines):
+            dm = self._STUB_DECL_RX.match(l.strip())
+            if dm is None or dm.group(1).strip() != "object":
+                continue
+            rhs = dm.group(3)
+            if "sub_" not in self._stub_mask_line(rhs):
+                continue
+            decls.setdefault(dm.group(2), []).append(i)
+        out = {}
+        for nm, idxs in decls.items():
+            if len(idxs) != 1:
+                continue
+            wpat = (r"[&]\s*NM\b|\bref\s+NM\b|\bout\s+NM\b"
+                    r"|\bNM\s*(?:\+\+|--|[+\-*/%%&|^]?=(?![=>]))"
+                    r"|(?:\+\+|--)NM\b").replace("NM", re.escape(nm))
+            bad = False
+            for i, mk in enumerate(masked_all):
+                if i == idxs[0]:
+                    continue
+                if re.search(wpat, mk):
+                    bad = True
+                    break
+            if bad:
+                continue
+            uses = []
+            for i, mk in enumerate(masked_all):
+                if i == idxs[0]:
+                    continue
+                for rm in re.finditer(r"(?<![\w.])([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(", mk):
+                    if rm.group(1) == nm:
+                        uses.append((i, rm.group(2), rm.end()))
+            if len(uses) != 1:
+                continue
+            _, mname, epos = uses[0]
+            mk = masked_all[uses[0][0]]
+            depth = 0
+            argtext = ""
+            # epos sits just past the call's open paren, so the first
+            # depth-0 close paren ends the argument span.
+            for ch in mk[epos:]:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                argtext += ch
+            raw = lines[uses[0][0]][epos:epos + len(argtext)]
+            # emptiness is judged on raw text: masking blanks literals.
+            args = self._recv_split_args(raw) if raw.strip() else []
+            kinds = [self._recv_lit_kind(a) for a in args]
+            if any(k is None for k in kinds):
+                continue
+            owner = self._unique_receiver_owner(mname, kinds)
+            if owner is not None:
+                out[nm] = owner
+        return out
+
+    def _stub_receiver_decls(self, lines):
+        """Retype proven `object X = sub_(...)` decls so the existing
+        caller-proven cast machinery wraps their calls. Never raises."""
+        try:
+            rmap = self._stub_receiver_types(lines)
+        except Exception:
+            return lines
+        if not rmap:
+            return lines
+        out = []
+        for l in lines:
+            dm = self._STUB_DECL_RX.match(l.strip())
+            if dm is not None and dm.group(1).strip() == "object" \
+                    and dm.group(2) in rmap:
+                ind = l[:len(l) - len(l.lstrip())]
+                mk = self._stub_mask_line(l)
+                semi = mk.rfind(";")
+                if semi < 0:
+                    out.append(l)
+                    continue
+                core = l[:semi].rstrip()
+                out.append("%s%s;%s" % (ind, rmap[dm.group(2)] + core[len("object"):], l[semi + 1:]))
+            else:
+                out.append(l)
+        return out
+
     def _shared_stub_casts(self, lines, m):
         """Caller-proven `(T)` casts over unresolved `sub_X` calls. -- fix 104
 
@@ -2813,6 +3081,10 @@ class _HighLevelMixin:
         `sub_<hex>` names (obfuscated binaries) never stub or cast.
         Never raises: one bad line keeps itself.
         """
+        try:
+            lines = self._stub_receiver_decls(lines)
+        except Exception:
+            pass
         try:
             real = self._stub_real_names()
         except Exception:

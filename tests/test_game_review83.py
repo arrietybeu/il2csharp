@@ -28,10 +28,10 @@ def test_representative_shared_addresses_have_exact_consensus(game_decompiler):
 def test_shared_boolean_result_becomes_a_boolean_condition(game_decompiler):
     text = body(game_decompiler, 23560)
     call = 'sub_181af7520/*shared body, 2 candidates*/'
-    # fix 104: whole conditions prove bool, so the shared calls carry
-    # caller-proven casts; the boolean-condition proof is unchanged.
-    assert f'if ((bool){call}(this.animName, "walk"))' in text
-    assert f'else if (!((bool){call}(this.animName, "run")))' in text
+    # Fix 110 proves unanimous string equality for this shared address.
+    # Keep checking boolean conditions against the current exact operator.
+    assert 'if (this.animName == "walk")' in text
+    assert 'else if (!(this.animName == "run"))' in text
     assert f'object obj8 = {call}' not in text
 
 

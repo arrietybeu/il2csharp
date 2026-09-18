@@ -7,7 +7,7 @@ by the move. All repo paths below are root-relative.
 
 ## Start here (live)
 
-- `docs/todo.md` — current work (fix 97), next priorities, current
+- `docs/todo.md` — current work (post-122 residue), validation status, next priorities, current
   replacement record.
 - `docs/reference.md` — working-loop rules (§4), baselines / promotion /
   known artifacts (§6), gotchas (§7), next-up families (§2), Batch 19

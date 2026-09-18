@@ -24,6 +24,40 @@ def safe_ident(n: str) -> str:
     return s if s not in CSHARP_KEYWORDS else s + '_'
 
 
+def sanitize_qualifier(s: str) -> str:
+    """sanitize() for explicit-interface qualifiers (`A.B.IFoo<T, U[]>`):
+    generic structure (``<>[],``) survives while every identifier segment
+    is sanitized. Plain sanitize() would eat the commas and brackets
+    (`KeyValuePair<TKey, TValue>` -> `KeyValuePair<TKey__TValue>`, `T[]`
+    -> `T__`), which no longer resolve to the implemented interface."""
+    out = []
+    cur = []
+    def flush():
+        if cur:
+            out.append(sanitize(''.join(cur)))
+            del cur[:]
+    skip_spaces = False
+    for ch in s:
+        if ch == ' ':
+            if skip_spaces:
+                continue
+            flush()
+            skip_spaces = True
+            continue
+        skip_spaces = False
+        if ch == ',':
+            flush()
+            out.append(', ')
+            skip_spaces = True
+        elif ch in '<>()[].*?&':
+            flush()
+            out.append(ch)
+        else:
+            cur.append(ch)
+    flush()
+    return ''.join(out)
+
+
 def _repr_special_float(v, ty):
     """inf/nan have no literal form in C# — repr() would emit `inf.0d`/`nanf`,
     neither of which lexes. float/double expose them as const fields."""

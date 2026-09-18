@@ -97,11 +97,13 @@ def csharp_type_name(full: str) -> str:
     key = full.strip()
     if key in _SYS_CSHARP:
         return full[:len(full) - len(key)] + _SYS_CSHARP[key]
-    # generic arity (`List`1) is source noise in C# spellings; `@` is a
-    # verbatim-identifier PREFIX in C# and illegal mid-token, so only a
-    # segment-leading one survives (`ReaderWriter@Fusion_NetworkString`
+    # generic arity (`List`1) renders as the `_1` suffix everywhere, so
+    # references spell the same identifier the declaration does
+    # (`EqualityComparer_1<byte>` matches `class EqualityComparer_1<T>`);
+    # `@` is a verbatim-identifier PREFIX in C# and illegal mid-token, so
+    # only a segment-leading one survives (`ReaderWriter@Fusion_NetworkString`
     # is a codegen name, not `@class`)
-    out = _BACKTICK_RX.sub('', full).replace('+', '.').replace('/', '.')
+    out = _BACKTICK_RX.sub(lambda m: '_' + m.group(0)[1:], full).replace('+', '.').replace('/', '.')
     if '@' in out:
         out = _MIDAT_RX.sub('_', out)
     return out

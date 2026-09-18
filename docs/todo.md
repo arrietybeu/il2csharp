@@ -59,7 +59,318 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work — fix 113 (legal type declarations, gated 2026-09-18)
+## Current work: post-promotion residue (fix 122 promoted, see below)
+
+`final_out/` holds the fix-122 tree (probe steady at 10,794). Open lanes:
+collision-aware using/strip (short `Event` binds `UnityEngine.Event` over
+`InputForUI.Event` — CS0426 +1; plus the fix-119 `Object` ambiguity);
+accessibility honesty (CS0053 +6); the masked body-pointer-local layer
+(needs expression typing first); missing types (CS0246: 43); project wiring.
+The complete game is not yet compilable.
+
+Comparison temps (`obj227 < 6`) are CLOSED with no code change: a full
+`.pdata`-extent native scan of `InventoryManager.Update` finds no compare,
+test, or arithmetic instruction with immediate 6 anywhere — the literal is
+decompiler-synthesized (jump-table/switch-bound recovery), so no width/sign
+evidence exists to thread and any numeric cast would invent semantics.
+Where a real `cmp reg, nonzero-imm` executes, the existing chain (CMP hint
+→ rename classifier → `_decl_type_of` → fix-104 cast) already emits exactly
+the desired shape — same VA, other branch: `int num11 =
+(int)sub_180001da0(...); if (num11 < 6)`. The remaining work is provenance
+for synthesized switch-bound literals, not temp typing.
+
+## Previous work — fix 122 (receiver-proven stub temps; gated + promoted 2026-09-17)
+
+The user's specimen (`object obj228 = sub_...; obj228.SetTrigger("Reload")`)
+opened the shared-body/`objN` lane. Triage: two of its three addresses are
+unregistered natives (zero candidates — call identity unknowable, only
+use-types recoverable); the third is StartCoroutine/StartCoroutine_Auto
+(already cast-covered). New rule (`_stub_receiver_decls`, feeding the
+existing fix-104 cast machinery): an `object X = sub_(...)` declaration
+whose only other mention is one bare `X.Method(literals)` call, resolving
+by literal-applicability to exactly one instance non-generic metadata
+method (exact arity, or provable defaults; params-array expansion honestly
+unmodeled so larger arities without full defaults decline), is retyped to
+the owner with a caller-proven cast. Writes, address-takes, ref/out/in,
+redeclarations, non-literal args, and accessor-shaped names all decline.
+Census: 116 unique-owner sites (game types: StoreManager 30, JSONAccess 7…),
+380 non-literal, 195 ambiguous. Ground truth: `UnityEngine.Animator
+animator2 = (UnityEngine.Animator)sub_180001d80(...);
+animator2.SetTrigger("Reload");` — and the semantic renamer adopts the
+proven type for temp names. Gates: **752 tests** (10 new in
+`tests/test_review122_receiver_casts.py`); strict rebuild 11,181 files /
+113,938 bodies / 0 failures (`work/review122_out`); parser 0 bad files;
+direct sweep 116,178 methods / 0 crashes / 0 structural changes vs fix 121
+(49 changed bodies, every diff a retype+cast+rename audited file by file);
+probe **10,794 → 10,794**: the fix is probe-invisible today because
+error-typed/unbound upstream values mask downstream binding (verified: the
+fixed shape errors standalone, the region is silent in-tree), so it removes
+future CS1061s rather than present ones — zero cost either way. Reports:
+`validation_reports/review122_*`; 64 goldens untouched. Promoted 2026-09-17:
+`final_out/` now holds `work/review122_out` (11,274 files, aggregate
+`3a513e9a…13b49de`, 0 mismatches; the fix-121 tree is kept at
+`bckups/final_out_fix121`). Post-promotion parse recheck 0 bad files.
+
+## Previous work — fixes 120 and 121 (nested owner paths + mirror completion; gated + promoted 2026-09-17)
+
+CS0246 triage crowned the nested-qualification gap: the typedef `declaring`
+field is -1 top-level and out of range for all 5,719 nested rows, so
+`typedef_full`'s owner walk never fired and nested references rendered bare
+(`CallbackContext` for `InputAction.CallbackContext`). Owners now resolve
+through the forward `nested_types` table inverted once per instance
+(`_nested_owner`; top-level `declaring == -1` consumers untouched), with the
+outermost namespace on the path. Generic owners distribute instantiation
+args outer-first (`List_1<T>.Enumerator`, `Dictionary_2<TKey,
+TValue>.KeyCollection`). Nested containers holding mirrored owner params
+plus own trailing ones (290 mirror vs 184 independent by census) declare
+only the own suffix (`DispatchDelegate(T)` exactly as Valve wrote it;
+`ConstraintComparer<K>`), because same-named independence is inexpressible
+in C# — proven by names+counts, declined otherwise. Along the way: blob
+`__StaticArrayInitTypeSize=`/`$ArrayType=` rewrites match the terminal
+segment (48 parse-failing files), reference spellings sanitize per segment
+(the guid-braced `PrivateImplementationDetails` owner), and strip keeps
+self-shadowed full chains (`HID.HID...`). Gates: **742 tests** (13 in
+`tests/test_review120_nested_paths.py` + qualifier/sanitize cases);
+strict rebuild 11,181 files / 113,938 bodies / 0 failures
+(`work/review121_out`); parser 0 bad files; direct sweep 116,178 methods /
+0 crashes / 0 structural changes vs fix 119 (8,081 spelling-only bodies);
+probe **13,352 → 10,794 (−2,558)**: CS0246 2,423→43, CS0540 38→0, CS0308
+43→4, CS0305 13→4, plus drops across CS0111/CS0146/CS0523/CS0534/CS0535 and
+CS0118→0, against CS0053 +6 (accessibility unmasking, characterized), one
+documented CS0426 collision cost and CS0234-class silence above. The 6
+golden diffs and 2 assertion updates were each reviewed (owner-path
+spellings only) before regen. Reports: `validation_reports/review121_*`.
+Promoted 2026-09-17: `final_out/` now holds `work/review121_out` (11,274
+files, aggregate `b84d8e05…c94253`, 0 mismatches; the fix-119 tree is kept
+at `bckups/final_out_fix119`). Post-promotion parse recheck 0 bad files.
+(Fix 120 was gated through sweep/tests but held unpromoted when its probe
+showed the CS0305 mirror spike; fix 121 completes it — same two-stage
+rhythm as 117/118.)
+
+## Previous work — fix 119 (using-feeding qualified spellings; gated + promoted 2026-09-17)
+
+CS0246 triage crowned the using-generation gap: `IntPtr` rendered bare
+because `PRIM` carried no namespace (1,076 sites), and `[Serializable]` /
+`[SerializeField]` never named one (338/32 sites each). All three now render
+qualified pre-strip (`System.IntPtr` / `System.UIntPtr` /
+`System.TypedReference`; `[System.Serializable]`; `[UnityEngine.
+SerializeField]`), so the tracker imports the namespace and the boundary
+strips back to short form — the partial-tree diff is exactly added `using`
+lines plus blank separators. Mechanism audit: `type_name` is also the
+body-spelling path, so 2,148 lifted bodies changed; tree-wide audit shows
+11,167 files identifier-identical, the rest renames plus 14 reflow files of
+the known temp-materialization class (traced equivalent); the `_bind` /
+`_kill_stale` text-identity gates that select those cascades are
+spelling-agnostic within a run. Gates: **727 tests** (5 new in
+`tests/test_review119_usings.py`); strict rebuild 11,181 files / 113,938
+bodies / 0 failures (`work/review119_out`); parser 0 bad files; direct
+sweep 116,178 methods / 0 crashes / 0 structural changes vs fix 118; probe
+**15,183 → 13,352 (−1,831)**: CS0246 −1,823, CS0535 −9, no other moves
+except the single documented CS0104 ambiguity cost above. Reports:
+`validation_reports/review119_*`; 64 goldens untouched. Promoted 2026-09-17:
+`final_out/` now holds `work/review119_out` (11,274 files, aggregate
+`5855ed65…baf5d`, 0 mismatches; the fix-118 tree is kept at
+`bckups/final_out_fix118`). Post-promotion parse recheck 0 bad files.
+
+## Previous work — fix 118 (explicit-qualifier completion; gated + promoted 2026-09-17)
+
+Fix 117's new `_N` references unmasked two explicit-member gaps. First, the
+qualifier proof trusted arity-less name strings while the true interface is
+the declaring type's tuple: members spelled `IObserver_1<InputRemoting.
+Message>` against base `IObserver_1<Message>` (`_iface_qualifier`, unique
+tuple match or decline). Second, `sanitize()` ate generic structure inside
+qualifiers (`KeyValuePair<TKey, TValue>` → `KeyValuePair<TKey__TValue>`,
+`T[]` → `T__`): new structure-aware `sanitize_qualifier` (`il2cpp/names.py`)
+sanitizes identifier segments only. Gates: **722 tests** (12 in
+`tests/test_review117_arity_spellings.py` — 7 arity + 5 qualifier/sanitize);
+strict rebuild 11,181 files / 113,938 bodies / 0 failures
+(`work/review118_out`); parser 0 bad files; direct sweep 116,178 methods /
+0 crashes / 0 structural changes vs fix 117; probe **15,677 → 15,183
+(−307), zero increases**: CS9334 30→0, CS9333→0, CS0540 124→38, plus
+knock-on drops. The 38 residual CS0540 are the nested-shadowing family
+above, characterized for the next fix. Reports:
+`validation_reports/review118_*`; 64 goldens untouched (0 changed bodies).
+Promoted 2026-09-17: `final_out/` now holds `work/review118_out` (11,274
+files, aggregate `bede44dc…74d418`, 0 mismatches; the fix-117 tree is kept
+at `bckups/final_out_fix117`). Post-promotion parse recheck 0 bad files.
+
+## Previous work — fix 117 (generic `_N` reference spellings; gated + promoted 2026-09-17)
+
+CS0115 triage (266 sites) root-caused a declaration/reference convention
+split, not wrong override keywords: type declarations spell
+`EqualityComparer_1<T>` (fix-113 arity convention) while every reference
+spelled `EqualityComparer<byte>`, so derived overrides bound against the
+*reference-assembly* base (which has no `IndexOf`) instead of the local one.
+`csharp_type_name` (`il2cpp/common.py`) now renders `` `N `` as `_N`, so
+references spell the declared identifier; explicit interface qualifiers
+(which come from arity-less metadata name strings) recover the suffix
+through a (namespace, path, top-level arg-count) typedef proof
+(`_arity_qualifier` in `il2cpp/emitter.py`, wired into `method_sig` and
+`emit_property`; declines on unknown/ambiguous shapes). Audit surface: 2
+`split('<')[0]` uses (both against non-generic names), one `_BACKTICK_RX`
+use-site, 0 methods with backticks, 779 generic typedefs.
+
+Provenance (full old-vs-new tree audit, 3,477 changed files): 45,394
+arity-insertion tokens; renames from the arity-embedding local renamer
+(`list1`→`list11`, `dictionary1`→`dictionary21`; decl↔use consistent, zero
+pre-existing collision targets); 18 reflow files (±1–6 lines) of one class —
+a `static` generic read materialized into a temp (`object objN =
+Span_1<byte>.Slice`) plus renumber cascade, traced semantically identical in
+`Convert.TryFromBase64Chars` by old-vs-new direct re-lift; one loop flip
+(`while (c)` → header-replay `while (true)`) via the documented `h.stmts`
+rule, sound by construction. The 6 golden diffs were each reviewed
+(spelling + consistent renames, decl-uniqueness unchanged) before regen;
+one stale `Optional<string>` assertion updated to `Optional_1<string>`.
+
+Gates: **717 tests** (7 new in
+`tests/test_review117_arity_spellings.py`); strict rebuild 11,181 files /
+113,938 bodies / 0 failures (`work/review117_out`); parser 0 bad files;
+direct sweep 116,178 methods / 0 crashes / 0 structural changes vs fix 116
+(7,275 changed bodies, into_block identical); probe **24,078 → 15,677
+(−8,401)**: CS0115 266→0, CS0246 10,337→4,358, CS0535 1,171→191, CS0308
+646→49, CS0737 −276, CS0738 259→50, CS0452/CS0453/CS0509/CS8345 →0, with
+unmasked CS0540 +4 / CS9334 +3 and single-digit noise elsewhere; CS0501
+steady. The mid-gate probe without the qualifier fix read 16,966 (CS0540
++512/CS9334 +148), which scoped exactly the qualifier completion above.
+Reports: `validation_reports/review117_*`; goldens regenerated (6 reviewed
+bodies, 58 untouched, fingerprints refreshed). Promoted 2026-09-17:
+`final_out/` now holds `work/review117_out` (11,274 files, aggregate
+`1bd83c61…a46467`, 0 mismatches; the fix-116 tree is kept at
+`bckups/final_out_fix116`). Post-promotion parse recheck 0 bad files.
+
+## Previous work — fix 116 (unsafe fields/properties, CS0214 zero; gated + promoted 2026-09-17)
+
+The 517 CS0214 residue classified declaration-only: 465 pointer fields, 52
+pointer properties, 0 body lines (the 2 apparent locals are
+`[SerializeField]`-prefixed fields). `emit_type` field mods and both
+`emit_property` paths now append `unsafe` on `'*'` spellings
+(`il2cpp/emitter.py`); all shapes Roslyn-probed, including interface and
+explicit-impl properties. Gates: **710 tests** (7 new in
+`tests/test_review116_unsafe_members.py`); strict rebuild 11,181 files /
+113,938 bodies / 0 failures (`work/review116_out`); parser 0 bad files;
+direct sweep 116,178 methods / 0 crashes / 0 structural changes vs fix 115;
+probe **24,595 → 24,078, the only delta CS0214 517 → 0**. Body-level
+pointer locals (e.g. `NetworkBehaviour` 596) stay silent only through error
+cascading — a standalone repro proves the declaration CS0214 masks them, so
+a future typing fix will unmask a method-level-`unsafe` lane; nothing to do
+until then. Reports: `validation_reports/review116_*`; 64 goldens untouched.
+Promoted 2026-09-17: `final_out/` now holds `work/review116_out` (11,274
+files, aggregate `8e93363d…9ff462b9`, 0 mismatches; the fix-115 tree is kept
+at `bckups/final_out_fix115`). Post-promotion parse recheck 0 bad files.
+(Note: the fix-116 promotion run briefly overwrote
+`review115_promotion_verification.json` with a stale comparison; restored
+from the verified fix-115 values, noted in the file.)
+
+## Previous work — fixes 114 and 115 (dispatch, ctors, unsafe; gated + promoted 2026-09-17)
+
+Corrected CLI MethodAttributes: Virtual=0x40, Final=0x20, NewSlot=0x100,
+Abstract=0x400. The old emitter confused these with each other. Methods now
+preserve virtual slots, overrides, sealed overrides and abstract overrides.
+Final new-slot interface implementations remain ordinary methods; explicit
+interface implementations omit access/virtual modifiers. Abstract methods
+consistently have no body, even when metadata carries an address. Static
+abstract interface members retain their modifiers.
+
+Generic constructors now match their emitted type identifier: Box_1<T> has
+Box_1() and static Box_1(), rather than Box(). The metadata census finds
+21,410 changed method signatures and 858 changed constructor signatures.
+Evidence: validation_reports/review114_declaration_census.json.
+
+Validation: **698 tests pass**, including all 118 fixture tests and a real
+Roslyn compilation of generated dispatch/constructor declarations. The Review 83
+shared-boolean assertion was stale since fix 110; the prior candidate already
+emits proven string equality, and the test now checks those exact conditions.
+The 64 frozen method bodies remain unchanged. The strict rebuild was stopped at
+the requested wrap-up point after **97,291 bodies with 0 failures**; its partial
+candidate is `work/review114_out` and its log is
+`validation_reports/review114_build.log`. That rebuild never finished, so
+fix 114 alone claims no whole-tree result — the Fix 115 gate below rebuilds
+the same source completely and supersedes it.
+
+New tools/compile_corpus.py invokes installed Roslyn directly, records a source
+inventory digest and diagnostic counts, and saves compressed complete logs.
+It merges shared stubs only in temporary storage. This is a single diagnostic
+assembly, not verification of project wiring or behavior, and includes some
+cross-assembly collisions. Its fix-113 baseline is **34,262 errors**, counted
+once per diagnostic. Compare only with the same probe; older build-log totals
+can repeat diagnostics and use different compiler references. Its largest
+measured groups are missing types/usings (CS0246: 10,337), concrete declarations
+without bodies (CS0501: 7,558), pointer declarations outside unsafe contexts
+(CS0214: 3,627), and unimplemented abstract/interface members (CS0534: 3,527).
+
+Follow-up (partial, ungated): pointer-signature methods and constructors now
+carry `unsafe` (`method_sig`/`ctor_sig` in `il2cpp/emitter.py`, same `'*'`
+spelling rule `emit_delegate` already used). Metadata census: 2,564
+pointer-signature methods and 82 constructors; ground truth `NodeSwitch`
+`@Invoker`s render `protected static unsafe void ...(..., SimulationMessage*
+message)`. Partial evidence only: 27 targeted tests (5 new) plus an 87-test
+portable subset pass, single-method re-lift of mi 23560 is unchanged, and a
+single-file Roslyn probe compiles the new shapes including explicit-interface
+`unsafe void IFoo.Bar(byte* p)`. Superseded the same day by the Fix 115 full
+gate below (strict rebuild, sweep, probe); pointer fields/properties became
+fix 116 above.
+
+CS0501 triage (metadata-only, partial): 9,397 concrete address-less methods —
+204 runtime-impl, all delegate members already suppressed through
+`emit_delegate`; 8,645 plain managed (iflags 0), including whole
+metadata-only types such as `DictionaryLookupTable`2` (all 11 methods
+address-less); 520 aggressive-inlining, 28 no-inlining. No blanket `throw`,
+`abstract`, `extern`, or `partial` rule is sound without per-method ground
+truth (stripped/uninstantiated generics versus real misses), so no code
+changed.
+
+Unsafe follow-up, Assembly-CSharp gate (partial, not a full rebuild):
+`--only Assembly-CSharp` strict rebuild into `work/partial_unsafe_acs_out`
+(490 types, 6,610 bodies, 0 failed, ~67s; `PYTHONHASHSEED=0` — the one
+non-unsafe diff in the unseeded run was hash-order noise, byte-identical on
+repro). Old-vs-new diff over `work/review114_out/Assembly-CSharp`: 87 files
+changed, 518 added lines, every one an `unsafe` insertion, 0 files with any
+other change. Single-assembly Roslyn probe
+(`validation_reports/partial_unsafe_acs_compile.json`): ACS-scope CS0214
+falls 518 → 0 (exactly the 518 insertions) and CS0106 199 → 0 (fix-114
+explicit-impl rule); CS0501 holds 35 → 35, untouched by design. The 9,196
+probe total is dominated by CS0246 scope artifact (8,937: cross-assembly
+references are absent from a one-assembly tree), not a regression.
+
+CS0501 tree-wide census (read-only over `work/review113_out`, 11,181 files):
+8,926 bare declaration lines = 755 legal `abstract` + ~615 legal `delegate`
++ 3,647 concrete open-generic definitions with no compiled instantiation
+(ACS scope: all 35 probe sites are this shape — `Shuffle<T>`,
+`ConvertNestedList<T>`, `GetModule<T>`, display-class ctors) + ~3,900
+closed concrete without bodies (metadata-only/editor-stripped types such as
+`SerializedDictionary` ctors). Concrete-bare minus delegates closes against
+the 7,558 diagnostics within noise. No body exists in the binary for any of
+these, so no rendering change is sound; the bare signature stays as the
+honest marker.
+
+## Fix 115 gate and promotion (2026-09-17, full gate lifted per user call)
+
+Fix 115 is the unsafe-signature follow-up above, built on the fix-114
+source. Gates: **703 tests** (698 + 5 new unsafe-signature cases, incl. 118
+game fixture tests and the 64 goldens, all live); strict rebuild 11,181
+files / 113,938 bodies / 0 failures or fallbacks (`work/review115_out`);
+parser 0 bad files; direct sweep 116,178 methods / 0 crashes / 0 structural
+changes vs fix 113 (`validation_reports/review115_vs113.json`: 0 changed
+bodies — the combined fix-114 + fix-115 delta is declaration-only);
+ Roslyn probe **34,262 → 24,595 errors** (−9,667), fully attributed —
+CS0106 2,402 → 0, CS0533 226 → 0, CS0534 3,527 → 3, CS1520 797 → 0,
+CS0214 3,627 → 517 (residue: pointer fields and body locals only, sampled),
+unmasking CS0115 266 / CS0249 121 / CS0507 4; CS0246/CS0501/CS0535/CS0737
+unchanged. Reports: `validation_reports/review115_{build.log,sweep.json,
+vs113.json,parse.json,compile.json,tests.log}`; built tree
+`work/review115_out`. The 64 goldens are untouched (0 changed bodies, no
+regen needed). Promoted 2026-09-17: `final_out/` now holds
+`work/review115_out` (11,274 files — 74 more than the fix-99 tree, exactly
+the fix-104 stub files minus the 3 fix-113 orphans; candidate and promoted
+aggregate sha256 both
+`2379110f106b51f6958d0eb0a3f0c7bdc1a6b0de2a0490ba5612d0e03e9a07a4`, 0
+mismatches; the fix-99 tree is kept at `bckups/final_out_fix99`).
+Promotion record: `validation_reports/review115_promotion_verification.json`;
+post-promotion parse recheck
+`validation_reports/review115_recheck_parse_final.json` (11,274 files, 0
+bad).
+
+## Previous work — fix 113 (legal type declarations, gated 2026-09-18)
 
 The Roslyn probe's semantic layer is dominated by declaration
 shapes, all emitted wrong the same way. `type_decl_line` read

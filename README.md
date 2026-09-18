@@ -1,35 +1,36 @@
 # il2csharp
 
-**Fix-97 live tree (Review 84 baseline + fixes 85–97, package split):** see `docs/reviews/REPLACEMENT.md` for installation/tests,
-`docs/reviews/REVIEW84.md`–`REVIEW87.md` for changes, and `docs/todo.md` (Current work) for the
-promoted tree. `final_out/` is the fix-97 strict-built output promoted 2026-09-14
-(11,200 files, aggregate `93a4eb7b…9d87a2`; the Review 89 tree is kept at
-`bckups/final_out_review89`, the fix-94 tree at `bckups/final_out_review94`):
-**11,107 C# files / 115,658 bodies; 483 tests pass**. Object
-allocation and its matching constructor now retain one exact identity, while
-folded constructor bodies recover metadata-proved `: base(...)` and
-`: this(...)` initializers instead of guessed method calls.
+**Current source: fix 122 (promoted)**, following the legal-type-declaration fixes in
+fix 113. See [current work](docs/todo.md) for validation and remaining errors.
+Method declarations now decode virtual, abstract, final and new-slot metadata
+flags correctly, generic constructors match their declaring type names, every
+pointer-typed declaration carries `unsafe`, generic references spell the
+declared `_N` identifier, explicit interface qualifiers resolve through the
+declaring type's own interface list, namespace-qualified spellings feed
+`using` generation, nested types render their owner paths, and stub temps
+with a uniquely-proven receiver call take their owner's type.
+The full test suite passes **752 tests**, including 118 native-fixture
+regressions and a Roslyn compilation of generated declaration patterns. The
+strict build covered 11,181 files / 113,938 bodies with 0 failures, the syntax
+gate is clean, and the whole-tree compiler probe stands at **10,794 errors**
+(down from 34,262 across fixes 115–122 with every delta attributed; CS0115,
+CS0214, CS0540 and CS9334 fully zero).
 
-Audited standalone constructor allocations fell **13,292 → 0**, empty
-allocation declarations fell **21,624 → 13,254**, the dominant folded-constructor
-marker `sub_180506120` fell **2,958 → 160**, and legacy `this.ctor(...)` text
-fell **2,186 → 45**. Real `: base(...)` initializers rose **5,960 → 9,530** and
-`: this(...)` initializers rose **0 → 325**. The same provenance work also
-removes another **732** `object objN` declarations.
+`final_out/` is the fix-122 output promoted 2026-09-17 (11,274 files). The complete
+recovered game **does not yet compile**. Clean parsing and passing regression
+tests do not establish semantic equivalence or a working drop-in source tree.
 
-The final 116,178-method sweep and dedicated 11,737-constructor sweep had 0
-crashes; structural metrics did not regress. The strict rebuild had 0 failed
-bodies or fallbacks, all 11,107 C# files passed the syntax gate, and the
-11,200-file output inventory is unchanged. The entire recovered game has
-**not** been compiled or run and is not yet working drop-in game source. Clean
-parsing does not prove semantic correctness. A .NET SDK was unavailable.
-Remaining goto scopes, unresolved values, definite assignment, references,
-cyclic allocation identity, broader vector/struct and call ABIs, and ARM64
-semantics remain open. Current measurements live in
-`validation_reports/review84/summary.json` (baseline) and
-`validation_reports/review85/sweep4.json` + `validation_reports/split_rebuild_verification.json`
-(promoted Review 89 tree, 0 failures); older release statistics below are
-historical.
+A .NET SDK is available. Run the reproducible compiler diagnostic probe with:
+
+```text
+python tools/compile_corpus.py <completed-output-tree> \
+  --report validation_reports/compile.json
+```
+
+The probe compiles one combined diagnostic assembly, merging generated shared
+stubs only in temporary storage. It saves source fingerprints, error counts and
+a compressed compiler log. It does not validate the generated projects' reference
+wiring, and cross-assembly name collisions can contribute diagnostics.
 
 **IL2CPP → C# recovery with real method bodies.**
 
@@ -188,10 +189,9 @@ output (`il2cpp/metadata.py` + `binary.py` frontends, `il2cpp/runtime/` for
 `split/`, etc.; routing table in `work/README.md`; includes the sibling `../work/` files merged
 2026-09-08), `tools/` (validator kit plus the former loose `compare_*`/`count_diffs`/`test_import*` scripts;
 `scan_stale.py` lives in `tools/`, `SHA256SUMS.txt` in `validation_reports/`),
-`tests/`, `validation_reports/` (current evidence in `review97e_sweep.json` + `review97e_vs97.json` +
-`review97e_parse.json` + `review97e_promotion_verification.json`; older files
-are historical), `final_out/` (the complete fix-97 strict-built/
-syntax-gated output, promoted from `work/review97_out/`), and `testgame/` (the supplied Shift At
+`tests/`, `validation_reports/` (current evidence in `review122_*`; older files
+are historical), `final_out/` (the complete fix-122 strict-built/
+syntax-gated output, promoted from `work/review122_out/`), and `testgame/` (the supplied Shift At
 Midnight DLL/metadata, tracked via Git LFS and included only in this private repo
 at the user's request; do not redistribute them or make the repo public). Backup zips live in
 the parent folder. Pre-consolidation history in `docs/archive/` still
@@ -465,16 +465,16 @@ failed).
 
 ## Validation
 
-Current gates (fix-113 tree): **682 tests (564 portable + 118 game)**;
+Current gates (fix-122 tree): **752 tests (634 portable + 118 game)**;
 a strict 11,181-file/113,938-body build with no failures or fallbacks, a 0-error syntax parse
 of every C# file, and a 116,178-method direct sweep
 with 0 crashes or structural-metric changes. Exact reports are in
-`validation_reports/review84/` (baseline), `validation_reports/review113_sweep.json`,
-`review113_vs112.json`, `review113_parse.json` (fix-113 gates; every fix
-100–113 has its own `reviewNN_*` triplet — see `docs/todo.md` for the log),
-`validation_reports/review99_promotion_verification.json` (11,200 files,
-aggregate `c1426378…89391f2`, 0 mismatches — `final_out/` still holds the
-promoted fix-99 tree pending a human promotion call); the older trajectories below are
+`validation_reports/review84/` (baseline), `validation_reports/review122_sweep.json`,
+`review122_vs121.json`, `review122_parse.json` (fix-122 gates; every fix
+100–122 has its own `reviewNN_*` set — see `docs/todo.md` for the log),
+`validation_reports/review122_promotion_verification.json` (11,274 files,
+aggregate `3a513e9a…13b49de`, 0 mismatches — `final_out/` holds the
+promoted fix-122 tree); the older trajectories below are
 historical. At Review 84 the same strict build held with **358 tests**.
 
 Two independent corpus gates, run against the built tree:

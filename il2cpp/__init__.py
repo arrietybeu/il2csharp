@@ -13,7 +13,7 @@ from il2cpp.expr import (Expr, _ARR_BIAS_RX, _BARE_HINT_RX, _BARE_TOKEN_RX, _BIN
 from il2cpp.headers import (HEADER_PRELUDE, HeaderEmitter)
 from il2cpp.lifter import (Lifter)
 from il2cpp.metadata import (FieldDef, HEADER_TABLES, ImageDef, Metadata, MethodDef, ParamDef, TypeDef, V_TABLES_MIN)
-from il2cpp.names import (CSHARP_KEYWORDS, _repr_special_float, repr_f32, repr_f64, safe_ident, sanitize)
+from il2cpp.names import (CSHARP_KEYWORDS, _repr_special_float, repr_f32, repr_f64, safe_ident, sanitize, sanitize_qualifier)
 from il2cpp.runtime.core import (Il2Cpp)
 from il2cpp.runtime.meta import (CodeGenModule, IMM_OPS, meta_lit_repr)
 from il2cpp.stmt_text import (_CONDHEAD_RX, _DOWHILE_RX, _cond_dewrap, _dewrap_cond, _fix_cond_line, _rsplit_op, _split_top)
@@ -184,6 +184,7 @@ __all__ = [
     'repr_f64',
     'rty_has_value',
     'safe_ident',
+    'sanitize_qualifier',
     'sanitize',
     'sdisp',
     'sign_of',

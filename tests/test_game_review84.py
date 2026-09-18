@@ -19,9 +19,9 @@ def test_trivial_constructor_tail_recovers_base_initializer(game_decompiler):
 
 def test_fresh_closure_allocation_has_one_identity(game_decompiler):
     text = body(game_decompiler, 24160)
-    assert text.count("new <>c()") == 1
-    assert "<>c obj1 = new <>c();" in text
-    assert "typeof(<>c).<>9 = obj1;" in text
+    assert text.count("new Outline.<>c()") == 1
+    assert "Outline.<>c obj1 = new Outline.<>c();" in text
+    assert "typeof(Outline.<>c).<>9 = obj1;" in text
     assert "sub_180506120" not in text
 
 
@@ -45,10 +45,10 @@ def test_same_type_constructor_chain_recovers_this_initializer(game_decompiler):
 
 def test_preinitialized_object_fields_and_final_store_share_one_allocation(game_decompiler):
     text = body(game_decompiler, 128708)
-    assert text.count("new OutlineFx.Optional<string>") == 1
-    assert "new OutlineFx.Optional<string>(\"_globalTex\", false)" in text
-    assert text.count("new SolidMask()") == 1
-    assert "SolidMask solidMask1 = new SolidMask();" in text
+    assert text.count("new OutlineFx.Optional_1<string>") == 1
+    assert "new OutlineFx.Optional_1<string>(\"_globalTex\", false)" in text
+    assert text.count("new OutlineFx.OutlineFxFeature.SolidMask()") == 1
+    assert "OutlineFx.OutlineFxFeature.SolidMask solidMask1 = new OutlineFx.OutlineFxFeature.SolidMask();" in text
     assert "solidMask1._scale = 50.0f;" in text
     assert "this._solidMask = solidMask1;" in text
     assert "sub_180506120" not in text
