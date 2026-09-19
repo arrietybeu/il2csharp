@@ -155,6 +155,13 @@ blobs (`*.methods.jsonl.gz`, `*_vs*.json`, `*comparison.json`,
 candidate trees `work/accessors_out/` + `work/method_bodies_out/`, and finally
 the whole `bckups/` dir (9 promoted-tree copies fix99–fix122 + review97e,
 1.24 GB — GitHub is now the history authority; no tracked file was touched).
+Work-tree pass the same day: all `work/review98_out`–`work/review123_out`
+(26 gated trees, ~3.6 GB — `review123_out` was byte-identical to `final_out/`,
+`review114_out` was an unfinished partial rebuild), the unreferenced
+`work/method_bodies_alias_regenerated/` intermediate (already copied back),
+and `work/accessors_preview/` probe artifacts. Every deleted tree rebuilds
+from git history in ~7–9 min; per-fix paragraphs below keep their `built tree`
+citations as the gate record.
 Kept: `final_out/` (promoted fix-123 baseline), `work/rpc_payload_out/`
 (matches pushed source), and the older `work/review*_out` + `work/partial_*_out`
 trees. Historical paragraphs below that cite a removed log/blob/tree keep
