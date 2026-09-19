@@ -377,10 +377,16 @@ class _AnalyzeMixin:
                 L._insn(ins, b.insns, 0, None, self.last_ip)
 
         # ---- pass 1 (dry): discover phi merge locations
-        fresh_regs(False)
+        # wipe BEFORE entry setup: _setup_entry (inside fresh_regs)
+        # installs the entry stack-parameter names/types, and wiping
+        # after discards them -- every stack-arg load then degrades
+        # to an anonymous untyped s_N (GetChars mi 5769: baseDecoder
+        # arrived at the cmov merge as untyped s_88). Wipe-then-setup
+        # keeps the anti-stale intent with this method's evidence.
         L.rsp_delta = 0
         L.stack_map = {}
         L.slot_types = {}
+        fresh_regs(False)
         L.var_n = 1000
         entry_state = dict(L.regs)
         merge_locs = {}
@@ -428,10 +434,10 @@ class _AnalyzeMixin:
             b.stmts = []
 
         # ---- pass 2 (real): emit with stable phi vars
-        fresh_regs(True)
         L.rsp_delta = 0
         L.stack_map = {}
         L.slot_types = {}
+        fresh_regs(True)
         L.var_n = 1000
         entry_state = dict(L.regs)
         phi: Dict[Tuple[int, str], str] = {}

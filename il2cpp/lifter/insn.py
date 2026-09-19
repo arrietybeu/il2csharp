@@ -1210,12 +1210,26 @@ class _InsnMixin:
         if (base == 'RSP' or (base == 'RBP' and self._rbp_is_frame())
                 and idxr is None):
             var = self.slot_var(disp)
-            # a spilled array register reloads with its kind restored, so a
-            # later indexed LEA resolves `&arr[i]` instead of raw pointer
-            # arithmetic (slot_types was recorded on the spill store)
+            # a recorded slot type restores the reload's kind the way
+            # entry classification does (state._setup_entry): a stack
+            # parameter reload keeps its declared type instead of
+            # degrading to untyped 'local' (GetChars mi 5769: the
+            # baseDecoder reload fed an untyped cmov merge). A spilled
+            # array register still resolves `&arr[i]`; other kinds
+            # follow the same entry mapping (float/arr/obj/int).
             sty = self.slot_types.get(var)
-            if sty is not None and self._ty_kind(sty) == 'arr':
-                return Expr(var, sty, 'arr')
+            if sty is not None:
+                sbits = sty[1] if isinstance(sty, tuple) and len(sty) == 2 else 0
+                ste = (sbits >> 16) & 0xFF
+                if ste in (0x0c, 0x0d) and not ((sbits >> 29) & 1):
+                    skind = 'float'
+                elif ste in (0x1d, 0x14):
+                    skind = 'arr'
+                elif ste >= 0x10:
+                    skind = 'obj'
+                else:
+                    skind = 'int'
+                return Expr(var, sty, skind)
             return Expr(var, None, 'local')
         if base is None and idxr is not None:
             ie = self.reg(idxr)

@@ -137,12 +137,35 @@ in the 2026-09-19 cleanup. Retained tree: `work/rpc_payload_out/`.
 14 goldens regen'd after review (8 accessor renames untouched by this unit +
 6 here: 39789/62312/83647/109664 improvements, 11974 renumber, 5769 noted below).
 
-Open follow-ups: GetChars (mi 5769) still needs merge type preservation for
-cmov-selected values (old pinned an undeclared `num3`; current renders
-parseable raw decoder derefs — width follow-up open, do not treat as resolved);
-CopyFromArray dest args reprint the ids extent instead of reusing `num4`
-(faithful recomputation, batch-38 window bounds); `&this.field`-in-rbp and
-genuine `T* + N` element arithmetic keep today's spelling.
+Open follow-ups: GetChars (mi 5769): merge type preservation for cmov-selected
+values is done -- the pass wipe ran after entry setup and discarded the stack
+parameter names/types, so the decoder arrived at the cmov as untyped `s_88`;
+wiping before setup plus slot reloads restoring the recorded kind recovers
+`baseDecoder`/`getClass()`/`charCount`/`_mustFlush`/`_bytesUsed` (was: undeclared
+`num3`, then raw decoder derefs). Still open: the derived-Decoder field widths
+(`+0x30`/`+0x34`/`+0x38` stay byte-width raw derefs) and the post-loop arm-scope
+reads (`obj22`/`num5`/`num6`) -- do not treat as resolved. Width design (proven,
+undeveloped): td 691 `UTF7Encoding.Decoder` carries exactly `bits@0x30`,
+`bitCount@0x34`, `firstByte@0x38`, so two rules would finish it -- (1) a CMOVE
+`recv.getClass() == typeof(T)` selecting `recv` stamps the exact type (klass
+equality is exact, unlike `is`; the compared `typeof` usage already carries
+td 691); (2) the single-assignment alias (`decoderNls1 = decoderNls2`) must
+inherit the derived type, else the working variable keeps the static
+`DecoderNLS` and the fields still miss. Scope reads need declaration hoisting
+across the loop boundary (structuring risk);
+CopyFromArray dest args reprint the ids extent instead of reusing `num4`:
+investigated to ground truth and accepted as residue -- native executes three
+copy calls (0x1807048f7/922/94c, mi 25626); the two extra ids-copy texts are
+phantoms (one execution re-rendered) over idempotent same-byte rewrites, so
+output values/order are faithful. Reusing `num4` would delete executions,
+which needs execution-identity proof the pipeline does not have: _bind folds
+per OBJECT, never per text, precisely so real duplicate calls are never
+merged (fix 58b SaveManager rule). Two honest attempts reverted: counting
+movsxd copies as uses bound earlier but collapsed the `num4`/`num5` temp
+boundary the spec pins; rewriting live superstrings at bind time did the same
+with added epoch hazards. Needs value provenance, not a window tweak.
+`&this.field`-in-rbp and genuine `T* + N` element arithmetic keep today's
+spelling.
 
 ## Cleanup 2026-09-19 (after the 3bf35b3 push; `bckups/` deleted later the same day)
 
