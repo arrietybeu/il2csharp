@@ -217,10 +217,17 @@ their original lists as the gate record — the file itself is gone.
 
 ## Current work: post-promotion residue (fix 123 promoted, see below)
 
-`final_out/` holds the fix-123 tree (10,794 → 10,602 errors). Open lanes:
-accessibility honesty (CS0053 222: newly-visible nested types are less
-accessible than the public API exposing them — changing modifiers would be
-invention; needs per-site accessor analysis); the masked
+`final_out/` holds the follow-up tree (probe 2,463 errors / 726 files,
+`validation_reports/probe_final_out.json`). CS0053 is 0 there and 0 on the
+retained `work/rpc_payload_out` tree (`probe_rpc_payload_out.json`: 10,305 /
+1,516, matching the recorded baseline exactly) -- the 222 fix-123-era sites
+cleared before this session (likely the accessor-recovery unit), so the
+accessibility-honesty lane needs no policy decision. Live lanes: CS0737 880
+(`_SpawnItems_d__27`-style async state machines not implementing
+`IEnumerator.MoveNext()` -- one mechanism, best next candidate); CS0111 384
+(combined-partial duplicate constructors, known do-not-touch: deleting them
+would damage the individual assemblies); CS0052 308
+(`__StaticArrayInitTypeSize_N` field accessibility); the masked
 body-pointer-local layer (needs expression typing first); project wiring.
 The complete game is not yet compilable.
 
