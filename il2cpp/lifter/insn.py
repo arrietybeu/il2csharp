@@ -956,6 +956,30 @@ class _InsnMixin:
                 src = None
             ty = src.ty if (src is not None and src.ty is not None) else (old.ty if old is not None else None)
             kind = src.kind if src is not None else (old.kind if old is not None else '?')
+            if mn == Mnemonic.CMOVE:
+                # exact-klass selection proves the selected value's
+                # runtime type: `dst = (recv.getClass() == typeof(T))
+                # ? recv : dst` selects recv only when its klass IS T
+                # exactly (pointer equality, not `is`). The compared
+                # typeof usage already carries the typedef, so the
+                # merge stamps it (GetChars mi 5769: the decoder proves
+                # Decoder, resolving bits/bitCount/firstByte). Only
+                # plain class rows qualify; anything else keeps the
+                # src/old fallback above.
+                _fl, _fr = (self.flags or (None, None))
+                _rv = getattr(_fl, 'recv', None)
+                if (_fl is not None and _fr is not None
+                        and getattr(_fl, 'kind', None) == 'klass'
+                        and (_fl.text or '').endswith('.getClass()')
+                        and _rv is not None and src is not None
+                        and src.text == _rv.text):
+                    _rty = getattr(_fr, 'ty', None)
+                    if (isinstance(_rty, tuple) and len(_rty) == 2
+                            and ((_rty[1] >> 16) & 0xFF) in (0x11, 0x12)
+                            and 0 <= _rty[0] < len(self.meta.typedefs)
+                            and not self.meta.typedefs[_rty[0]].is_valuetype):
+                        ty = (_rty[0], 0x12 << 16)
+                        kind = 'obj'
             self.set_reg(dst, self._mk('(%s ? %s : %s)' % (
                 cond, src.text if src is not None else '?',
                 old.text if old is not None else '?'), ty, kind))

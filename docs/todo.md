@@ -142,17 +142,17 @@ values is done -- the pass wipe ran after entry setup and discarded the stack
 parameter names/types, so the decoder arrived at the cmov as untyped `s_88`;
 wiping before setup plus slot reloads restoring the recorded kind recovers
 `baseDecoder`/`getClass()`/`charCount`/`_mustFlush`/`_bytesUsed` (was: undeclared
-`num3`, then raw decoder derefs). Still open: the derived-Decoder field widths
-(`+0x30`/`+0x34`/`+0x38` stay byte-width raw derefs) and the post-loop arm-scope
-reads (`obj22`/`num5`/`num6`) -- do not treat as resolved. Width design (proven,
-undeveloped): td 691 `UTF7Encoding.Decoder` carries exactly `bits@0x30`,
-`bitCount@0x34`, `firstByte@0x38`, so two rules would finish it -- (1) a CMOVE
+`num3`, then raw decoder derefs). Widths are done: a CMOVE
 `recv.getClass() == typeof(T)` selecting `recv` stamps the exact type (klass
 equality is exact, unlike `is`; the compared `typeof` usage already carries
-td 691); (2) the single-assignment alias (`decoderNls1 = decoderNls2`) must
-inherit the derived type, else the working variable keeps the static
-`DecoderNLS` and the fields still miss. Scope reads need declaration hoisting
-across the loop boundary (structuring risk);
+the typedef -- td 691 `UTF7Encoding.Decoder` holds exactly `bits@0x30`,
+`bitCount@0x34`, `firstByte@0x38`). The predicted alias rule proved
+unnecessary: the existing single-known-type phi/var rule carries the derived
+type to the working temps on its own. The rule generalizes (delegate types,
+`_source`/`_token`, shared-call resolution, enum members, `ref` field args;
+two sampled methods shed `unsafe`). Still open: the post-loop arm-scope reads
+(`obj22`/`num5`/`num6`), which need declaration hoisting across the loop
+boundary (structuring risk) -- do not treat as resolved;
 CopyFromArray dest args reprint the ids extent instead of reusing `num4`:
 investigated to ground truth and accepted as residue -- native executes three
 copy calls (0x1807048f7/922/94c, mi 25626); the two extra ids-copy texts are
