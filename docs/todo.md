@@ -144,20 +144,21 @@ CopyFromArray dest args reprint the ids extent instead of reusing `num4`
 (faithful recomputation, batch-38 window bounds); `&this.field`-in-rbp and
 genuine `T* + N` element arithmetic keep today's spelling.
 
-## Cleanup 2026-09-19 (after the 3bf35b3 push)
+## Cleanup 2026-09-19 (after the 3bf35b3 push; `bckups/` deleted later the same day)
 
 Deleted per user call: all untracked build/compile/sweep/tests logs under
 `validation_reports/` (reviews 114–123, accessors, method bodies, rpc_payload,
 partial_unsafe — the committed parse/sweep/promotion/delta/regeneration JSONs
 and tail-args blobs stay, 472 tracked files), all gitignored sweep/compare
 blobs (`*.methods.jsonl.gz`, `*_vs*.json`, `*comparison.json`,
-`output_audit.json` — regenerable via rebuild/sweep), and the superseded
-candidate trees `work/accessors_out/` + `work/method_bodies_out/`. Kept:
-`final_out/` (promoted fix-123 baseline), `bckups/final_out_fix122`,
-`work/rpc_payload_out/` (matches pushed source), and the older
-`work/review*_out`, `work/partial_*_out`, `bckups/final_out_fix*` trees.
-Historical paragraphs below that cite a removed log/blob keep their original
-report lists as the gate record — the file itself is gone.
+`output_audit.json` — regenerable via rebuild/sweep), the superseded
+candidate trees `work/accessors_out/` + `work/method_bodies_out/`, and finally
+the whole `bckups/` dir (9 promoted-tree copies fix99–fix122 + review97e,
+1.24 GB — GitHub is now the history authority; no tracked file was touched).
+Kept: `final_out/` (promoted fix-123 baseline), `work/rpc_payload_out/`
+(matches pushed source), and the older `work/review*_out` + `work/partial_*_out`
+trees. Historical paragraphs below that cite a removed log/blob/tree keep
+their original lists as the gate record — the file itself is gone.
 
 ## Current work: post-promotion residue (fix 123 promoted, see below)
 
@@ -190,7 +191,8 @@ CS0246 43→0, CS0305/CS0308/CS0426/CS0538 →0, CS0535 −13, against CS0053 +2
 the faithful `System.EventHandler_1<...>` spelling. Reports:
 `validation_reports/review123_*`. Promoted 2026-09-17: `final_out/` now
 holds `work/review123_out` (11,274 files, aggregate `45711645…3791d3c6`, 0
-mismatches; the fix-122 tree is kept at `bckups/final_out_fix122`).
+mismatches; the `bckups/final_out_fix122` copy was removed 2026-09-19, see the
+cleanup note above).
 Post-promotion parse recheck 0 bad files.
 
 Comparison temps (`obj227 < 6`) are CLOSED with no code change: a full

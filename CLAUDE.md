@@ -18,8 +18,9 @@ rebuild 11,181 files / 113,938 bodies with 0 failures, parser 0 bad files,
 direct sweep 116,178 methods / 0 crashes / 0 structural changes vs fix 122,
 probe 10,794 → 10,602 with one characterized accessibility unmasking — and
 was promoted 2026-09-17: `final_out/` holds `work/review123_out` (11,274
-files, aggregate `45711645…3791d3c6`; the fix-122 tree is kept at
-`bckups/final_out_fix122`). See `docs/todo.md` for exact evidence and the
+files, aggregate `45711645…3791d3c6`). The `bckups/` copies of prior promoted
+trees were deleted 2026-09-19 per user call — GitHub is now the history
+authority; any prior tree rebuilds from git history. See `docs/todo.md` for exact evidence and the
 remaining compiler backlog.
 
 Read `docs/reviews/REVIEW84.md`–`REVIEW87.md`, `docs/todo.md`'s Current work section, and
