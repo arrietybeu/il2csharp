@@ -74,8 +74,28 @@ def repr_f32(v):
     sp = _repr_special_float(v, 'float')
     if sp is not None:
         return sp
-    s = repr(v)
-    return s + 'f' if '.' in s or 'e' in s else s + '.0f'
+    try:
+        orig = struct.unpack('<I', struct.pack('<f', v))[0]
+    except Exception:
+        s = repr(v)
+        return s + 'f' if ('.' in s or 'e' in s or 'E' in s) else s + '.0f'
+    best = None
+    for prec in (1, 2, 3, 4, 5, 6, 7, 8, 9):
+        s = format(v, '.' + str(prec) + 'g')
+        try:
+            bits = struct.unpack('<I', struct.pack('<f', float(s)))[0]
+        except (ValueError, OverflowError, struct.error):
+            continue
+        if bits != orig:
+            continue
+        if best is None or len(s) < len(best[1]) \
+                or (len(s) == len(best[1]) and prec < best[0]):
+            best = (prec, s)
+    if best is None:
+        s = repr(v)
+    else:
+        s = best[1]
+    return s + 'f' if ('.' in s or 'e' in s or 'E' in s) else s + '.0f'
 
 
 def repr_f64(v):
