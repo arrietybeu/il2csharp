@@ -222,9 +222,12 @@ their original lists as the gate record — the file itself is gone.
 retained `work/rpc_payload_out` tree (`probe_rpc_payload_out.json`: 10,305 /
 1,516, matching the recorded baseline exactly) -- the 222 fix-123-era sites
 cleared before this session (likely the accessor-recovery unit), so the
-accessibility-honesty lane needs no policy decision. Live lanes: CS0737 880
-(`_SpawnItems_d__27`-style async state machines not implementing
-`IEnumerator.MoveNext()` -- one mechanism, best next candidate); CS0111 384
+accessibility-honesty lane needs no policy decision. Live lanes: CS0737 done (880 -> 0: private+final+virtual methods with plain
+names qualify via the unique directly-listed interface method with the same
+name and rendered signature -- async `MoveNext`/`SetStateMachine`, iterator
+`MoveNext`; trigger census matched the error count exactly, probe delta is
+the sole change, `work/iface_out` + `validation_reports/probe_iface_out.json`);
+CS0111 384
 (combined-partial duplicate constructors, known do-not-touch: deleting them
 would damage the individual assemblies); CS0052 308
 (`__StaticArrayInitTypeSize_N` field accessibility); the masked

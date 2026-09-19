@@ -343,6 +343,60 @@ class Emitter:
             return None
         return None
 
+    def _explicit_impl_qualifier(self, m, td):
+        """Interface head for an undotted explicit implementation, else None.
+
+        A private+final+virtual method (`0x61` bits) with a plain name is
+        the explicit-implementation shape (compiler-generated async and
+        iterator `MoveNext`/`SetStateMachine` ship exactly so, with the
+        dotted name missing from metadata). It implements the unique
+        directly-listed interface method with the same name and the same
+        rendered return/parameter types; anything else (no match, several
+        matches, static, dotted already) declines and keeps today's
+        spelling."""
+        try:
+            f = m.flags
+            if m.is_static or (f & 7) != 1 or (f & 0x60) != 0x60:
+                return None
+            if not m.name or '.' in m.name or m.name.startswith('.'):
+                return None
+            ps = self.meta.method_params(m)
+            pt = self.il.types[m.return_type] \
+                if 0 <= m.return_type < len(self.il.types) else None
+            want = (m.name, self.il.type_name(pt) if pt else None,
+                    tuple(self.il.type_name(self.il.types[p.type]
+                                        if 0 <= p.type < len(self.il.types)
+                                        else None) for p in ps))
+            hits = []
+            for k in range(getattr(td, 'interfaces_count', 0)):
+                ii = self.meta.interfaces[td.interfaces_start + k]
+                tup = self.il.types[ii] if 0 <= ii < len(self.il.types) else None
+                if tup is None:
+                    continue
+                idx = None
+                if self.il._type_enum(tup) in (0x11, 0x12):
+                    idx = tup[0]
+                if idx is None or not 0 <= idx < len(self.meta.typedefs):
+                    continue
+                itd = self.meta.typedefs[idx]
+                for mj in range(itd.method_start, itd.method_start + itd.method_count):
+                    m2 = self.meta.methods[mj]
+                    ps2 = self.meta.method_params(m2)
+                    pt2 = self.il.types[m2.return_type] \
+                        if 0 <= m2.return_type < len(self.il.types) else None
+                    got = (m2.name, self.il.type_name(pt2) if pt2 else None,
+                           tuple(self.il.type_name(self.il.types[p.type]
+                                               if 0 <= p.type < len(self.il.types)
+                                               else None) for p in ps2))
+                    if got == want:
+                        hits.append(self.il.type_name(tup))
+                        break
+            if len(hits) != 1:
+                return None
+            return hits[0]
+        except Exception:
+            return None
+
     # -- members ------------------------------------------------------------
     def method_sig(self, m: MethodDef, td: TypeDef) -> str:
         f = m.flags
@@ -350,6 +404,9 @@ class Emitter:
         # CLI MethodAttributes: Final=0x20, Virtual=0x40,
         # NewSlot=0x100, Abstract=0x400. TypeAttributes use different bits.
         explicit = '.' in m.name
+        qual = None if explicit else self._explicit_impl_qualifier(m, td)
+        if qual is not None:
+            explicit = True
         mods = '' if explicit else vis
         if m.is_static:
             mods += 'static '
@@ -381,6 +438,8 @@ class Emitter:
         if '.' in raw:
             head, _, tail = raw.rpartition('.')
             name = sanitize_qualifier(self._arity_qualifier(head, td)) + '.' + safe_ident(tail)
+        elif qual is not None:
+            name = sanitize_qualifier(self._arity_qualifier(qual, td)) + '.' + safe_ident(raw)
         else:
             name = safe_ident(raw)
         gp = ''
