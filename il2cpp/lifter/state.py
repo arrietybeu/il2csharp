@@ -1064,6 +1064,41 @@ class _StateMixin:
         e._prec = None   # the temp name is an atom
 
     # ------------------------------------------------------------------
+    def _flush_pending_calls(self, phi_copies=None):
+        """Emit ignored non-void call results as bare statements."""
+        pending = getattr(self, '_pending_calls', None)
+        self._pending_calls = []
+        if not pending or getattr(self, 'dry', False):
+            return
+        by_blk = {}
+        seen = set()
+        for e, ip, asm in pending:
+            dp = getattr(e, '_defpos', None)
+            if dp is not None and dp[0] is not None:
+                seen.update(dp[0].stmts)
+        if isinstance(self.out, list):
+            seen.update(s[1] for s in self.out if isinstance(s, tuple))
+        if phi_copies:
+            for cps in phi_copies.values():
+                seen.update(cps)
+        for e, ip, asm in pending:
+            if e is None or getattr(e, '_uses', None):
+                continue
+            # A derived copy (movzx mask, phi value) may already carry
+            # the text into a statement without counting a use on this
+            # object. Flushing again would twin the call.
+            if any(e.text in s for s in seen):
+                continue
+            dp = getattr(e, '_defpos', None)
+            if dp is None or dp[0] is None:
+                if isinstance(self.out, list):
+                    self.out.append((ip, e.text + ';', asm))
+                continue
+            by_blk.setdefault(id(dp[0]), (dp[0], []))[1].append((dp[1], e, ip, asm))
+        for blk, items in by_blk.values():
+            for idx, e, ip, asm in sorted(items, reverse=True):
+                blk.stmts.insert(min(idx, len(blk.stmts)), e.text + ';')
+
     def emit(self, ip, code, asm):
         if getattr(self, 'dry', False):
             return
@@ -1133,7 +1168,7 @@ class _StateMixin:
             return None
         c = Expr(e.text, e.ty, e.kind, e.recv)
         for name in ('_prec', '_unk', '_usg_idx', '_mi', '_td',
-                     '_no_bind', '_alloc'):
+                     '_no_bind', '_alloc', '_slice', '_stack_offset', '_bytes', '_parts'):
             val = getattr(e, name, None)
             if val is not None and not (name == '_unk' and not val):
                 setattr(c, name, val)

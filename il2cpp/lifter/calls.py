@@ -1,8 +1,8 @@
 from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.common import csharp_type_name
-from il2cpp.expr import Expr, _BARE_TOKEN_RX, _R8_TY, _REFARG_RX, _byref_arg_render, _is_unresolved_gp, _recv_fold, _recv_shaped
+from il2cpp.expr import Expr, _BARE_TOKEN_RX, _R8_TY, _REFARG_RX, _USE_BIND_MIN, _byref_arg_render, _is_unresolved_gp, _recv_fold, _recv_shaped
 from il2cpp.runtime.meta import IMM_OPS
-from il2cpp.text import _deref_spans_all, _norm_twin, _paren_spans_all, _term_up, disp_add, reg_name, rty_has_value, strip_outer
+from il2cpp.text import _int_lit, _deref_spans_all, _norm_twin, _paren_spans_all, _term_up, disp_add, reg_name, rty_has_value, strip_outer
 from il2cpp.x64 import ARG_REGS, ARG_XMM, KLASS_VTABLE, VOLATILE
 
 class _CallsMixin:
@@ -178,7 +178,8 @@ class _CallsMixin:
     def _spec_md(self, si):
         """MethodDef row for a MethodSpec index, or None when unreadable."""
         try:
-            md = self.il.method_specs[si][0]        except Exception:
+            md = self.il.method_specs[si][0]
+        except Exception:
             return None
         try:
             if 0 <= md < len(self.meta.methods):
@@ -883,6 +884,47 @@ class _CallsMixin:
             return 'sub_%x/*shared body, %d candidates*/' % (target, len(cands))
         return 'sub_%x' % target
 
+    def _nullary_interface_dispatch(self, target, arg_exprs):
+        """Recognize the Win64 interface-offset search and shared tail call.
+
+        The template fixes slot/type/receiver in RCX/RDX/R8. Only the slow
+        lookup's relative call displacement varies; all loads, branches,
+        slot arithmetic and both paths to invoke_impl must match.
+        """
+        if target is None or len(arg_exprs) < 3:
+            return None
+        slot, iface, receiver = arg_exprs[:3]
+        if slot is None or iface is None or receiver is None:
+            return None
+        offset = _int_lit(slot.text)
+        if offset is None or not 0 <= offset <= 0xffff \
+                or iface.kind != 'klass' or not iface.text.startswith('typeof('):
+            return None
+        prefix = bytes.fromhex(
+            '48895c2408574883ec20498b184533c9498bf8440fb7932e010000'
+            '66453bca73264c8b9bb00000000f1f840000000000410fb7c14803c0'
+            '493914c3742d6641ffc166453bca72e9440fb7c1488bcfe8')
+        suffix = bytes.fromhex(
+            '4c8b00488bcf488b5008488b5c24304883c4205f49ffe0410fb7d1'
+            '4803d20fb7c9418b44d30803c1489848c1e0044805380100004803c3ebc7')
+        code = self.bin.read(target, len(prefix) + 4 + len(suffix))
+        if code is None or not code.startswith(prefix) \
+                or code[len(prefix) + 4:] != suffix:
+            return None
+        td_index = self._td_of(iface.ty)
+        if td_index is None:
+            return None
+        td = self.meta.typedefs[td_index]
+        if not td.flags & 0x20 or not 0 <= offset < td.method_count:
+            return None
+        mi = td.method_start + offset
+        method = self.meta.methods[mi]
+        rt = self.il.types[method.return_type]
+        if method.is_static or method.param_count or not self.il._return_abi_is_known(rt) \
+                or self.il.returns_sret(rt):
+            return None
+        return mi, receiver
+
     def _wb_operands(self, args, arg_exprs):
         """`il2cpp_codegen_write_barrier(&field, value)` -> (lvalue text,
         rvalue text) for the assignment it really is. Shared between `_call`
@@ -965,6 +1007,52 @@ class _CallsMixin:
                 return
         self._kill_stale(dst)
         self.emit(ip, (stmt + ' return;') if tail else stmt, asm)
+
+    def _kill_byref_slots(self, mi, rty, arg_exprs):
+        """A byref parameter is a proved write through the passed address.
+        Drop the slot's cached value so later reads reload instead of
+        reusing the pre-call constant. Same slot walk as _hint_arg_types
+        (GPR positions only -- byref is pointer-class, never float); the
+        sret early-return fold does not reach here and keeps old behavior."""
+        if not hasattr(self.il, '_sf_field_size'):
+            return
+        m2 = self.meta.methods[mi]
+        trust = rty is None or self.il._type_enum(rty) != 0x15
+        if not trust:
+            return
+        ri = 0 if m2.is_static else 1
+        if self.il.returns_sret(rty):
+            ri += 1
+        for pi, p in enumerate(self.meta.method_params(m2)):
+            pt = self.il.types[p.type] if 0 <= p.type < len(self.il.types) else None
+            if pt is None:
+                break
+            bits = pt[1]
+            if not ((bits >> 29) & 1) and ((bits >> 16) & 0xFF) != 0x10:
+                continue
+            slot = ri + pi
+            if slot > 3 or slot >= len(arg_exprs):
+                continue
+            e = arg_exprs[slot]
+            if e is None:
+                continue
+            off = getattr(e, '_stack_offset', None)
+            if off is None:
+                continue
+            name = e.text[1:] if e.text.startswith('&') and _REFARG_RX.fullmatch(e.text[1:]) else None
+            if name is None:
+                for addr, nm in self.stack_map.items():
+                    if addr == off:
+                        name = nm
+                        break
+            if name is None:
+                continue
+            pointee = (pt[0], pt[1] & ~(1 << 29))
+            size = self.il._sf_field_size(pointee, 0)
+            if size is not None:
+                self._stack_store(off, size, None)
+            self.stack_values.pop(name, None)
+            self._kill_stale(name)
 
     def _call(self, ins, asm):
         target = None
@@ -1299,6 +1387,12 @@ class _CallsMixin:
             if mi is not None and 0 <= mi < len(self.meta.methods):
                 rt_idx = self.meta.methods[mi].return_type
                 rty = self.il.types[rt_idx] if 0 <= rt_idx < len(self.il.types) else None
+                if info[0] == 'generic':
+                    closed_return = self.il.candidate_return_type(info)
+                    if closed_return is not None:
+                        rty = closed_return
+                    self._call_class_args = self.il._method_spec_type_args(
+                        self.il.method_specs[info[1]][1])
         # The callee identity can remain honestly ambiguous while every
         # registered owner still declares the exact same closed return type.
         # Use only that all-candidates consensus: it fixes the result register,
@@ -1315,6 +1409,13 @@ class _CallsMixin:
                                            or (args and args[0].startswith('&'))):
                     rty = agreed
                     shared_rty = True
+        interface_call = self._nullary_interface_dispatch(target, arg_exprs) if mi is None else None
+        if interface_call is not None:
+            mi, recv = interface_call
+            method = self.meta.methods[mi]
+            rty = self.il.types[method.return_type]
+            name = self.il.method_simple_name(mi)
+            args, arg_exprs = [recv.text], [recv]
         # Resolve a vtable slot to its metadata method up front, so arg trimming,
         # instance-style rendering and property-accessor folding below apply to
         # virtual calls exactly as they do to direct ones.
@@ -1411,6 +1512,10 @@ class _CallsMixin:
         if target is not None and target in self.rt_wbarrier and args:
             dst, src2 = self._wb_operands(args, arg_exprs)
             self._wb_finish(ins.ip, dst, src2, asm)
+            ae0 = arg_exprs[0] if arg_exprs else None
+            off = getattr(ae0, '_stack_offset', None)
+            if off is not None and hasattr(self.il, '_sf_field_size') and len(arg_exprs) > 1:
+                self._stack_store(off, 8, arg_exprs[1])
             return
         # --- ambiguous shared body (the `sub_x/*shared body, N
         # candidates*/` honest-fallback case): `mi` is unknown, but every
@@ -1453,6 +1558,10 @@ class _CallsMixin:
         # `buf = recv.Prop` (Transform.get_position -> transform.position).
         if args and args[0].startswith('&') and self.il.returns_sret(rty):
             buf = args[0][1:]
+            stack_address = getattr(arg_exprs[0], '_stack_offset', None) if arg_exprs else None
+            if stack_address is not None and hasattr(self.il, '_sf_field_size'):
+                buf = self.new_var()
+                self._var_types[buf] = rty
             rest = args[1:]
             short2 = None
             if mi is not None and 0 <= mi < len(self.meta.methods):
@@ -1491,7 +1600,9 @@ class _CallsMixin:
                     rt2 = rest[0][1:] if rest[0].startswith('&') else rest[0]
                     if rt2 == 'this' or '.' in rt2 or _BARE_TOKEN_RX.match(rt2) \
                             or re.match(r'^s_[0-9a-fA-F]+$', rt2):
-                        if mbase2.startswith('get_') and len(rest) == 1:
+                        if mbase2 == 'get_Item' and len(rest) == 2:
+                            short2 = '%s[%s]' % (rt2, rest[1])
+                        elif mbase2.startswith('get_') and len(rest) == 1:
                             short2 = '%s.%s' % (rt2, mbase2[4:].replace('|', '_').replace('@', '_'))
                         elif not mbase2.startswith(('set_', 'get_')) \
                                 and mbase2 != '.ctor':
@@ -1502,6 +1613,8 @@ class _CallsMixin:
             else:
                 self.emit(ins.ip, '%s = %s(%s);' % (buf, name, ', '.join(rest)), asm)
             self.slot_types[buf] = rty
+            if stack_address is not None and hasattr(self.il, '_sf_field_size'):
+                self._stack_store(stack_address, self.il._sf_field_size(rty, 0), Expr(buf, rty, 'obj'))
             # Win64 sret ABI: the callee echoes the hidden buffer
             # pointer back in RAX, and MSVC callers read the result
             # through it (`movsd xmm1,[rax]`) -- without this binding
@@ -1517,6 +1630,7 @@ class _CallsMixin:
             # too would re-lose the cases it cannot see (a struct whose
             # single field is a 64-byte struct has no offset >= 0x18).
             self.regs['RAX'] = Expr('&%s' % buf, rty, 'ptr')
+            self.regs['RAX']._stack_offset = stack_address
             return
 
 
@@ -1546,6 +1660,7 @@ class _CallsMixin:
             # ABI position so float params, stack args and the hidden sret
             # slot all land in the right place before any arity trim.
             self._hint_arg_types(args, arg_exprs, mi, rty)
+            self._kill_byref_slots(mi, rty, arg_exprs)
             args = self._positional_args(args, m2, rty)
             if len(args) > want:
                 args = args[:want]
@@ -1726,6 +1841,23 @@ class _CallsMixin:
             te = self.il._type_enum(rty)
             if te == 0x01:
                 self.emit(ins.ip, call + ';', asm)
+                if mi is not None and m2.name == '.ctor' and not m2.is_static \
+                        and hasattr(self.il, '_sf_field_size'):
+                    re0 = arg_exprs[0] if arg_exprs else None
+                    off = getattr(re0, '_stack_offset', None)
+                    dt = self.meta.typedefs[m2.declaring] \
+                        if 0 <= m2.declaring < len(self.meta.typedefs) else None
+                    sz = self.il._sf_field_size((m2.declaring, 0x11 << 16), 0) \
+                        if dt is not None and dt.is_valuetype else None
+                    slot = args[0][1:] if args and args[0].startswith('&') else None
+                    if slot is None and off is not None:
+                        for addr, name in self.stack_map.items():
+                            if addr == off:
+                                slot = name
+                                break
+                    if off is not None and sz is not None and slot is not None:
+                        self._stack_store(off, sz, Expr(slot, (m2.declaring, 0x11 << 16), 'obj'))
+                        self.slot_types[slot] = (m2.declaring, 0x11 << 16)
                 return
             dstreg = self._return_value_register(rty)
             isf = dstreg == 'XMM0'
@@ -1738,6 +1870,20 @@ class _CallsMixin:
             # one-use expression could move the call across visible effects.
             if shared_rty:
                 self._bind(result)
+                return
+            # An ignored non-void result would otherwise vanish: the call
+            # runs for effect, so hold it pending and flush a bare statement
+            # at the next emit when no use renders it first. Used calls keep
+            # their inline render (use-counted by _RegState reads); getters
+            # stay lazy since a bare `obj.Prop;` is noise. Short texts cannot
+            # be use-traced, so they keep the old drop behavior.
+            if not getattr(self, 'dry', False) and mi is not None and not \
+                    self.meta.methods[mi].name.rpartition('.')[2].startswith('get_') \
+                    and len(call) >= _USE_BIND_MIN:
+                pc = getattr(self, '_pending_calls', None)
+                if pc is None:
+                    pc = self._pending_calls = []
+                pc.append((result, ins.ip, asm))
             return
         # unresolved-return calls cannot be emitted bare AND kept as a
         # value: the next store/read would re-render the entire call text

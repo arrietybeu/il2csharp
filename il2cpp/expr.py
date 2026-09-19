@@ -28,7 +28,7 @@ class Expr:
                  # allocation Expr. It survives temp binding so the following
                  # .ctor can complete that allocation instead of creating T
                  # for a second time.
-                 '_alloc')
+                 '_alloc', '_slice', '_stack_offset', '_bytes', '_parts')
 
     def __init__(self, text, ty=None, kind='?', recv=None):
         self.text = text      # rendered C# expression

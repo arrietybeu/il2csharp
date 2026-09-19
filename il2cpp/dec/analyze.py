@@ -50,6 +50,24 @@ class _AnalyzeMixin:
                 return (lt, rt)
             return None
 
+        def narrow_null_edge(b, preds):
+            # Only a single incoming machine equality edge proves a value
+            # is zero here. Do not infer facts from overloaded managed ==.
+            if len(preds) != 1:
+                return
+            pred = preds[0]
+            if not pred.term or pred.term[0] != 'jcc':
+                return
+            match = re.fullmatch(r'([\w.]+) (==|!=) null', pred.cond or '')
+            if match is None:
+                return
+            name, op = match.groups()
+            null_edge = pred.term[1] if op == '==' else pred.term[2]
+            if b.bid == null_edge:
+                for reg, value in list(L.regs.items()):
+                    if value is not None and value.text == name:
+                        L.regs[reg] = Expr('0', None, 'int')
+
         def exec_block(b, dry):
             L.out = _Sink(b)
             L.dry = dry
@@ -426,6 +444,7 @@ class _AnalyzeMixin:
                 # carried TEXT, so which instruction set it is genuinely
                 # unknown -- never inherit some other block's mnemonic
                 L._flags_mn = None
+            narrow_null_edge(b, preds_done)
             exec_block(b, dry=True)
             b.end_state = dict(L.regs)
             ft = flags_text()
@@ -527,12 +546,14 @@ class _AnalyzeMixin:
             ft = flags_text()
             if ft:
                 L.regs[FLAGS] = Expr('%s%s' % ft, None, '?')
+            narrow_null_edge(b, preds_done)
             exec_block(b, dry=False)
             b.end_state = dict(L.regs)
 
         # ---- SSA destruction: materialize each phi as a copy on its in-edges
         self.phi_names = set(phi.values())
         self._build_phi_copies(blocks, phi, FLAGS)
+        L._flush_pending_calls(getattr(self, 'phi_copies', None))
 
     # ------------------------------------------------------------------
     _TOKRX = re.compile(r'(?<![\w.])(v\d+)(?![\w])')

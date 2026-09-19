@@ -64,6 +64,8 @@ class _ValuesMixin:
         renaming pass reads merged hints for them too."""
         if e is None or e.kind in ('ptr', 'klass', 'arr'):
             return
+        if isinstance(getattr(e, 'ty', None), tuple):
+            return
         t = e.text
         if not t or t[0] == '&' or not _BARE_HINT_RX.match(t):
             return
@@ -227,6 +229,11 @@ class _ValuesMixin:
                             csharp_type_name(self.meta.typedefs[etd].name),
                             em[ev])
                         continue
+            if at.startswith('&') and hasattr(self.il, '_sf_field_size'):
+                aggregate = self._copied_struct_arg(at, pt)
+                if aggregate is not None:
+                    args[ai] = aggregate
+                    continue
             if at.startswith('&'):
                 if (bits >> 29) & 1:
                     pointee = (pt[0], pt[1] & ~(1 << 29))
@@ -439,9 +446,11 @@ class _ValuesMixin:
             sty = self.slot_types[base.text]
             std_idx = self._td_of(sty)
             if std_idx is not None and self.meta.typedefs[std_idx].is_valuetype:
-                fm = self.il.field_offset_map(std_idx)
+                fm = self.il.instance_field_chain(std_idx)
                 if fm is not None and (disp + 0x10) in fm:
-                    return Expr('%s.%s' % (_recv_fold(base.text), fm[disp + 0x10]), sty, 'obj')
+                    name, ti = fm[disp + 0x10]
+                    ty = self.il.types[ti]
+                    return Expr('%s.%s' % (_recv_fold(base.text), name), ty, self._ty_kind(ty))
         ty = base.ty
         text = base.text
         # type inference, live: a bare temp hinted by an earlier call/store
@@ -559,6 +568,26 @@ class _ValuesMixin:
         (see _bind). Other pointer temps stay `object`."""
         return e is not None and e.kind == 'ptr' \
             and self._is_byte_ptr_ty(e.ty)
+
+    def _test_is_value(self, value):
+        if value is None:
+            return False
+        ty = value.ty
+        if ty is None:
+            ty = getattr(self, '_type_hints', {}).get(value.text)
+        if ty is not None:
+            te = self.il._type_enum(ty)
+            if te in (0x11, 0x18, 0x19):
+                try:
+                    tn = self.il.type_name(ty)
+                except Exception:
+                    tn = ''
+                if tn in ('System.IntPtr', 'System.UIntPtr'):
+                    return False
+            if te == 0x11:
+                return True
+            return te in range(0x02, 0x0e) or te in (0x18, 0x19)
+        return False
 
     def _ty_kind(self, ty):
         te = self.il._type_enum(ty) if ty else 0

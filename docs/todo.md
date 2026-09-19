@@ -1,5 +1,46 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: decompiler recovery follow-up (2026-09-19, unpromoted)
+
+Continues `nowtodo.md` (2026-09-19 stop record, committed alongside): the
+experimental aggregate/interface/null-edge work plus new fixes below. Nothing
+here is promoted: `final_out/` untouched, no snapshot regen, no rebuild. All
+`il2cpp/` edits kept the CRLF/no-BOM contract (binary patches with
+line-ending asserts); `tests/test_recovery_followup.py` (LF) pins the new
+behavior (38 tests).
+
+- Aggregate audit: `_write_mem` no longer suppresses sliced stack stores
+  (suppression + merge-killed slices produced undefined temps; contact's
+  `obj22` is now a defined `contact1.pointB.x`), mem-facts keep the value's
+  refined text, exact-tiling composites route per-tile (`_parts`), narrow
+  provenance records its prefix, valuetype loads fall through on degraded
+  fragments, reference loads defer to exact `_field_expr` hits.
+- Ignored non-void calls flush once as bare statements at defpos after phi
+  destruction (replaces bind-everything; used calls stay inline; twin-proofed
+  against mov-copies and phi copies). `RemoveAll` retained in OnEnable.
+- Write barriers and `.ctor`-on-stack-buffer record their stores; byref
+  params kill the slot cache (viscosity `num1<num2` + stride back).
+- LEA names unified to the `slot_var` convention (no more `s_ffff…`
+  aliases); MOVDQA/MOVDQU stores/loads handled; List `+0x18` renders
+  `.Count`; static RGBA bytes render `Color.*`/`new Color` via `_color_text`.
+- Proven-type beats instruction-shape hints (`InputMode` decls back);
+  IntPtr/UIntPtr (any TE spelling) test against null; unknown-kind TESTs
+  stay null-style.
+- Fixed goldens now passing: 31361/2 (`.m_State`), 32833 field
+  (`.m_StateBlock`, entry drift remains), 31664 (ctor/store/return),
+  45016, review80-touchscreen. Remaining 24 failures triaged per item
+  (several read as improvements pending gated regen; open regressions:
+  32837 value→zero folding, 104428 call-absorbs-select, SIMD-lane vectors,
+  color ternary arms, Navigation full struct, `GetComponent<T>` args).
+- Gates: portable 695+ green; full suite 803 passed / 24 failed (HEAD
+  stash-proves-clean at 795/795, so all 24 are working-tree drift).
+
+Leftovers: Navigation struct assembly needs path-sensitive facts
+(first-item skip-join legitimately phis); contact color arms + SIMD lanes +
+custom `+0x28` count; mic bool/int `SetActive` + PTT flag scope; item 9
+(hash-switch/events) correctly deferred; per-golden native review before
+any regen/promotion.
+
 ## Package split (2026-09-12, no behaviour change)
 
 `il2csharp.py` (10,061 lines) and `decompiler.py` (8,407 lines) were split into
@@ -227,6 +268,11 @@ names qualify via the unique directly-listed interface method with the same
 name and rendered signature -- async `MoveNext`/`SetStateMachine`, iterator
 `MoveNext`; trigger census matched the error count exactly, probe delta is
 the sole change, `work/iface_out` + `validation_reports/probe_iface_out.json`);
+CS0052 done (308 -> 0: private nested `__StaticArrayInitTypeSize=N` / Mono
+`$ArrayType=N` blob structs, always empty, render `internal` -- over-visible
+never errors -- with a CS0262 knock-on (28 -> 16: 12 sizes exist as
+split-visibility duplicate typedefs, `0x113` vs `0x115`, unified on the
+metadata majority; `work/blob_out` + `validation_reports/probe_blob_out.json`);
 CS0111 384
 (combined-partial duplicate constructors, known do-not-touch: deleting them
 would damage the individual assemblies); CS0052 308

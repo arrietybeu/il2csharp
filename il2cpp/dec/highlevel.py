@@ -526,11 +526,22 @@ class _HighLevelMixin:
     _INC_RX = re.compile(r'^(v\d+) = \(?\1 ([+-]) (\d+)\)?;$')
     _LEN_RX = re.compile(r'(?<![\w.])(\w+) (<|>=) \*\((.+?) \+ 0x18\)')
 
-    @classmethod
-    def _len_sugar(cls, cond: str) -> str:
-        """`i < *(a + 0x18)` is an array-length test; +0x18 is Il2CppArray::max_length."""
-        return cls._LEN_RX.sub(lambda m: '%s %s %s.Length' % (m.group(1), m.group(2),
-                                                             m.group(3)), cond)
+    def _len_sugar(self, cond: str) -> str:
+        """`i < *(a + 0x18)` is an array-length test (+0x18 is
+        Il2CppArray::max_length) -- unless the receiver is a List<T>,
+        whose +0x18 is _size, i.e. Count."""
+        def rep(m):
+            recv = m.group(3)
+            ty = self._var_types.get(recv)
+            if ty is not None:
+                try:
+                    tn = self.L.il.type_name(ty)
+                except Exception:
+                    tn = ''
+                if '.List_1<' in tn or tn.startswith('List_1<'):
+                    return '%s %s %s.Count' % (m.group(1), m.group(2), recv)
+            return '%s %s %s.Length' % (m.group(1), m.group(2), recv)
+        return self._LEN_RX.sub(rep, cond)
 
     def _for_sugar(self, lines: List[str]) -> List[str]:
         """while + counter phi -> for. The increment is the phi copy on the back

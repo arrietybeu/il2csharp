@@ -220,11 +220,35 @@ class Emitter:
         except Exception:
             return None
 
+    def _is_blob_container(self, td) -> bool:
+        """True for compiler-generated static-data blob containers.
+
+        Roslyn `__StaticArrayInitTypeSize=N` and Mono `$ArrayType=N`
+        nested structs are always empty (no fields, no methods, hence
+        no properties or events either) and carry no source contract.
+        A private one exposed by an assembly-visible field fails
+        CS0052, while internal always compiles (over-visible never
+        errors), so the pattern renders internal. Anything with
+        members, another visibility, or another name keeps truth."""
+        try:
+            nm = td.name or ''
+            if not re.match(r'^(?:__StaticArrayInitTypeSize=\d+|\$ArrayType=\d+)$', nm):
+                return False
+            if not td.is_valuetype or td.method_count or td.field_count:
+                return False
+            if (td.flags & 7) != 3:
+                return False
+            return self.il._nested_owner(td.index) is not None
+        except Exception:
+            return False
+
     def type_decl_line(self, td: TypeDef) -> List[str]:
         f = td.flags
         vis = TYPE_VIS.get((f >> 0) & 7, '')
         if td.declaring < 0 and (f & 7) > 1:
             vis = 'internal '  # a nested form on a top-level row: unreadable
+        if self._is_blob_container(td):
+            vis = 'internal '
         lines = []
         if f & 0x20:
             # interfaces are implicitly abstract: 0x80 is always set

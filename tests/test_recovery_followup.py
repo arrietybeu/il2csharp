@@ -1,0 +1,424 @@
+"""Synthetic regressions for the 2026-09-19 recovery follow-up (nowtodo.md).
+
+Each test executes real x64 bytes (or the exact changed helper) through the
+real Lifter with minimal doubles. Native fixture coverage lives in the game
+goldens; null-edge narrowing is covered by MicAudioCanvas.Start
+(mi 26312) since it needs full CFG blocks.
+"""
+from types import SimpleNamespace as NS
+import struct
+
+import pytest
+from iced_x86 import Decoder
+
+from il2cpp import Expr, Lifter
+
+INT = (0, 0x08 << 16)
+F32 = (0, 0x0C << 16)
+STRING = (0, 0x0E << 16)
+CLASS = (0, 0x12 << 16)
+V3 = (0, 0x11 << 16)
+
+
+def lifter(regs=None, il=None):
+    lift = Lifter.__new__(Lifter)
+    lift.il = il or NS(
+        types=[INT],
+        _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+        instance_field_chain=lambda td: {},
+        type_from_ptr=lambda ptr: None,
+    )
+    lift.meta = NS(typedefs=[NS(is_valuetype=False)])
+    lift.bin = NS()
+    lift.regs = dict(regs or {})
+    lift.out, lift._type_hints, lift._var_types = [], {}, {}
+    lift.slot_types, lift.stack_map, lift.stack_values, lift.addr_of = {}, {}, {}, {}
+    lift.rsp_delta = lift.var_n = 0
+    lift.dry = lift.asm_comments = lift._copying = False
+    lift._cur_ip = 0
+    lift.flags = None
+    return lift
+
+
+def execute(lift, hex_bytes):
+    insns = list(Decoder(64, bytes.fromhex(hex_bytes), ip=0x1000))
+    for index, ins in enumerate(insns):
+        lift._insn(ins, insns, index, None, insns[-1].next_ip)
+
+
+def test_value_test_compares_against_zero():
+    lift = lifter({'RAX': Expr('n', INT, 'int')})
+    execute(lift, '85c0')  # test eax,eax
+    assert lift.flags[1].text == '0'
+
+
+def test_null_test_compares_against_null():
+    lift = lifter({'RAX': Expr('o', CLASS, 'obj')})
+    execute(lift, '85c0')  # test eax,eax
+    assert lift.flags[1].text == 'null'
+
+
+def test_zero_stored_to_reference_renders_null():
+    lift = lifter()
+    assert lift._fimm('0', STRING) == 'null'
+    assert lift._fimm('0', CLASS) == 'null'
+
+
+def test_zero_stored_to_byref_stays_zero_and_bool_unaffected():
+    lift = lifter(il=NS(
+        types=[INT],
+        _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+        instance_field_chain=lambda td: {},
+        type_from_ptr=lambda ptr: None,
+        enum_members=lambda etd: None,
+    ))
+    assert lift._fimm('0', (0, (0x12 << 16) | (1 << 29))) == '0'
+    assert lift._fimm('0', (0, 0x02 << 16)) == 'false'
+    assert lift._fimm('1', (0, 0x02 << 16)) == 'true'
+
+
+def struct_lifter():
+    chain = {0x10: ('x', 1), 0x14: ('y', 1), 0x18: ('z', 1)}
+    il = NS(
+        types=[INT, F32, V3],
+        _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+        _sf_field_size=lambda ty, _: {F32: 4, V3: 12}.get(ty),
+        _closed_type_key=lambda t: t,
+        instance_field_chain=lambda td: chain,
+        type_from_ptr=lambda ptr: None,
+        type_name=lambda ty: 'UnityEngine.Vector3',
+    )
+    lift = lifter(il=il)
+    lift.meta = NS(typedefs=[NS(is_valuetype=True, name='Vector3')])
+    return lift
+
+
+def test_full_struct_reconstructs_initializer():
+    lift = struct_lifter()
+    lift._stack_store(0x20, 4, Expr('1.0f', F32, 'float'))
+    lift._stack_store(0x24, 4, Expr('2.0f', F32, 'float'))
+    lift._stack_store(0x28, 4, Expr('3.0f', F32, 'float'))
+    assert lift._stack_struct(0x20, V3) == \
+        'new UnityEngine.Vector3 { x = 1.0f, y = 2.0f, z = 3.0f }'
+
+
+def test_partial_struct_returns_no_guessed_fields():
+    lift = struct_lifter()
+    lift._stack_store(0x20, 4, Expr('1.0f', F32, 'float'))
+    lift._stack_store(0x28, 4, Expr('3.0f', F32, 'float'))
+    assert lift._stack_struct(0x20, V3) is None
+
+
+def test_overlapping_store_splits_surviving_ranges():
+    lift = struct_lifter()
+    lift._stack_store(0x20, 8, Expr('wide', None, 'bits'))
+    lift._stack_store(0x24, 4, Expr('1.0f', F32, 'float'))
+    tiled = lift._stack_piece(0x20, 8)
+    assert tiled is not None and len(tiled._parts) == 2  # exact tiling, no gap
+    assert lift._stack_piece(0x24, 4).text == '1.0f'
+
+
+def test_gapped_tiles_decline():
+    lift = struct_lifter()
+    lift._stack_store(0x20, 4, Expr('a', INT, 'int'))
+    lift._stack_store(0x28, 4, Expr('b', INT, 'int'))
+    assert lift._stack_piece(0x20, 12) is None
+
+
+def test_narrow_provenance_records_prefix_not_nothing():
+    lift = struct_lifter()
+    v = Expr('w', INT, 'int')
+    v._slice = (Expr('o', None, 'obj'), 0, 4)
+    lift._stack_store(0x20, 8, v)
+    assert '!mem:32:4' in lift.regs
+    assert '!mem:32:8' not in lift.regs
+
+
+def test_tiled_composite_routes_per_tile():
+    lift = struct_lifter()
+    lift._stack_store(0x20, 4, Expr('4', None, 'int'))
+    lift._stack_store(0x24, 4, Expr('2.0f', F32, 'float'))
+    tiled = lift._stack_piece(0x20, 8)
+    assert lift._piece_value(tiled, 4, 4, F32).text == '2.0f'
+    assert lift._piece_value(tiled, 0, 4, F32) is not None
+
+
+def test_sliced_stack_store_still_emits_the_statement():
+    lift = struct_lifter()
+    frag = Expr('o.field', F32, 'float')
+    frag._slice = (Expr('o', None, 'obj'), 0, 4)
+    lift.regs['RAX'] = frag
+    execute(lift, '89442410')  # mov [rsp+10h],eax
+    assert any('s_10' in s[1] and 'o.field' in s[1] for s in lift.out)
+    assert lift._stack_piece(0x10, 4).text == 'o.field'
+
+
+def test_stack_store_load_roundtrip():
+    lift = struct_lifter()
+    lift.regs['RAX'] = Expr('n', INT, 'int')
+    execute(lift, '4889442410')  # mov [rsp+10h],rax
+    execute(lift, '8b442410')  # mov eax,[rsp+10h]
+    assert lift.regs['RAX'].text == 'n'
+
+
+PREFIX = bytes.fromhex(
+    '48895c2408574883ec20498b184533c9498bf8440fb7932e010000'
+    '66453bca73264c8b9bb00000000f1f840000000000410fb7c14803c0'
+    '493914c3742d6641ffc166453bca72e9440fb7c1488bcfe8')
+SUFFIX = bytes.fromhex(
+    '4c8b00488bcf488b5008488b5c24304883c4205f49ffe0410fb7d1'
+    '4803d20fb7c9418b44d30803c1489848c1e0044805380100004803c3ebc7')
+
+
+def iface_lifter(code):
+    target = 0x5000
+    il = NS(
+        types=[INT],
+        _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+        _return_abi_is_known=lambda rt: True,
+        returns_sret=lambda rt: False,
+        method_simple_name=lambda mi: 'IFoo.Bar',
+    )
+    lift = lifter(il=il)
+    lift.meta = NS(
+        typedefs=[NS(flags=0x20, method_count=4, method_start=0)],
+        methods=[NS(return_type=0, is_static=False, param_count=0,
+                    name='IFoo.Bar')],
+    )
+    lift.bin = NS(read=lambda va, n: code if va == target and n == len(code) else None)
+    return lift, target
+
+
+def dispatch_args():
+    return [Expr('0', INT, 'int'), Expr('typeof(IFoo)', (0, 0x12 << 16), 'klass'),
+            Expr('rec', CLASS, 'obj')]
+
+
+def test_nullary_interface_dispatch_recognized():
+    lift, target = iface_lifter(PREFIX + b'\x00\x00\x00\x00' + SUFFIX)
+    assert lift._nullary_interface_dispatch(target, dispatch_args()) is not None
+
+
+def test_nullary_interface_dispatch_rejects_mutated_bytes():
+    bad = bytearray(PREFIX + b'\x00\x00\x00\x00' + SUFFIX)
+    bad[10] ^= 0xFF
+    lift, target = iface_lifter(bytes(bad))
+    assert lift._nullary_interface_dispatch(target, dispatch_args()) is None
+
+
+def test_nullary_interface_dispatch_rejects_non_interface():
+    lift, target = iface_lifter(PREFIX + b'\x00\x00\x00\x00' + SUFFIX)
+    lift.meta.typedefs[0].flags = 0x00
+    assert lift._nullary_interface_dispatch(target, dispatch_args()) is None
+
+
+def test_nullary_interface_dispatch_rejects_out_of_range_slot():
+    lift, target = iface_lifter(PREFIX + b'\x09\x00\x00\x00' + SUFFIX)
+    args = [Expr('9', INT, 'int'), dispatch_args()[1], dispatch_args()[2]]
+    assert lift._nullary_interface_dispatch(target, args) is None
+
+
+def test_return_value_register_abi():
+    assert Lifter._return_value_register(F32) == 'XMM0'
+    assert Lifter._return_value_register((0, 0x0D << 16)) == 'XMM0'
+    assert Lifter._return_value_register((0, (0x0C << 16) | (1 << 29))) == 'RAX'
+    assert Lifter._return_value_register(INT) == 'RAX'
+    assert Lifter._return_value_register(None) == 'RAX'
+
+
+def test_get_item_sret_folds_to_indexer():
+    from test_stack_args import make_call_lifter
+    lift, ins = make_call_lifter(
+        [INT], {'RCX': '&s_20', 'RDX': 'this', 'R8': '0'},
+        returns=V3, static=False, name='get_Item')
+    lift.il = NS(
+        meta=lift.meta, types=[V3, INT, INT],
+        addr_candidates=lift.il.addr_candidates,
+        addr_to_method=lift.il.addr_to_method,
+        function_extent=lift.il.function_extent,
+        returns_sret=lambda ty: True,
+        _type_enum=lift.il._type_enum,
+        type_from_ptr=lambda ptr: None,
+    )
+    lift._insn(ins, [ins], 0, None, ins.next_ip)
+    assert lift.out and lift.out[-1][1] == 's_20 = this[0];'
+
+
+def test_lea_names_negative_frame_slot_by_abs_convention():
+    lift = lifter()
+    lift.rsp_delta = -0x88
+    execute(lift, '488d542450')  # lea rdx,[rsp+50h]
+    e = lift.regs['RDX']
+    assert e.text == '&s_50'
+    assert 'ffff' not in e.text
+    assert e._stack_offset == -0x38
+
+
+def test_write_barrier_records_the_pointer_store():
+    from test_stack_args import make_call_lifter
+    from il2cpp import Expr as _Expr
+    rcx = _Expr('&s_28', None, 'ptr')
+    rcx._stack_offset = -56
+    lift, ins = make_call_lifter([], {'RCX': rcx, 'RDX': 'prev1'}, returns=(0, 0x01 << 16))
+    lift.rt_wbarrier = {0x2000}
+    lift.il._sf_field_size = lambda ty, _: 8
+    lift._insn(ins, [ins], 0, None, ins.next_ip)
+    assert '!mem:-56:8' in lift.regs
+    assert any('s_28' in s[1] and 'prev1' in s[1] for s in lift.out)
+
+
+def test_hint_never_downgrades_a_typed_operand():
+    lift = lifter()
+    lift._hint_tok(Expr('t1', INT, 'int'), F32)
+    assert 't1' not in lift._type_hints
+    lift._hint_tok(Expr('t9', None, 'int'), F32)
+    assert lift._type_hints['t9'] == F32
+
+
+def test_intptr_tests_against_null():
+    il = NS(
+        types=[INT],
+        _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+        type_name=lambda t: 'System.IntPtr' if t == (0, 0x18 << 16) else 'System.Guid',
+        instance_field_chain=lambda td: {},
+        type_from_ptr=lambda ptr: None,
+    )
+    lift = lifter(il=il)
+    lift.meta = NS(typedefs=[
+        NS(name='IntPtr', namespace='System', is_valuetype=True),
+        NS(name='Guid', namespace='System', is_valuetype=True),
+    ])
+    assert lift._test_is_value(Expr('p', (0, 0x18 << 16), 'obj')) is False
+    assert lift._test_is_value(Expr('g', (1, 0x11 << 16), 'obj')) is True
+
+
+def test_byref_param_kills_the_slot_cache():
+    from test_stack_args import make_call_lifter
+    from il2cpp import Expr as _Expr
+    REF_INT = (0, (0x08 << 16) | (1 << 29))
+    rcx = _Expr('&s_10', None, 'ptr')
+    rcx._stack_offset = 0x10
+    lift, ins = make_call_lifter([REF_INT], {'RCX': rcx},
+                                 returns=(0, 0x01 << 16))
+    lift.il._sf_field_size = lambda ty, _: 4
+    lift.stack_map[0x10] = 's_10'
+    stale = _Expr('stale', (0, 0x08 << 16), 'int')
+    lift.stack_values['s_10'] = stale
+    lift._stack_store(0x10, 4, stale)
+    assert '!mem:16:4' in lift.regs
+    lift._insn(ins, [ins], 0, None, ins.next_ip)
+    assert 's_10' not in lift.stack_values
+    assert '!mem:16:4' not in lift.regs
+
+
+def test_ctor_on_stack_buffer_records_construction():
+    from test_stack_args import make_call_lifter
+    from il2cpp import Expr as _Expr
+    rcx = _Expr('&s_20', None, 'ptr')
+    rcx._stack_offset = 0x30
+    lift, ins = make_call_lifter([], {'RCX': rcx}, returns=(0, 0x01 << 16),
+                                 static=False, name='.ctor')
+    lift.meta.typedefs[0] = NS(name='T', namespace='', is_valuetype=True)
+    lift.il._sf_field_size = lambda ty, _: 16
+    lift.stack_map[0x30] = 's_20'
+    lift._insn(ins, [ins], 0, None, ins.next_ip)
+    assert '!mem:48:16' in lift.regs
+    assert any('.ctor(' in s[1] for s in lift.out)
+
+
+def test_non_ctor_call_records_no_buffer():
+    from test_stack_args import make_call_lifter
+    from il2cpp import Expr as _Expr
+    rcx = _Expr('&s_20', None, 'ptr')
+    rcx._stack_offset = 0x30
+    lift, ins = make_call_lifter([], {'RCX': rcx}, returns=(0, 0x01 << 16),
+                                 static=False, name='Reset')
+    lift.meta.typedefs[0] = NS(name='T', namespace='', is_valuetype=True)
+    lift.il._sf_field_size = lambda ty, _: 16
+    lift._insn(ins, [ins], 0, None, ins.next_ip)
+    assert not [k for k in lift.regs if k.startswith('!mem:')]
+
+
+def test_movdqa_mem_store_emits_and_records():
+    lift = struct_lifter()
+    lift.regs['XMM0'] = Expr('c', F32, 'float')
+    execute(lift, '660f7f442410')  # movdqa [rsp+10h],xmm0
+    assert any('s_10' in s[1] and 'c' in s[1] for s in lift.out)
+    assert lift._stack_piece(0x10, 4).text == 'c'
+
+
+def test_ignored_call_result_flushes_as_bare_statement():
+    from test_stack_args import make_call_lifter
+    from il2cpp.expr import _RegState
+    lift, ins = make_call_lifter([], {'RCX': 'a'}, returns=INT)
+    lift.regs = _RegState(lift, lift.regs)
+    lift._insn(ins, [ins], 0, None, ins.next_ip)
+    lift._flush_pending_calls()
+    assert lift.out == [(0x1000, 'Example.Target();', None)]
+
+
+def test_used_call_result_renders_inline_without_flush():
+    from test_stack_args import make_call_lifter
+    from il2cpp.expr import _RegState
+    lift, ins = make_call_lifter(
+        [INT], {'RCX': 'a'},
+        returns=INT,
+    )
+    lift.regs = _RegState(lift, lift.regs)
+    lift._insn(ins, [ins], 0, None, ins.next_ip)
+    execute(lift, '4889442410')  # mov [rsp+10h],rax reads the result
+    lift._flush_pending_calls()
+    assert len(lift.out) == 1
+    assert lift.out[0][1] == 's_10 = Example.Target(a);'
+
+
+def test_generic_return_inflates_to_closed_type():
+    from test_stack_args import make_call_lifter
+    lift, ins = make_call_lifter([INT], {'RCX': 'a'}, returns=(0, 0x13 << 16))
+    lift.il = NS(
+        meta=lift.meta, types=[(0, 0x13 << 16), INT],
+        addr_candidates={0x2000: [('generic', 0)]},
+        addr_to_method={0x2000: ('generic', 0)},
+        function_extent=lift.il.function_extent,
+        returns_sret=lambda ty: False,
+        _type_enum=lift.il._type_enum,
+        type_from_ptr=lambda ptr: None,
+        method_specs=[(0, 1)],
+        candidate_return_type=lambda info: INT,
+        generic_method_name=lambda i: 'Example.Target',
+        _method_spec_type_args=lambda i: [],
+    )
+    lift._insn(ins, [ins], 0, None, ins.next_ip)
+    assert lift.regs['RAX'].ty == INT
+
+
+def color_lifter():
+    lift = struct_lifter()
+    lift.il.type_name = lambda ty: 'UnityEngine.Color'
+    return lift
+
+
+def test_color_red_bytes_render_named():
+    lift = color_lifter()
+    origin = Expr('(float4)(1, 0, 0, 1)', None, 'float')
+    origin._bytes = struct.pack('<4f', 1.0, 0.0, 0.0, 1.0)
+    got = lift._piece_value(origin, 0, 16, V3)
+    assert got is not None and got.text == 'UnityEngine.Color.red'
+
+
+def test_color_arbitrary_bytes_render_constructor():
+    lift = color_lifter()
+    origin = Expr('c', None, 'float')
+    origin._bytes = struct.pack('<4f', 0.5, 0.25, 0.125, 1.0)
+    got = lift._piece_value(origin, 0, 16, V3)
+    assert got is not None
+    assert got.text.startswith('new UnityEngine.Color(')
+    assert got.text.endswith(')')
+    assert got.text.count(',') == 3
+
+
+def test_color_partial_bytes_decline():
+    lift = color_lifter()
+    origin = Expr('c', None, 'float')
+    origin._bytes = struct.pack('<4f', 1.0, 0.0, 0.0, 1.0)
+    assert lift._piece_value(origin, 0, 8, V3) is None

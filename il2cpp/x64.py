@@ -199,7 +199,7 @@ if HAVE_ICED:
     STORE_MNEMONICS = {
         Mnemonic.MOV, Mnemonic.MOVSS, Mnemonic.MOVSD, Mnemonic.MOVUPS,
         Mnemonic.MOVAPS, Mnemonic.MOVUPD, Mnemonic.MOVAPD, Mnemonic.MOVQ,
-        Mnemonic.MOVD,
+        Mnemonic.MOVD, Mnemonic.MOVDQA, Mnemonic.MOVDQU,
     }
     RMW_OPS = {
         Mnemonic.ADD: '+', Mnemonic.SUB: '-', Mnemonic.IMUL: '*',

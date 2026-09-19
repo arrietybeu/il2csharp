@@ -343,7 +343,9 @@ class _InsnMixin:
             if A(1) == OpKind.MEMORY:
                 e = self._read_mem(ins, asm)
                 if e is not None and self.il._type_enum(e.ty) not in (0x0c, 0x0d):
-                    e = Expr(e.text, e.ty, 'float')
+                    e = self._copy_expr(e)
+                    if getattr(e, '_slice', None) is None:
+                        e.kind = 'float'
                 self.set_reg(dst, e)
                 return
             if A(1) == OpKind.REGISTER:
@@ -355,7 +357,7 @@ class _InsnMixin:
                 self.set_reg(dst, src_e)
                 return
             return
-        if mn in (Mnemonic.MOVQ, Mnemonic.MOVD):
+        if mn in (Mnemonic.MOVQ, Mnemonic.MOVD, Mnemonic.MOVDQA, Mnemonic.MOVDQU):
             # GPR<->XMM/XMM<->XMM data moves (struct-field extraction out of
             # a value loaded via an earlier movups/movsd, a boxed-pointer
             # round-trip through an XMM temp, etc). Previously unhandled
@@ -419,7 +421,13 @@ class _InsnMixin:
                     return
                 if ins.memory_base == IReg.RSP or (ins.memory_base == IReg.RBP
                         and self._rbp_is_frame()):
-                    self.set_reg(dst, Expr('&' + self.slot_var(ins.memory_displacement), None, 'ptr'))
+                    address = self._stack_address(ins)
+                    name = self.stack_map.get(address) if address is not None else None
+                    if name is None:
+                        name = self.slot_var(ins.memory_displacement)
+                    value = Expr('&' + name, None, 'ptr')
+                    value._stack_offset = address
+                    self.set_reg(dst, value)
                     return
                 base = self.reg(reg_name(ins.memory_base))
                 disp = sdisp(ins.memory_displacement)
@@ -580,6 +588,19 @@ class _InsnMixin:
                 self.set_reg(dst, e)
                 self.flags = (e, Expr('0', None, 'int'))
                 return
+            # ADD/SUB of an object address and a constant is also how
+            # native code forms a field address for a GC write barrier.
+            if mn in (Mnemonic.ADD, Mnemonic.SUB) and a is not None \
+                    and a.kind == 'obj' and A(1) in IMM_OPS \
+                    and _reg_size(ins.op0_register) == 8:
+                offset = imm_of(ins, 1) * (1 if mn == Mnemonic.ADD else -1)
+                field = self._field_expr(a, offset, 8)
+                if field.ty is not None and not field.text.startswith('*') \
+                        and field.text.startswith(_recv_fold(a.text) + '.'):
+                    e = self._mk('&' + field.text, field.ty, 'ptr')
+                    self.set_reg(dst, e)
+                    self.flags = (e, Expr('0', None, 'int'))
+                    return
             # GPR arithmetic/logic is integer by construction (floats go
             # through SSE): type the operands and, when nothing better is
             # known, the result
@@ -894,7 +915,7 @@ class _InsnMixin:
             self._copying = False
             if mn == Mnemonic.TEST:
                 if be is not None and a is not None and be.text == a.text:
-                    self.flags = (a, Expr('null', None, 'int'))
+                    self.flags = (a, Expr('0' if self._test_is_value(a) else 'null', None, 'int'))
                 else:
                     self.flags = (a, Expr('null' if (be and be.text == '0') else (be.text if be else '0'), None, 'int'))
             else:
@@ -1164,6 +1185,10 @@ class _InsnMixin:
         return None
 
     def _read_mem(self, ins, asm) -> Optional[Expr]:
+        if hasattr(self.il, '_sf_field_size'):
+            packed = self._aggregate_load(ins)
+            if packed is not None:
+                return packed
         if ins.memory_base == IReg.RIP:
             slot = ins.ip_rel_memory_address
             usg = self.il.decode_slot(slot)
@@ -1217,8 +1242,10 @@ class _InsnMixin:
                         return Expr(repr_f32(fv), None, 'float')
                     if msz == 74:
                         f1, f2 = struct.unpack_from('<2f', self.bin.d, o)
-                        return Expr('(float2)(%s, %s)' % (repr_f32(f1), repr_f32(f2)),
-                                    None, 'float')
+                        value = Expr('(float2)(%s, %s)' % (repr_f32(f1), repr_f32(f2)),
+                                     None, 'float')
+                        value._bytes = bytes(self.bin.d[o:o + 16])
+                        return value
                     if msz == 3:
                         return Expr(str(struct.unpack_from('<I', self.bin.d, o)[0]),
                                     None, 'int')
@@ -1632,6 +1659,15 @@ class _InsnMixin:
         return '((%s*)(%s))[0]' % (unsigned_type, address)
 
     def _write_mem(self, ins, asm):
+        if hasattr(self.il, '_sf_field_size'):
+            address = self._stack_address(ins)
+            if address is not None:
+                value = None
+                if ins.op_kind(1) == OpKind.REGISTER:
+                    value = self.reg(reg_name(ins.op1_register))
+                elif ins.op_kind(1) in IMM_OPS:
+                    value = Expr(str(imm_of(ins, 1)), None, 'int')
+                self._stack_store(address, MemorySizeExt.size(ins.memory_size), value)
         lv = self._mem_lvalue(ins)
         if lv is None:
             if self.asm_comments and asm:
@@ -1756,6 +1792,11 @@ class _InsnMixin:
         # literal (`this.InvokeRpc = 0;` -> `= false;`), and an int
         # immediate into an enum-typed location is the member
         # (`Stage = 4;` -> `Stage = SimulationStage.X;`) -- batch 39
+        if v == 0 and not ((ty[1] >> 29) & 1):
+            td_index = self._td_of(ty) if te == 0x15 else None
+            if te in (0x0e, 0x12, 0x14, 0x1c, 0x1d) or (td_index is not None
+                    and not self.meta.typedefs[td_index].is_valuetype):
+                return 'null'
         if te == 0x02 and v in (0, 1):
             return 'true' if v else 'false'
         # Signed integer immediates arrive as unsigned bit patterns at every
