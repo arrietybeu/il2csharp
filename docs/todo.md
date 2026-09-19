@@ -59,7 +59,7 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
-## Current work: unavailable method bodies (uncommitted, 2026-09-19)
+## Current work: unavailable method bodies (committed 3bf35b3, pushed 2026-09-19)
 
 Concrete methods with no native address now emit a throwing body instead of
 an illegal semicolon declaration. The shared body path also covers accessors,
@@ -74,8 +74,10 @@ the exception in the global namespace instead.
 
 Regression coverage compiles generated constructors, ordinary and explicit
 interface methods, indexers, properties, and events with Roslyn in all three
-unavailable-body modes. Validation reports: `validation_reports/method_bodies_*`;
-candidate tree: `work/method_bodies_out/`.
+unavailable-body modes. Committed evidence: `validation_reports/method_bodies_{parse,
+delta,regeneration}.json`; build/compile/tests logs were removed in the
+2026-09-19 cleanup. Candidate tree `work/method_bodies_out/` was removed in
+the same cleanup (superseded by `work/rpc_payload_out/` below).
 
 Gates: 795 tests pass (669 portable + 126 native); strict build 11,181 files /
 114,458 lifted bodies / 0 lift failures / 0 structured fallbacks / 0 type-emission
@@ -96,15 +98,17 @@ combined-assembly probe: for example, `IsUnmanagedAttribute` has one constructor
 in each source assembly, but combining those partial types produces CS0111.
 Deleting those constructors would damage the individual recovered assemblies.
 
-## Current work: accessor recovery + RPC payload typing (uncommitted, 2026-09-19)
+## Current work: accessor recovery + RPC payload typing (committed 3bf35b3, pushed 2026-09-19)
 
-Working tree stacks two uncommitted units on the promoted fix-123 tree:
+Committed tree stacks two units on the promoted fix-123 tree:
 `il2cpp/csharp.py` + `emitter.py` + `runtime/fields.py` (storage identity
 `__field_X`, real property/event bodies; `tests/test_member_recovery.py`,
 `tests/test_game_member_recovery.py`) and `il2cpp/lifter/{state,insn,values}.py`
 + `runtime/types.py` (pointer/array operand typing, below). `final_out/` still
-holds fix 123; `work/accessors_out/` and `work/rpc_payload_out/` are the two
+holds fix 123; `work/accessors_out/` and `work/rpc_payload_out/` were the two
 gated candidate trees (both 11,181 files, 0 failed lifts, parse 0/0/0).
+`work/accessors_out/` was removed in the 2026-09-19 cleanup;
+`work/rpc_payload_out/` is the retained newest output and matches the pushed source.
 
 RPC payload typing (specimen InventoryManager.Rpc_CMD_UpdateInventoryForHost,
 mi 25626, VA 0x180704750): unbound `obj1` and `object` payload arithmetic are
@@ -126,8 +130,10 @@ in `tests/test_pointer_operand_typing.py`, 4 game asserts in
 1 structural delta (mi 37884 into_block 1→0, +1 line, nothing dropped);
 9,200 changed bodies vs accessors; rebuild 11,181 files / 114,458 bodies / 0
 failed; parse 0/0/0; probe 10,305 errors, per-code identical to accessors
-(all 1,393 pair moves are line-number shifts). Reports:
-`validation_reports/rpc_payload_*`; tree `work/rpc_payload_out/`.
+(all 1,393 pair moves are line-number shifts). Committed evidence:
+`validation_reports/rpc_payload_{parse,sweep}.json` plus
+`rpc_payload_sweep.tail-args.jsonl.gz`; build/compile/sweep logs were removed
+in the 2026-09-19 cleanup. Retained tree: `work/rpc_payload_out/`.
 14 goldens regen'd after review (8 accessor renames untouched by this unit +
 6 here: 39789/62312/83647/109664 improvements, 11974 renumber, 5769 noted below).
 
@@ -137,6 +143,21 @@ parseable raw decoder derefs — width follow-up open, do not treat as resolved)
 CopyFromArray dest args reprint the ids extent instead of reusing `num4`
 (faithful recomputation, batch-38 window bounds); `&this.field`-in-rbp and
 genuine `T* + N` element arithmetic keep today's spelling.
+
+## Cleanup 2026-09-19 (after the 3bf35b3 push)
+
+Deleted per user call: all untracked build/compile/sweep/tests logs under
+`validation_reports/` (reviews 114–123, accessors, method bodies, rpc_payload,
+partial_unsafe — the committed parse/sweep/promotion/delta/regeneration JSONs
+and tail-args blobs stay, 472 tracked files), all gitignored sweep/compare
+blobs (`*.methods.jsonl.gz`, `*_vs*.json`, `*comparison.json`,
+`output_audit.json` — regenerable via rebuild/sweep), and the superseded
+candidate trees `work/accessors_out/` + `work/method_bodies_out/`. Kept:
+`final_out/` (promoted fix-123 baseline), `bckups/final_out_fix122`,
+`work/rpc_payload_out/` (matches pushed source), and the older
+`work/review*_out`, `work/partial_*_out`, `bckups/final_out_fix*` trees.
+Historical paragraphs below that cite a removed log/blob keep their original
+report lists as the gate record — the file itself is gone.
 
 ## Current work: post-promotion residue (fix 123 promoted, see below)
 
@@ -386,8 +407,8 @@ shared-boolean assertion was stale since fix 110; the prior candidate already
 emits proven string equality, and the test now checks those exact conditions.
 The 64 frozen method bodies remain unchanged. The strict rebuild was stopped at
 the requested wrap-up point after **97,291 bodies with 0 failures**; its partial
-candidate is `work/review114_out` and its log is
-`validation_reports/review114_build.log`. That rebuild never finished, so
+candidate is `work/review114_out` and its log was
+`validation_reports/review114_build.log` (removed in the 2026-09-19 cleanup). That rebuild never finished, so
 fix 114 alone claims no whole-tree result — the Fix 115 gate below rebuilds
 the same source completely and supersedes it.
 
@@ -430,7 +451,8 @@ non-unsafe diff in the unseeded run was hash-order noise, byte-identical on
 repro). Old-vs-new diff over `work/review114_out/Assembly-CSharp`: 87 files
 changed, 518 added lines, every one an `unsafe` insertion, 0 files with any
 other change. Single-assembly Roslyn probe
-(`validation_reports/partial_unsafe_acs_compile.json`): ACS-scope CS0214
+(`validation_reports/partial_unsafe_acs_compile.json`, removed in the
+2026-09-19 cleanup): ACS-scope CS0214
 falls 518 → 0 (exactly the 518 insertions) and CS0106 199 → 0 (fix-114
 explicit-impl rule); CS0501 holds 35 → 35, untouched by design. The 9,196
 probe total is dominated by CS0246 scope artifact (8,937: cross-assembly
@@ -461,7 +483,9 @@ CS0106 2,402 → 0, CS0533 226 → 0, CS0534 3,527 → 3, CS1520 797 → 0,
 CS0214 3,627 → 517 (residue: pointer fields and body locals only, sampled),
 unmasking CS0115 266 / CS0249 121 / CS0507 4; CS0246/CS0501/CS0535/CS0737
 unchanged. Reports: `validation_reports/review115_{build.log,sweep.json,
-vs113.json,parse.json,compile.json,tests.log}`; built tree
+vs113.json,parse.json,compile.json,tests.log}` (build/compile/tests logs and
+the vs-compare blob removed in the 2026-09-19 cleanup; sweep/parse JSONs stay
+tracked); built tree
 `work/review115_out`. The 64 goldens are untouched (0 changed bodies, no
 regen needed). Promoted 2026-09-17: `final_out/` now holds
 `work/review115_out` (11,274 files — 74 more than the fix-99 tree, exactly
