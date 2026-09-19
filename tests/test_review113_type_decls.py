@@ -40,6 +40,7 @@ def make_emitter(methods=(), fields=(), typedefs=(), ifaces=()):
               type_fields=lambda td: getattr(td, "fis", []))
     e.il = il
     e.meta = meta
+    il.meta = meta
     return e
 
 

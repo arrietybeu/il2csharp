@@ -1,7 +1,7 @@
 from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.arm64 import Arm64Lifter, is_arm64_binary
 from il2cpp.common import compressed_int, csharp_type_name, i32, i64, read_compressed_uint, u16, u32, u64
-from il2cpp.csharp import FA_INITONLY, FA_LITERAL, FA_STATIC, FIELD_VIS, METH_VIS, TYPE_VIS, UsingTracker, field_attrs, nameof_sugar, strip_namespaces, collision_heads
+from il2cpp.csharp import FA_INITONLY, FA_LITERAL, FA_STATIC, FIELD_VIS, METH_VIS, TYPE_VIS, UsingTracker, field_attrs, nameof_sugar, strip_namespaces, collision_heads, source_field_name
 from il2cpp.lifter import Lifter
 from il2cpp.metadata import ImageDef, MethodDef, TypeDef
 from il2cpp.names import repr_f32, repr_f64, safe_ident, sanitize, sanitize_qualifier
@@ -559,31 +559,18 @@ class Emitter:
             out.extend(self.enum_body(td))
             out.append(pre + '}')
             return True
-        # fields
-        prop_names = {self.meta.getstr(self.meta.properties[td.property_start + k][0])
-                      for k in range(td.property_count)}
-        bk_offs = {}
-        _BKF = re.compile(r'^<(.+)>k__BackingField$')
+        # Preserve real storage; accessors must not recursively read themselves.
         fmax = self.meta.type_fields(td)
         for fi in fmax:
             f = self.meta.fields[fi]
             ft = self.il.types[f.type] if 0 <= f.type < len(self.il.types) else None
             if ft is None:
                 continue
-            fn = safe_ident(sanitize(f.name))
+            fn = safe_ident(sanitize(source_field_name(self.il, fi)))
             fa = field_attrs(self.il, f)
             ftname = self.il.type_name(ft)
             is_static_field = bool(fa & FA_STATIC)
             off_note = self.field_off_note(td, fi, is_static_field)
-            bk = _BKF.match(f.name)
-            if bk and bk.group(1) in prop_names:
-                # auto-property backing field: the property already
-                # declares the member; the fake `_X_k__BackingField`
-                # line reads as a real public API member that doesn't
-                # exist (1,080 files tree-wide). Carry its offset
-                # comment onto the property instead.
-                bk_offs[bk.group(1)] = off_note
-                continue
             vis = FIELD_VIS.get(fa & 7, 'public ')
             # const is FieldAttributes.Literal, NOT `has a decodable
             # default value` -- RVA data blobs carry a dv row too, and 14
@@ -619,21 +606,15 @@ class Emitter:
             for x in (pr[1], pr[2]):
                 if x is not None and x >= 0 and 0 <= td.method_start + x < len(self.meta.methods):
                     accessor_idxs.add(td.method_start + x)
-            self.emit_property(td, out, pre, pr, bk_offs)
-        # events: add_/remove_ accessors are represented by the event itself
+            self.emit_property(td, out, pre, pr)
+        # C# has add/remove syntax but no raise accessor: keep raise as a
+        # normal method instead of silently dropping its native body.
         for k in range(td.event_count):
             ev = self.meta.events[td.event_start + k]
-            for x in ev[2:5]:
-                if x is not None and x >= 0 and 0 <= td.method_start + x < len(self.meta.methods):
-                    accessor_idxs.add(td.method_start + x)
-            present = [self._rel_method(td, x) for x in ev[2:5]]
-            present = [a for a in present if a is not None]
-            estatic = 'static ' if present and all(
-                a.is_static for a in present) else ''
-            out.append(pre + '    %s%sevent %s %s;' % (
-                '' if td.flags & 0x20 else 'public ', estatic,
-                self.il.type_name(self.il.types[ev[1]]) if ev[1] < len(self.il.types) else 'Action',
-                safe_ident(sanitize(csharp_type_name(self.meta.getstr(ev[0]))))))
+            if self.emit_event(td, out, pre, ev):
+                for x in ev[2:4]:
+                    if self._rel_method(td, x) is not None:
+                        accessor_idxs.add(td.method_start + x)
         # methods
         skip_delegate = self._is_delegate_td(td) \
             and self._delegate_viable(td)
@@ -749,13 +730,17 @@ class Emitter:
         return body
 
     def _lift_body(self, m: MethodDef, td: TypeDef, abstract=False):
-        """Lift one method body (decompiler first, linear fallback); None when
-        there is nothing to lift. Counts toward lifted/failed."""
-        has_body = m.addr and self.with_bodies and self.lifter and not abstract
+        """Lift a body or emit an explicit unavailable-body throw.
+
+        Only abstract declarations return None; only actual lifts are counted.
+        """
+        if abstract:
+            return None
+        has_body = m.addr and self.with_bodies and self.lifter
         if self.max_methods is not None and self.lifted >= self.max_methods:
             has_body = False
         if not has_body:
-            return None
+            return ['throw new global::System.NotImplementedException("Method body was not recovered.");']
         structured_error = None
         if self.decompiler is not None:
             try:
@@ -789,50 +774,151 @@ class Emitter:
         mi = td.method_start + rel
         return self.meta.methods[mi] if 0 <= mi < len(self.meta.methods) else None
 
+    def _member_name(self, raw, td):
+        raw = csharp_type_name(raw)
+        if '.' in raw:
+            head, _, tail = raw.rpartition('.')
+            return sanitize_qualifier(self._arity_qualifier(head, td)) + '.' + safe_ident(tail)
+        return safe_ident(sanitize(raw))
+
+    def _accessor_modifiers(self, td, present, explicit=False):
+        """Use the most accessible accessor, preserving method dispatch flags."""
+        if not present:
+            return '' if td.flags & 0x20 or explicit else 'public '
+        # Accessibility is a lattice: protected + internal has their union.
+        vis = {getattr(a, 'flags', 6) & 7 for a in present}
+        access = 6 if 6 in vis else 5 if 5 in vis or {3, 4} <= vis else max(vis)
+        chosen = next((a for a in present if getattr(a, 'flags', 6) & 7 == access), present[0])
+        f = getattr(chosen, 'flags', 6)
+        mods = '' if explicit or td.flags & 0x20 else METH_VIS.get(access, '')
+        if all(a.is_static for a in present):
+            mods += 'static '
+        abstract = all(getattr(a, 'flags', 0) & 0x400 for a in present)
+        if td.flags & 0x20:
+            if all(a.is_static for a in present) and abstract:
+                mods += 'abstract '
+        elif not explicit:
+            if abstract:
+                mods += 'abstract '
+                if f & 0x40 and not f & 0x100:
+                    mods += 'override '
+            elif f & 0x40 and not chosen.is_static:
+                if not f & 0x100:
+                    mods += 'sealed override ' if f & 0x20 else 'override '
+                elif not f & 0x20:
+                    mods += 'virtual '
+        return mods
+
+    def _accessor_lines(self, m, td, aliases=None):
+        if getattr(m, 'flags', 0) & 0x400:
+            return None
+        body = self._lift_body(m, td)
+        if body is None or not aliases:
+            return body
+        # Only parameter tokens, never member names or literal/comment text.
+        from il2cpp.dec.highlevel import _HighLevelMixin
+        mapping = {safe_ident(k): v for k, v in aliases.items() if safe_ident(k) != v}
+        if not mapping:
+            return body
+        comment = False
+        result = []
+        for line in body:
+            # Temporarily protect qualified member tokens from parameter rename.
+            protected = {}
+            def protect(match):
+                key = '__accessor_member_%d__' % len(protected)
+                protected[key] = match.group(0)
+                return key
+            text = re.sub(r'\.\s*(?:' + '|'.join(re.escape(k) for k in mapping) + r')\b', protect, line)
+            text, comment = _HighLevelMixin._replace_semantic_names(text, mapping, comment)
+            for key, value in protected.items():
+                text = text.replace(key, value)
+            result.append(text)
+        return result
+
+    def _emit_accessor(self, out, pre, kind, m, body, visibility=''):
+        if getattr(m, 'addr', 0):
+            base = getattr(self.il.bin, 'image_base', 0)
+            out.append('%s// RVA: 0x%X VA: 0x%X' % (pre, m.addr - base, m.addr))
+        if body is None:
+            out.append(pre + visibility + kind + ';')
+            return
+        out.append(pre + visibility + kind)
+        out.append(pre + '{')
+        out.extend(pre + '    ' + line.rstrip() if line.strip() else '' for line in body)
+        out.append(pre + '}')
+
     def emit_property(self, td: TypeDef, out: List[str], pre: str, pr,
-                     bk_offs=None):
-        """public T P { get { ... } set { ... } } -- accessor bodies move
-        inside the property; auto-accessors when no body is available."""
+                      bk_offs=None):
         getter = self._rel_method(td, pr[1])
         setter = self._rel_method(td, pr[2])
-        gbody = self._lift_body(getter, td) if getter else None
-        sbody = self._lift_body(setter, td) if setter else None
-        raw_pname = csharp_type_name(self.meta.getstr(pr[0]))
-        if '.' in raw_pname:
-            phead, _, ptail = raw_pname.rpartition('.')
-            pname = sanitize_qualifier(self._arity_qualifier(phead, td)) + '.' + safe_ident(ptail)
-        else:
-            pname = safe_ident(sanitize(raw_pname))
-        ptype = self.prop_type(getter)
-        acc = '' if ('.' in pname or (td.flags & 0x20)) else 'public '
-        # staticness follows the accessors: a property is static only
-        # when every present accessor is (mixed static/instance
-        # accessors cannot be expressed on one property).
-        static = ''
         present = [a for a in (getter, setter) if a is not None]
-        if present and all(a.is_static for a in present):
-            static = 'static '
-        unsafe = 'unsafe ' if '*' in ptype else ''
-        off = (bk_offs or {}).get(self.meta.getstr(pr[0]), '')
+        raw = self.meta.getstr(pr[0])
+        pname = self._member_name(raw, td)
+        explicit = '.' in raw
+        gparams = list(self.meta.method_params(getter)) if getter else []
+        sparams = list(self.meta.method_params(setter)) if setter else []
+        ptype = self.prop_type(getter)
+        if not getter and sparams:
+            pt = sparams[-1].type
+            ptype = self.il.type_name(self.il.types[pt]) if 0 <= pt < len(self.il.types) else 'object'
+        index_params = gparams if getter else sparams[:-1]
+        if index_params:
+            prefix = pname.rpartition('.')[0] + '.' if explicit else ''
+            params = ', '.join('%s %s' % (self.il.type_name(self.il.types[p.type]), safe_ident(p.name)) for p in index_params)
+            pname = prefix + 'this[' + params + ']'
+        mods = self._accessor_modifiers(td, present, explicit)
+        if '*' in ptype or any('*' in self.il.type_name(self.il.types[p.type]) for p in index_params):
+            mods += 'unsafe '
+        aliases = {p.name: safe_ident(q.name) for p, q in zip(sparams[:-1], index_params)}
+        if sparams:
+            aliases[sparams[-1].name] = 'value'
+        gbody = self._accessor_lines(getter, td) if getter else None
+        sbody = self._accessor_lines(setter, td, aliases) if setter else None
+        off = (bk_offs or {}).get(raw, '')
+        header = '%s    %s%s %s' % (pre, mods, ptype, pname)
+        # Keep compact bodyless declarations (abstract/interface/signatures).
+        vis = {getattr(a, 'flags', 6) & 7 for a in present}
+        unequal = len(present) == 2 and len(vis) > 1 and not explicit and not td.flags & 0x20
+        def access(a):
+            if not unequal:
+                return ''
+            v = METH_VIS.get(getattr(a, 'flags', 6) & 7, '')
+            return '' if mods.startswith(v) else v
         if gbody is None and sbody is None:
-            out.append('%s    %s%s%s%s %s { %s%s }%s' % (
-                pre, acc, static, unsafe, ptype, pname,
-                'get; ' if getter else '', 'set; ' if setter else '', off))
+            out.append(header + ' { ' + (access(getter) + 'get; ' if getter else '') + (access(setter) + 'set; ' if setter else '') + '}' + off)
             return
-        out.append('%s    %s%s%s%s %s%s' % (pre, acc, static, unsafe, ptype, pname, off))
-        out.append('%s    {' % pre)
-        for kind, body in (('get', gbody), ('set', sbody)):
-            if (getter if kind == 'get' else setter) is None:
-                continue
-            if body is None or not body:
-                out.append('%s        %s;' % (pre, kind))
-                continue
-            out.append('%s        %s' % (pre, kind))
-            out.append('%s        {' % pre)
-            for l in body:
-                out.append(('%s            %s' % (pre, l.rstrip())) if l.strip() else '')
-            out.append('%s        }' % pre)
-        out.append('%s    }' % pre)
+        out.extend([header + off, pre + '    {'])
+        for kind, m, body in (('get', getter, gbody), ('set', setter, sbody)):
+            if m is not None:
+                self._emit_accessor(out, pre + '        ', kind, m, body, access(m))
+        out.append(pre + '    }')
+
+    def emit_event(self, td, out, pre, ev):
+        add = self._rel_method(td, ev[2])
+        remove = self._rel_method(td, ev[3])
+        if add is None or remove is None:
+            # Malformed/unrepresentable event: retain its ordinary methods.
+            out.append(pre + '    // Event has no complete add/remove pair: ' + safe_ident(sanitize(self.meta.getstr(ev[0]))))
+            return False
+        raw = self.meta.getstr(ev[0])
+        name = self._member_name(raw, td)
+        mods = self._accessor_modifiers(td, [add, remove], '.' in raw)
+        ty = self.il.type_name(self.il.types[ev[1]]) if 0 <= ev[1] < len(self.il.types) else 'System.Action'
+        header = pre + '    ' + mods + 'event ' + ty + ' ' + name
+        bodies = []
+        for m in (add, remove):
+            params = list(self.meta.method_params(m))
+            aliases = {params[-1].name: 'value'} if params else {}
+            bodies.append(self._accessor_lines(m, td, aliases))
+        if all(getattr(a, 'flags', 0) & 0x400 for a in (add, remove)):
+            out.append(header + ';')
+            return True
+        out.extend([header, pre + '    {'])
+        for kind, m, body in zip(('add', 'remove'), (add, remove), bodies):
+            self._emit_accessor(out, pre + '        ', kind, m, body)
+        out.append(pre + '    }')
+        return True
 
     def emit_method(self, m: MethodDef, td: TypeDef, out: List[str], pre: str):
         is_ctor = m.name in ('.ctor', '.cctor')
@@ -845,13 +931,14 @@ class Emitter:
                 ctor_init, body = self._ctor_body(body)
             if m.name == '.ctor' and not ctor_init:
                 ctor_init = self.ctor_base_initializer(td)
-        if abstract or not m.addr:
+        if abstract:
             out.append('%s%s; // RVA: 0x%x VA: 0x%x' % (pre, sig, m.addr or 0, m.addr or 0)
                        if m.addr else '%s%s;' % (pre, sig))
             return
-        slot_note = ' Slot: %d' % m.slot if m.slot != 0xFFFF else ''
-        rva = m.addr - self.il.bin.image_base if hasattr(self.il.bin, 'image_base') else m.addr
-        out.append('%s// RVA: 0x%X VA: 0x%X%s' % (pre, rva, m.addr, slot_note))
+        if m.addr:
+            slot_note = ' Slot: %d' % m.slot if m.slot != 0xFFFF else ''
+            rva = m.addr - self.il.bin.image_base if hasattr(self.il.bin, 'image_base') else m.addr
+            out.append('%s// RVA: 0x%X VA: 0x%X%s' % (pre, rva, m.addr, slot_note))
         out.append('%s%s%s' % (pre, sig, (' : ' + ctor_init) if ctor_init else ''))
         out.append('%s{' % pre)
         if body:

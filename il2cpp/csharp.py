@@ -1,5 +1,5 @@
 from il2cpp.prelude import *  # noqa: F401,F403
-from il2cpp.names import safe_ident
+from il2cpp.names import safe_ident, sanitize
 
 MEMBER_VIS = {0: '', 1: 'private ', 2: 'private protected ', 3: 'internal ',
               4: 'protected ', 5: 'protected internal ', 6: 'public ',
@@ -27,6 +27,55 @@ def field_attrs(il, f) -> int:
     replaced misread 7,085 fields on the reference corpus."""
     t = il.types[f.type] if 0 <= f.type < len(il.types) else None
     return (t[1] & 0xFFFF) if t else 0
+
+
+def source_field_name(il, fi):
+    """Keep storage distinct from properties/events, by FieldDef identity.
+
+    Do not rewrite metadata: reflection strings and native symbol maps retain
+    their original spelling. The same per-binary map serves declarations and
+    every offset/usage-slot path in the lifter.
+    """
+    names = getattr(il, '_source_field_names', None)
+    if names is None:
+        names = {}
+        meta = il.meta
+        for td in meta.typedefs:
+            props = {meta.getstr(meta.properties[td.property_start + k][0])
+                     for k in range(getattr(td, 'property_count', 0))}
+            events = {meta.getstr(meta.events[td.event_start + k][0])
+                      for k in range(getattr(td, 'event_count', 0))}
+            members = props | events
+            if not members:
+                continue
+            fields = list(meta.type_fields(td))
+            occupied = {safe_ident(sanitize(n)) for n in members}
+            occupied.update(safe_ident(sanitize(meta.fields[i].name)) for i in fields)
+            occupied.update(safe_ident(sanitize(meta.methods[i].name))
+                            for i in meta.type_methods(td))
+            for k in range(getattr(td, 'nested_count', 0)):
+                ni = meta.nested_types[td.nested_start + k]
+                if 0 <= ni < len(meta.typedefs):
+                    occupied.add(safe_ident(sanitize(meta.typedefs[ni].name)))
+            for i in fields:
+                raw = meta.fields[i].name
+                backing = re.fullmatch(r'<(.+)>k__BackingField', raw)
+                member = backing.group(1) if backing else raw
+                if member not in members:
+                    continue
+                # Explicit-interface members carry dots (A.B.C.name) no field
+                # identifier can spell; flatten every non-word char so storage
+                # stays one token the backing-field fold matches.
+                stem = '__field_' + safe_ident(re.sub(r'[^A-Za-z0-9_]', '_', member))
+                name = stem
+                suffix = 2
+                while name in occupied:
+                    name = stem + '_' + str(suffix)
+                    suffix += 1
+                occupied.add(name)
+                names[i] = name
+        il._source_field_names = names
+    return names.get(fi, il.meta.fields[fi].name)
 
 
 class UsingTracker:
@@ -72,7 +121,7 @@ class UsingTracker:
         return ['using %s;' % n for n in sorted(self.used - skip)]
 
 
-_NS_CHAIN_RX = re.compile(r'(?<![\w.])([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)')
+_NS_CHAIN_RX = re.compile(r'(?<![\w.:])([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)')
 
 
 def _visible_ns(ns, file_ns, uses):

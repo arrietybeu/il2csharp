@@ -1,6 +1,6 @@
 from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.common import csharp_type_name
-from il2cpp.expr import Expr, _ARR_BIAS_RX, _BARE_TOKEN_RX, _BOOL_TY, _INT_TY, _R4_TY, _R8_TY, _recv_fold, _recv_shaped
+from il2cpp.expr import Expr, _ARR_BIAS_RX, _BARE_TOKEN_RX, _BOOL_TY, _INT_TY, _R4_TY, _R8_TY, _USE_BIND_MIN, _recv_fold, _recv_shaped
 from il2cpp.names import repr_f32, repr_f64
 from il2cpp.runtime.meta import IMM_OPS, meta_lit_repr
 from il2cpp.text import _ATOM_PREC, _BIN_PREC, _bin_txt, _fold_bin, _int_lit, _term_up, disp_add, imm_of, reg_name, sdisp, strip_outer
@@ -417,12 +417,28 @@ class _InsnMixin:
                         return
                     self.set_reg(dst, Expr('&data_%x' % slot, None, 'ptr'))
                     return
-                if ins.memory_base == IReg.RSP or ins.memory_base == IReg.RBP:
+                if ins.memory_base == IReg.RSP or (ins.memory_base == IReg.RBP
+                        and self._rbp_is_frame()):
                     self.set_reg(dst, Expr('&' + self.slot_var(ins.memory_displacement), None, 'ptr'))
                     return
                 base = self.reg(reg_name(ins.memory_base))
                 disp = sdisp(ins.memory_displacement)
                 if base is not None and ins.memory_index == IReg.NONE:
+                    _bte = self.il._type_enum(base.ty) if isinstance(base.ty, tuple) else 0
+                    if _bte != 0x0f and base.kind == 'int' and _int_lit(base.text) is None:
+                        # `lea r,[ireg+N]` over an integer (the aligned-size
+                        # `+3 & -4` idiom) is integer arithmetic: keep the
+                        # integer kind so offset chains stay int-typed
+                        # instead of degrading to object temps. A stale int
+                        # kind on a pointer-typed base (call results predate
+                        # ptr kinds) still takes the cursor path below, and
+                        # literal bases keep the constant-fold path below.
+                        dtxt = disp_add(disp)
+                        ne = self._mk('(%s %s)' % (base.text, dtxt),
+                                       self._arty(base), 'int')
+                        ne._prec = _BIN_PREC['+']
+                        self.set_reg(dst, ne)
+                        return
                     fe = self._field_expr(base, disp, 8)
                     # a named field taken by address: `lea rcx,[this+0x20]` is the
                     # byref receiver of a value-type instance call (int.ToString)
@@ -448,8 +464,29 @@ class _InsnMixin:
                             ce._prec = fold[1]
                             self.set_reg(dst, ce)
                         else:
-                            self.set_reg(dst, self._mk('(%s %s)' % (base.text, dtxt),
-                                                       fe.ty, 'ptr'))
+                            prefix, ty = '', fe.ty
+                            if fe.text.startswith('*') and isinstance(base.ty, tuple) \
+                                    and self.il._type_enum(base.ty) == 0x0f:
+                                # chain-miss offset from a typed pointer addresses
+                                # variable payload: a byte offset, so the honest
+                                # rvalue casts first (the convention raw stores
+                                # use). An already-byte base needs no cast.
+                                try:
+                                    _pte = self.il._type_enum(self.il.type_from_ptr(base.ty[0]))
+                                except Exception:
+                                    _pte = None
+                                if _pte == 0x05:
+                                    ty = base.ty
+                                else:
+                                    _bt = self._byte_ptr_ty()
+                                    if _bt is not None:
+                                        prefix, ty = '(byte*)', _bt
+                            if prefix:
+                                self.set_reg(dst, self._mk('(byte*)%s %s' % (base.text, dtxt),
+                                                           ty, 'ptr'))
+                            else:
+                                self.set_reg(dst, self._mk('(%s %s)' % (base.text, dtxt),
+                                                           ty, 'ptr'))
                 else:
                     self.set_reg(dst, self._indexed_lea(ins, base))
                 return
@@ -550,14 +587,34 @@ class _InsnMixin:
             self._hint_tok(be, _INT_TY)
             rty = self._arty(a)
             rkind = a.kind if a else '?'
+            if mn == Mnemonic.ADD and be is not None and be.kind == 'ptr' \
+                    and (a is None or a.kind in ('int', '?')):
+                # integer offset plus a pointer (`off + cursor` payload
+                # destinations) composes an address: pointer kind so uses
+                # render compilable arithmetic. The type only when the
+                # pointer is byte-proven; otherwise honestly untyped.
+                rkind = 'ptr'
+                rty = be.ty if self._is_byte_ptr_ty(be.ty) else None
             a_txt = a.text if a else '?'
             ap = a._prec if a is not None else None
             bp = be._prec if be is not None else None
             if len(a_txt) + len(btxt) > 160:
-                v = self.new_var()
-                self.emit(ip, 'var %s = %s;' % (v, a_txt), None)
-                a_txt = v
-                ap = None
+                if a is not None and not getattr(self, 'dry', False) \
+                        and not getattr(a, '_no_bind', False) \
+                        and getattr(a, '_alloc', None) is None \
+                        and len(a.text or '') >= _USE_BIND_MIN:
+                    # the operand re-renders at every later use; bind it
+                    # so one typed temp is shared. Minting an anonymous
+                    # twin here would sit outside a later bind's rewrite
+                    # window and duplicate the full text. Dry keeps the
+                    # old spelling so phi discovery sees today's texts.
+                    self._bind(a)
+                    a_txt, ap = a.text, None
+                else:
+                    v = self.new_var()
+                    self.emit(ip, 'var %s = %s;' % (v, a_txt), None)
+                    a_txt = v
+                    ap = None
             if mn in (Mnemonic.ADD, Mnemonic.SUB) and btxt == '1':
                 e = self._mk(_bin_txt(a_txt, ap or _ATOM_PREC, op, '1', _ATOM_PREC),
                              rty, rkind)
@@ -1150,7 +1207,8 @@ class _InsnMixin:
         idxr = reg_name(ins.memory_index) if ins.memory_index != IReg.NONE else None
         disp = ins.memory_displacement
         size = {1: 1, 2: 2, 4: 4, 8: 8}.get(ins.memory_size, 8)
-        if base in ('RSP', 'RBP') and idxr is None:
+        if (base == 'RSP' or (base == 'RBP' and self._rbp_is_frame())
+                and idxr is None):
             var = self.slot_var(disp)
             # a spilled array register reloads with its kind restored, so a
             # later indexed LEA resolves `&arr[i]` instead of raw pointer
@@ -1166,6 +1224,14 @@ class _InsnMixin:
         if be is not None and idxr is not None:
             ie = self.reg(idxr)
             scale = ins.memory_index_scale
+            if (scale or 1) == 1 and be.kind == 'int' and ie is not None \
+                    and ie.kind == 'ptr' and self._is_byte_ptr_ty(ie.ty):
+                # cursor-as-index: the encoder put the integer offset in
+                # the base slot and the byte* cursor in the index slot
+                # ([rdx+r15] stores at cursor+offset). Render
+                # pointer-first: value-identical at scale 1 and the
+                # only compilable order (ptr*int does not exist).
+                be, ie = ie, be
             if be.kind == 'arr':
                 be0, d0 = self._arr_unbias(be, disp)
                 fe = self._arr_elem_expr(be0, ie, scale or 1, d0, size)
@@ -1216,7 +1282,8 @@ class _InsnMixin:
         idxr = reg_name(ins.memory_index) if ins.memory_index != IReg.NONE else None
         disp = ins.memory_displacement
         size = {1: 1, 2: 2, 4: 4, 8: 8}.get(ins.memory_size, 8)
-        if base in ('RSP', 'RBP') and idxr is None:
+        if (base == 'RSP' or (base == 'RBP' and self._rbp_is_frame())
+                and idxr is None):
             return self.slot_var(disp)
         be = self.reg(base) if base else None
         if be is None:
@@ -1225,6 +1292,11 @@ class _InsnMixin:
             return None                # static/klass bookkeeping
         if idxr is not None:
             ie = self.reg(idxr)
+            if (ins.memory_index_scale or 1) == 1 and be.kind == 'int' \
+                    and ie is not None and ie.kind == 'ptr' \
+                    and self._is_byte_ptr_ty(ie.ty):
+                # same cursor-as-index swap as the load path.
+                be, ie = ie, be
             if be.kind == 'int' and ie is not None and ie.kind == 'arr':
                 # scaled index in the BASE slot, array in the INDEX
                 # slot -- swap roles before the element fold

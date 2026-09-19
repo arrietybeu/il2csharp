@@ -1,7 +1,17 @@
 from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.common import csharp_type_name, u64
-from il2cpp.csharp import FA_LITERAL, FA_STATIC, field_attrs
+from il2cpp.csharp import FA_LITERAL, FA_STATIC, field_attrs, source_field_name
 from il2cpp.names import safe_ident
+
+
+def _storage_name(il, fi):
+    # Preserve the backing-field marker through expression binding. The
+    # existing late member fold removes it after evaluation order is fixed.
+    name = source_field_name(il, fi)
+    raw = il.meta.fields[fi].name
+    if name != raw and raw.startswith('<') and raw.endswith('>k__BackingField'):
+        return '<' + name + '>k__BackingField'
+    return name
 from il2cpp.runtime.meta import meta_lit_repr
 
 class _FieldsMixin:
@@ -31,7 +41,7 @@ class _FieldsMixin:
                         f = self.meta.fields[idx]
                         owner = self._field_owner(idx)
                         r['field'] = idx
-                        r['text'] = ('%s.%s' % (owner, f.name)) if owner else f.name
+                        r['text'] = ('%s.%s' % (owner, _storage_name(self, idx))) if owner else _storage_name(self, idx)
                         r['ftype'] = f.type
                 elif kind == 5:  # StringLiteral
                     if idx < len(self.meta.string_literals):
@@ -308,7 +318,7 @@ class _FieldsMixin:
             if fi < len(self.meta.fields) \
                     and not (field_attrs(self, self.meta.fields[fi])
                              & (FA_STATIC | FA_LITERAL)):
-                m[off] = self.meta.fields[fi].name
+                m[off] = _storage_name(self, fi)
         return m
 
     _chain_cache: Dict[int, Optional[Dict[int, tuple]]] = {}
@@ -381,7 +391,7 @@ class _FieldsMixin:
                     if fi < len(self.meta.fields) and off not in merged \
                             and not (field_attrs(self, self.meta.fields[fi])
                                      & (FA_STATIC | FA_LITERAL)):
-                        merged[off] = (self.meta.fields[fi].name, self.meta.fields[fi].type)
+                        merged[off] = (_storage_name(self, fi), self.meta.fields[fi].type)
             nxt = td.parent
             if nxt >= 0 and nxt < len(self.types) and self.types[nxt]:
                 t = self.types[nxt]
@@ -465,7 +475,7 @@ class _FieldsMixin:
         for k, fi in enumerate(range(td.field_start, td.field_start + td.field_count)):
             f = self.meta.fields[fi]
             if (f.token >> 24) == 0x04 and (self.field_static(fi)):  # FieldDef row & static flag
-                m[fo[k]] = f.name
+                m[fo[k]] = _storage_name(self, fi)
         return m
 
     def td_of_ty(self, ty) -> Optional[int]:
@@ -521,7 +531,7 @@ class _FieldsMixin:
             a = field_attrs(self, self.meta.fields[fi])
             if not (a & FA_STATIC) or (a & FA_LITERAL):
                 continue
-            m.setdefault(fo[k], (self.meta.fields[fi].name, self.meta.fields[fi].type))
+            m.setdefault(fo[k], (_storage_name(self, fi), self.meta.fields[fi].type))
         self._static_names_cache[td_index] = m
         return m
 
@@ -609,7 +619,7 @@ class _FieldsMixin:
             sz, al = sa
             al = min(max(al, 1), 8)
             cur = (cur + al - 1) // al * al
-            m.setdefault(cur, (f.name, st))
+            m.setdefault(cur, (_storage_name(self, fi), st))
             cur += sz
         self._sf_infl_cache[key] = m
         return m
@@ -836,7 +846,7 @@ class _FieldsMixin:
                 break
             sz, al = sa
             off = (cur + al - 1) & ~(al - 1)
-            chain[off + 0x10] = (f.name, ty)
+            chain[off + 0x10] = (_storage_name(self, fi), ty)
             cur = off + sz
             maxa = max(maxa, al)
         if bad or not chain:

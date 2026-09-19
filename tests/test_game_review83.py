@@ -37,7 +37,8 @@ def test_shared_boolean_result_becomes_a_boolean_condition(game_decompiler):
 
 def test_typed_shared_result_stays_after_its_native_predecessor(game_decompiler):
     lines = body(game_decompiler, 31664).splitlines()
-    ctor = lines.index('obj4.ctor(shortDisplayName);')
+    ctor = next(i for i, line in enumerate(lines)
+                if line.endswith('.ctor(shortDisplayName);'))
     # fix 104: the string decl carries its caller-proven cast now.
     result = next(i for i, line in enumerate(lines)
                   if 'string text1 = (string)sub_1825b1150/*shared body' in line)

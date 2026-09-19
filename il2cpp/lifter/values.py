@@ -451,14 +451,14 @@ class _ValuesMixin:
         # arrays
         if base.kind == 'arr':
             if disp in (0x10, 0x18):
-                return Expr('%s.Length' % _recv_fold(text), None, 'int')
+                return Expr('%s.Length' % _recv_fold(text), _INT_TY, 'int')
             if disp >= 0x20:
                 ety = self._elem_type(base.ty)
                 return Expr('%s[%#x]' % (_recv_fold(text), (disp - 0x20) // max(size, 1)),
                             ety, self._ty_kind(ety))
         if base.kind == 'str':
             if disp in (0x10, 0x18):
-                return Expr('%s.Length' % _recv_fold(text), None, 'int')
+                return Expr('%s.Length' % _recv_fold(text), _INT_TY, 'int')
             if disp == 0x14:
                 return Expr('%s[0]' % _recv_fold(text), None, 'char')
         # instance fields by type offsets (whole inheritance chain).
@@ -527,6 +527,38 @@ class _ValuesMixin:
         if te in (0x1d, 0x14):
             return self.il.type_from_ptr(ty[0])
         return None
+
+    def _is_byte_ptr_ty(self, ty) -> bool:
+        """A genuine metadata `byte*` tuple (PTR-to-U1), reused for
+        untyped payload cursors -- never fabricated, so type_name
+        spells `byte*` through the ordinary declaration path."""
+        if not isinstance(ty, tuple) or self.il._type_enum(ty) != 0x0f:
+            return False
+        try:
+            inner = self.il.type_from_ptr(ty[0])
+        except Exception:
+            return False
+        return self.il._type_enum(inner) == 0x05
+
+    def _byte_ptr_ty(self):
+        """First metadata `byte*` row, cached per Lifter instance
+        (binary-local, like all lifter state). None when the binary
+        declares no byte pointer -- callers keep today's spelling."""
+        t = getattr(self, '_byte_ptr_cache', None)
+        if t is None:
+            for ty in self.il.types:
+                if self._is_byte_ptr_ty(ty):
+                    t = self._byte_ptr_cache = ty
+                    break
+        return t
+
+    def _is_byte_cursor(self, e) -> bool:
+        """A bound `(byte*)P + N` payload cursor declares `byte*`.
+        Arithmetic on byte* is always byte-exact, so the declaration
+        is honest where a scaled T* spelling would invent semantics
+        (see _bind). Other pointer temps stay `object`."""
+        return e is not None and e.kind == 'ptr' \
+            and self._is_byte_ptr_ty(e.ty)
 
     def _ty_kind(self, ty):
         te = self.il._type_enum(ty) if ty else 0

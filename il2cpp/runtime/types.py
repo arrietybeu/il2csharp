@@ -307,6 +307,16 @@ class _TypesMixin:
         if 0 <= slot < td.vtable_count:
             v = self.meta.vtable_methods[td.vtable_start + slot]
             idx = (v & 0x1FFFFFFE) >> 1
+            if idx == 0:
+                # rows carrying no method bits (raw 0x0/0x1) are empty
+                # entries, not a reference to method row 0: XmlNameTable
+                # slots 4-6 read 0x1 while its abstract Add/Get live
+                # elsewhere, and a static method can never occupy a
+                # virtual slot. Decline so callers keep the honest
+                # indirect render instead of naming mi 0.
+                m0 = self.meta.methods[0] if self.meta.methods else None
+                if m0 is None or m0.is_static:
+                    return None
             if idx < len(self.meta.methods):
                 return idx
         return None

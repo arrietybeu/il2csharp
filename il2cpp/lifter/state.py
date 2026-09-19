@@ -760,13 +760,19 @@ class _StateMixin:
                     self.slot_types.setdefault(pname, pt)
                     self._type_hints.setdefault(pname, pt)
                 self.stack_values.setdefault(pname, Expr(pname, pt,
-                    'float' if is_float else ('obj' if te >= 0x10 else 'int')))
+                    'float' if is_float else ('arr' if te in (0x1d, 0x14)
+                    else ('obj' if te >= 0x10 else 'int'))))
                 continue
             if is_float:
                 self.regs[ARG_XMM[slot]] = Expr(pname, pt, 'float')
             else:
+                # array-typed parameters carry kind 'arr' (the same kind
+                # new-arrays and spill reloads already produce), so
+                # [arr+0x18] folds to .Length and [arr+0x20+i*S] to
+                # elements instead of raw pointer arithmetic.
                 self.regs[ARG_REGS[slot]] = Expr(
-                    pname, pt, 'obj' if te >= 0x10 else 'int')
+                    pname, pt, 'arr' if te in (0x1d, 0x14)
+                    else ('obj' if te >= 0x10 else 'int'))
         if m.generic_container != -1:
             self.hidden_method_info = True
         else:
@@ -888,8 +894,11 @@ class _StateMixin:
         old = e.text
         v = self.new_var()
         # an address-of expression carries its pointee's type; the temp it
-        # binds to holds the ADDRESS, so the type must not rename it
-        if isinstance(e.ty, tuple) and e.kind != 'ptr' and not old.startswith('&'):
+        # binds to holds the ADDRESS, so the type must not rename it.
+        # byte* payload cursors are the proved exception: arithmetic on
+        # byte* is always byte-exact, so the declaration is honest.
+        if isinstance(e.ty, tuple) and (e.kind != 'ptr' or self._is_byte_cursor(e)) \
+                and not old.startswith('&'):
             if _is_unresolved_gp(e.ty):
                 self._gp_blocked.add(v)
             else:
@@ -1088,6 +1097,29 @@ class _StateMixin:
             self.emit(0, 'var %s = 0; // %s' % (v, text[:cap] + ('...' if len(text) > cap else '')), None)
             return Expr(v, ty, kind)
         return Expr(text, ty, kind)
+
+    def _rbp_is_frame(self) -> bool:
+        """Whether [rbp+X] addresses a stack slot right now.
+
+        RBP is a frame pointer only when it cannot be a live scratch
+        value: unreadable (a `mov rbp,rsp` frame -- RSP is never
+        tracked), an `&s_xx` slot address (an `lea rbp,[rsp+C]` frame),
+        `?addr` from an untracked rsp-derived base (`mov rax,rsp;
+        lea rbp,[rax-C]`), or never-written (EH pads inherit the
+        dispatcher's established frame). Params, objects and composites
+        are scratch and resolve through the register value instead of
+        aliasing stack slot s_X (InventoryManager.
+        Rpc_CMD_UpdateInventoryForHost 0x180704750 keeps param 1 in
+        RBP, so [rbp+0x18] is inventoryIds_.Length)."""
+        e = self.reg('RBP')
+        if e is None:
+            return True
+        t = e.text or ''
+        if t == '?addr':
+            return True
+        if getattr(e, '_unk', False):
+            return True
+        return t.startswith('&s_')
 
     def slot_var(self, off):
         key = off + self.rsp_delta

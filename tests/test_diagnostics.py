@@ -60,7 +60,9 @@ def test_verbose_fallback_identifies_method(capsys):
 
 def test_method_limit_does_not_count_a_skipped_body():
     em, method, td = emitter(limit=0)
-    assert em._lift_body(method, td) is None
+    assert em._lift_body(method, td) == [
+        'throw new global::System.NotImplementedException("Method body was not recovered.");'
+    ]
     assert (em.lifted, em.failed, em.fallbacks) == (0, 0, 0)
 
 

@@ -59,6 +59,85 @@ never retyped, under coverage and line-preservation asserts; the splitter is
   `work/split/rebuild.log`. Small evidence logs kept (`rebuild.log`,
   `fulltest.log` with the 436-pass run).
 
+## Current work: unavailable method bodies (uncommitted, 2026-09-19)
+
+Concrete methods with no native address now emit a throwing body instead of
+an illegal semicolon declaration. The shared body path also covers accessors,
+declaration-only output, unavailable lifting backends, and method limits.
+Abstract/interface contracts retain semicolons, and successfully recovered
+empty bodies remain empty. Missing bodies throw `NotImplementedException`
+with an explicit recovery message; these are placeholders, not recovered
+implementations, and do not increment lift/failure/fallback counters.
+The final namespace-shortening pass preserves alias-qualified names such as
+`global::System.NotImplementedException`; stripping `System` there would bind
+the exception in the global namespace instead.
+
+Regression coverage compiles generated constructors, ordinary and explicit
+interface methods, indexers, properties, and events with Roslyn in all three
+unavailable-body modes. Validation reports: `validation_reports/method_bodies_*`;
+candidate tree: `work/method_bodies_out/`.
+
+Gates: 795 tests pass (669 portable + 126 native); strict build 11,181 files /
+114,458 lifted bodies / 0 lift failures / 0 structured fallbacks / 0 type-emission
+failures. After the namespace correction, 1,005 files containing `::` were
+regenerated through the emitter (21,944 lifts, all failure counters zero),
+copied back by TypeDefIndex with full-build shared stubs retained; provenance
+and final source fingerprints are in `method_bodies_regeneration.json`.
+Final parse: 0 bad files / 0 errors / 0 recovery nodes. Compiler probe:
+10,305 → 2,463 errors, 1,516 → 726 files with errors; CS0501 7,718 → 0,
+CS0535 88 → 0, CS0073 26 → 0, CS8051 9 → 0, CS0523 1 → 0. Other diagnostic
+counts are unchanged. The tree contains 9,193 explicit unavailable-body throws;
+it still does not compile or provide those implementations. No control-flow
+lifting changes were made. Next largest category is CS0737 (880), followed by
+CS0111 (384) and CS0052 (308).
+
+Duplicate-method triage must distinguish actual emission collisions from the
+combined-assembly probe: for example, `IsUnmanagedAttribute` has one constructor
+in each source assembly, but combining those partial types produces CS0111.
+Deleting those constructors would damage the individual recovered assemblies.
+
+## Current work: accessor recovery + RPC payload typing (uncommitted, 2026-09-19)
+
+Working tree stacks two uncommitted units on the promoted fix-123 tree:
+`il2cpp/csharp.py` + `emitter.py` + `runtime/fields.py` (storage identity
+`__field_X`, real property/event bodies; `tests/test_member_recovery.py`,
+`tests/test_game_member_recovery.py`) and `il2cpp/lifter/{state,insn,values}.py`
++ `runtime/types.py` (pointer/array operand typing, below). `final_out/` still
+holds fix 123; `work/accessors_out/` and `work/rpc_payload_out/` are the two
+gated candidate trees (both 11,181 files, 0 failed lifts, parse 0/0/0).
+
+RPC payload typing (specimen InventoryManager.Rpc_CMD_UpdateInventoryForHost,
+mi 25626, VA 0x180704750): unbound `obj1` and `object` payload arithmetic are
+gone — `inventoryIds_.Length`, `byte* bytePtr1 = (byte*)simulationMessagePtr1
++ 0x1c`, `int` offset chains, `((int*)bytePtr1 + off*1 + 0x0)` stores, one
+`num5` temp. Fixes: RBP-as-frame is now value-tested (`_rbp_is_frame`: None /
+`&s_xx` / `?addr` / never-written stay slots; params/objects/composites
+resolve normally); array-typed entry params carry kind `arr` ([arr+0x18]
+folds to `.Length`); `lea` over int is int math while past-struct lea from a
+typed pointer spells a `(byte*)` cursor from a genuine metadata `byte*` row
+(temps declare `byte*`); int-base + byte*-index SIB renders pointer-first at
+scale 1 only; long binop operands bind typed instead of minting anonymous
+twins; ADD int+ptr yields ptr (byte-proven type only); `.Length` carries Int32;
+empty vtable rows (raw 0x1, no method bits) decline instead of naming mi 0
+(healed three pinned `Interop.GetRandomBytes` misresolutions: 39789 hunks,
+83647, 109664). Gates: 665 portable + 126 game pass (10 new lifter unit tests
+in `tests/test_pointer_operand_typing.py`, 4 game asserts in
+`tests/test_game_rpc_payload.py`); sweep 116,178 / 0 crashes / 0 new crashes /
+1 structural delta (mi 37884 into_block 1→0, +1 line, nothing dropped);
+9,200 changed bodies vs accessors; rebuild 11,181 files / 114,458 bodies / 0
+failed; parse 0/0/0; probe 10,305 errors, per-code identical to accessors
+(all 1,393 pair moves are line-number shifts). Reports:
+`validation_reports/rpc_payload_*`; tree `work/rpc_payload_out/`.
+14 goldens regen'd after review (8 accessor renames untouched by this unit +
+6 here: 39789/62312/83647/109664 improvements, 11974 renumber, 5769 noted below).
+
+Open follow-ups: GetChars (mi 5769) still needs merge type preservation for
+cmov-selected values (old pinned an undeclared `num3`; current renders
+parseable raw decoder derefs — width follow-up open, do not treat as resolved);
+CopyFromArray dest args reprint the ids extent instead of reusing `num4`
+(faithful recomputation, batch-38 window bounds); `&this.field`-in-rbp and
+genuine `T* + N` element arithmetic keep today's spelling.
+
 ## Current work: post-promotion residue (fix 123 promoted, see below)
 
 `final_out/` holds the fix-123 tree (10,794 → 10,602 errors). Open lanes:

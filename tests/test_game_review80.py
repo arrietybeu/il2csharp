@@ -36,8 +36,8 @@ def test_receive_loop_shared_entry_is_a_legal_short_circuit_gate(game_decompiler
     # WRONG member. What this test guards -- a legal && short-circuit gate
     # ahead of Monitor.Enter, with no gotos -- is unchanged.
     gate = (
-        "if ((this.State != PhotonSocketState.Connecting) && "
-        "(this.State != PhotonSocketState.Connected))"
+        "if ((this.__field_State != PhotonSocketState.Connecting) && "
+        "(this.__field_State != PhotonSocketState.Connected))"
     )
 
     assert gate in text
