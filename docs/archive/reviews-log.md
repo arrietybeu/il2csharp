@@ -1,5 +1,29 @@
 # il2csharp — state & history (split out of todo.md 2026-08-22)
 
+## 0bg. Follow-up promotion — float shortening, cmov merge-type, exact-type stamp (2026-09-19)
+
+Follow-up authority: `docs/todo.md` (Current work) and
+`validation_reports/followups_sweep.json`, `followups_parse.json`,
+`followups_promotion_verification.json`.
+Promoted 2026-09-19: `final_out/` now holds `work/promote_out`
+(11,274 files, candidate and promoted aggregate
+`db4685236a910b5fbcd3a2a6bbd1b5a631989c7082d09764292dd055d0c36105`,
+0 mismatches; supersedes the fix-123 tree).
+
+Three unnumbered follow-ups over the fix-123 baseline: shortest round-trip
+float32 literals with fixed-point tie-break (`0.07f`, `0.1f`, `10000.0f`);
+entry stack-parameter names/types surviving the pass wipe with slot reloads
+restoring the recorded kind (GetChars `baseDecoder`); exact runtime type on
+klass-equality cmov select (GetChars `Decoder.bits/bitCount/firstByte`,
+spreading to delegate types, `_source`/`_token`, shared-call resolution,
+enum members; two sampled methods shed `unsafe`).
+
+Validation: 795 tests pass (669 portable + 126 game); strict build
+11,181 C# files / 114,458 bodies / 0 failures or fallbacks; parser 0 bad
+files / 0 ERROR / 0 MISSING; direct sweep 116,178 methods / 0 crashes.
+The 64 goldens regenerated with 6 reviewed body changes; `work/promote_out`
+is byte-identical to `final_out/`.
+
 ## 0bf. Fix 97 — bare first-use temp declarations + 97e render repair (2026-09-14)
 
 Fix 97 authority: `docs/todo.md` (Current work) and

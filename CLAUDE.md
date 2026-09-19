@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-## Current source and validation authority — fix 123 promoted tree
+## Current source and validation authority — follow-up promoted tree
 
 The working source contains fixes 114 (method dispatch flags, generic
 constructor names), 115 (unsafe on pointer-signature methods/ctors), 116
@@ -13,23 +13,26 @@ owner paths via `nested_types`), 121 (mirror-nested own-suffix +
 owner-first distribution), 122 (receiver-proven stub temps take the
 unique owner's type with a caller-proven cast), and 123
 (collision-aware using-strip with full-depth generic arguments; CS0246
-fully zero). 759 tests pass. Fix 123 completed the full gate — strict
-rebuild 11,181 files / 113,938 bodies with 0 failures, parser 0 bad files,
-direct sweep 116,178 methods / 0 crashes / 0 structural changes vs fix 122,
-probe 10,794 → 10,602 with one characterized accessibility unmasking — and
-was promoted 2026-09-17: `final_out/` holds `work/review123_out` (11,274
-files, aggregate `45711645…3791d3c6`). The `bckups/` copies of prior promoted
+fully zero), plus three unnumbered follow-ups: shortest round-trip float32
+literals with fixed-point tie-break, entry stack-parameter names/types
+surviving the pass wipe with slot reloads restoring the recorded kind, and
+exact runtime type on klass-equality cmov select. 795 tests pass. The
+follow-ups completed the full gate — strict rebuild 11,181 files /
+114,458 bodies with 0 failures, parser 0 bad files, direct sweep 116,178
+methods / 0 crashes, 6 reviewed golden changes — and were promoted
+2026-09-19: `final_out/` holds `work/promote_out` (11,274 files, aggregate
+`db468523…050c36105`). The `bckups/` copies of prior promoted
 trees were deleted 2026-09-19 per user call — GitHub is now the history
 authority; any prior tree rebuilds from git history. See `docs/todo.md` for exact evidence and the
 remaining compiler backlog.
 
 Read `docs/reviews/REVIEW84.md`–`REVIEW87.md`, `docs/todo.md`'s Current work section, and
 `docs/archive/reviews-log.md` section 0bf first. `final_out/` is the complete strict-built
-fix-123 output promoted 2026-09-17 (11,274 files, aggregate `45711645…3791d3c6`),
+follow-up output promoted 2026-09-19 (11,274 files, aggregate `db468523…050c36105`),
 not the Review 84 file set alone, b42/b76, or a partial candidate. Historical paragraphs below retain
 the reasoning behind older changes; their old "current" labels are not release authority.
-`validation_reports/review84/summary.json` (baseline) plus `validation_reports/review123_sweep.json`,
-`review123_vs122.json`, `review123_parse.json`, and `review123_promotion_verification.json`
+`validation_reports/review84/summary.json` (baseline) plus `validation_reports/followups_sweep.json`,
+`followups_parse.json`, and `followups_promotion_verification.json`
 are authoritative for the promoted tree. Fix-114 evidence lives in
 `validation_reports/review114_*`; fix-115 gates, probe, and promotion record
 in `validation_reports/review115_*`; fix-116 in `validation_reports/review116_*`;

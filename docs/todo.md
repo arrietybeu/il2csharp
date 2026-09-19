@@ -187,7 +187,10 @@ point on length ties (`10000.0f`, not `1e+04f`; 14 addresses moved, 0 crashes)
 and `tests/goldens_review84.json` was regenerated with `tools/make_goldens.py`
 against the refreshed sweep/parse reports: 6/64 snapshots changed (GetChars,
 ReadSpan, Update, OnNextUpdate, ConvertTo, Execute), each reviewed
-individually, all structurally identical; full suite 795 passed. Not promoted.
+individually, all structurally identical; full suite 795 passed. Promoted
+2026-09-19: `final_out/` holds `work/promote_out` (11,274 files, aggregate
+`db468523…050c36105`, 0 mismatches); see `docs/archive/reviews-log.md` 0bg
+and `validation_reports/followups_promotion_verification.json`.
 
 ## Cleanup 2026-09-19 (after the 3bf35b3 push; `bckups/` deleted later the same day)
 
