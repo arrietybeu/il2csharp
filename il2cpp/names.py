@@ -88,9 +88,12 @@ def repr_f32(v):
             continue
         if bits != orig:
             continue
-        if best is None or len(s) < len(best[1]) \
-                or (len(s) == len(best[1]) and prec < best[0]):
-            best = (prec, s)
+        # shortest wins; ties prefer fixed point over exponent
+        # (`10000` over `1e+04` -- the exponent form is never what
+        # source says at equal length), then fewer digits.
+        key = (len(s), 'e' in s.lower(), prec)
+        if best is None or key < best[0]:
+            best = (key, s)
     if best is None:
         s = repr(v)
     else:

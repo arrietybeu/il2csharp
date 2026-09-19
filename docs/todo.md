@@ -151,8 +151,17 @@ unnecessary: the existing single-known-type phi/var rule carries the derived
 type to the working temps on its own. The rule generalizes (delegate types,
 `_source`/`_token`, shared-call resolution, enum members, `ref` field args;
 two sampled methods shed `unsafe`). Still open: the post-loop arm-scope reads
-(`obj22`/`num5`/`num6`), which need declaration hoisting across the loop
-boundary (structuring risk) -- do not treat as resolved;
+(`flag5`/`num5`/`num6`), which need declaration hoisting across the loop
+boundary (structuring risk) -- do not treat as resolved. Analysis (2026-09-19):
+the loop is single-trip (unconditional trailing `break`, no `continue`), and
+the snapshots are load-bearing spills (arm C reads old `num2` mid-arm, so they
+cannot be eliminated). Hoist-with-state-init is sound only under single-trip
+(multi-trip + a non-assigning arm, e.g. `num5` in arm B, would read stale
+init instead of the leftover), and the init mapping itself needs the
+header-exit-edge register state -- textual `first bare copy` cannot prove
+which pre-loop register the 0-trip path reads. Reading the state temps
+instead is wrong on arm-C-break (snapshot `num2+6-16` vs pre-arm `num2`).
+Verdict: needs exit-path-sensitive phis, not a text hoist;
 CopyFromArray dest args reprint the ids extent instead of reusing `num4`:
 investigated to ground truth and accepted as residue -- native executes three
 copy calls (0x1807048f7/922/94c, mi 25626); the two extra ids-copy texts are
@@ -166,6 +175,19 @@ boundary the spec pins; rewriting live superstrings at bind time did the same
 with added epoch hazards. Needs value provenance, not a window tweak.
 `&this.field`-in-rbp and genuine `T* + N` element arithmetic keep today's
 spelling.
+
+Gate for the three unnumbered follow-ups above (float shortening, cmov
+merge-type, exact-type stamp; pushed `a2887e9`): `work/followups_out` built
+strict, 11,181 files / 114,458 bodies / 0 failed lifts / 0 structured fallbacks
+/ 0 type-emission failures; brace audit 0 unbalanced; tree-sitter parse 0 bad
+files / 0 ERROR / 0 MISSING; full-corpus sweep 116,178 methods / 0 crashes;
+2,759 files differ from `work/rpc_payload_out` (none added/removed), all
+sampled diffs rename/type/field-only. Follow-up: float tie-break prefers fixed
+point on length ties (`10000.0f`, not `1e+04f`; 14 addresses moved, 0 crashes)
+and `tests/goldens_review84.json` was regenerated with `tools/make_goldens.py`
+against the refreshed sweep/parse reports: 6/64 snapshots changed (GetChars,
+ReadSpan, Update, OnNextUpdate, ConvertTo, Execute), each reviewed
+individually, all structurally identical; full suite 795 passed. Not promoted.
 
 ## Cleanup 2026-09-19 (after the 3bf35b3 push; `bckups/` deleted later the same day)
 
