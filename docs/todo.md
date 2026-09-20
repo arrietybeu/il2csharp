@@ -19,8 +19,14 @@ set as 3c — the pass moved none of them).
   loop arms, collisions, unverified leaves. Dead literal/equals temps
   collected downstream. Folds 25293 (8 cases), 24765 (8 cases +
   breaks), twin 25577; 24694 declines honestly (gotos).
-- Leftovers: per-arm Color (needs consumer-type proof), Navigation
-  merge-side facts, 22 goldens awaiting gated regen.
+- Per-arm Color: deferred with evidence, no source change. All three
+  repro shapes flow through phi copies into Color-typed sinks (26794
+  `Color color1`, 27827 `.color = ternary`, 23917 `set_color`), but
+  text level cannot recover the hidden B/A channels from `(float2)`
+  display, and rendering all four floats churns 1445 corpus sites in
+  352 files for 8 cosmetic sites (values are correct 16B throughout;
+  only display is lossy). Needs use→def const rewrite machinery.
+- Leftovers: Navigation merge-side facts, 22 goldens awaiting gated regen.
 
 ## Current work: recovery follow-up round 3c (2026-09-20, unpromoted)
 
