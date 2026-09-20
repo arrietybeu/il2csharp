@@ -114,6 +114,43 @@ def test_bool_materialization_declines_int_use():
     assert dec._bool_materialization_pass(list(lines)) == lines
 
 
+def test_sfblob_base_defers_to_static_path():
+    lift = struct_lifter()
+    base = Expr('typeof(V3).__static_fields', V3, 'sfblob')
+    lift.regs['RAX'] = base
+    ins = next(iter(Decoder(64, bytes.fromhex('f30f1000'), ip=0x1000)))
+    assert lift._aggregate_load(ins) is None
+    base2 = Expr('o', V3, 'obj')
+    lift.regs['RAX'] = base2
+    assert lift._aggregate_load(ins) is not None
+
+
+def test_add_accessor_folds_to_plus_equals():
+    from test_stack_args import make_call_lifter
+    lift, ins = make_call_lifter([INT], {'RCX': 'obj', 'RDX': 'h'},
+                                 returns=(0, 0x01 << 16), static=False,
+                                 name='add_Click')
+    lift._insn(ins, [ins], 0, None, ins.next_ip)
+    assert lift.out and lift.out[-1][1] == 'obj.Click += h;'
+
+
+def test_remove_accessor_folds_to_minus_equals():
+    from test_stack_args import make_call_lifter
+    lift, ins = make_call_lifter([INT], {'RCX': 'obj', 'RDX': 'h'},
+                                 returns=(0, 0x01 << 16), static=False,
+                                 name='remove_Click')
+    lift._insn(ins, [ins], 0, None, ins.next_ip)
+    assert lift.out and lift.out[-1][1] == 'obj.Click -= h;'
+
+
+def test_nonvoid_add_keeps_call_form():
+    from test_stack_args import make_call_lifter
+    lift, ins = make_call_lifter([INT], {'RCX': 'obj', 'RDX': 'h'},
+                                 returns=INT, static=False, name='add_Click')
+    lift._insn(ins, [ins], 0, None, ins.next_ip)
+    assert not lift.out or '+= ' not in lift.out[-1][1]
+
+
 def test_value_test_compares_against_zero():
     lift = lifter({'RAX': Expr('n', INT, 'int')})
     execute(lift, '85c0')  # test eax,eax

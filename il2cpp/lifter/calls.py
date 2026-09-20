@@ -1748,7 +1748,7 @@ class _CallsMixin:
                         or (mbase.startswith('set_') and len(rest) == 1
                             and not rty_has_value(self, rty))
                         or (mbase == 'get_Item' and 1 <= len(rest) <= 2)
-                        or (mbase == 'set_Item' and len(rest) == 2)))
+                        or ((mbase.startswith('add_') or mbase.startswith('remove_')) and len(rest) == 1 and not rty_has_value(self, rty)) or (mbase == 'set_Item' and len(rest) == 2)))
             if acc and recv_txt.startswith('&'):
                 recv_txt = recv_txt[1:]
             if not m2.is_static and args and recv is not None \
@@ -1769,6 +1769,14 @@ class _CallsMixin:
                     lv = '%s.%s' % (_recv_fold(recv_txt), mbase[4:])
                     self._kill_stale(lv)
                     self.emit(ins.ip, '%s = %s;' % (lv, rest[0]), asm)
+                    for rr in VOLATILE:
+                        self.regs.pop(rr, None)
+                    return
+                elif (mbase.startswith('add_') or mbase.startswith('remove_')) and len(rest) == 1 and not rty_has_value(self, rty):
+                    cand = None
+                    lv = '%s.%s' % (_recv_fold(recv_txt), mbase[4:] if mbase.startswith('add_') else mbase[7:])
+                    self._kill_stale(lv)
+                    self.emit(ins.ip, '%s %s= %s;' % (lv, '+' if mbase.startswith('add_') else '-', rest[0]), asm)
                     for rr in VOLATILE:
                         self.regs.pop(rr, None)
                     return

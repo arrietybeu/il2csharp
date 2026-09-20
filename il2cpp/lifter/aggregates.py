@@ -281,6 +281,8 @@ class _AggregatesMixin:
         base = dict.get(self.regs, reg_name(ins.memory_base))
         if base is None:
             return None
+        if base.kind == 'sfblob':
+            return None
         td = self._td_of(base.ty)
         if td is None:
             return None
