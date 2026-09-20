@@ -18,7 +18,12 @@ set as 3c — the pass moved none of them).
   negated `if (!V) {} else {}` pass-time shapes; declension for gotos,
   loop arms, collisions, unverified leaves. Dead literal/equals temps
   collected downstream. Folds 25293 (8 cases), 24765 (8 cases +
-  breaks), twin 25577; 24694 declines honestly (gotos).
+  breaks), twins 25577/26314; 24694 declines honestly (gotos).
+  Post-fold hardening: unjumped labels allowed in arm prefixes (26314
+  has two dead ones; jumped labels abort anywhere since C# forbids
+  jumping into a switch section and dropped labels dangle), plus a
+  cross-arm/outside-span temp-use post-check (prefix temps vanish with
+  the span). Full suite 822/22 identical triaged set.
 - Per-arm Color: deferred with evidence, no source change. All three
   repro shapes flow through phi copies into Color-typed sinks (26794
   `Color color1`, 27827 `.color = ternary`, 23917 `set_color`), but

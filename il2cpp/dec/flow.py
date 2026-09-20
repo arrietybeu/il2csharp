@@ -522,7 +522,7 @@ class _FlowMixin:
         except Exception:
             return False
 
-    def _hash_confirm(self, lines, lo, hi, H, S, eq):
+    def _hash_confirm(self, lines, lo, hi, H, S, eq, jumped):
         """[(literal, body_lo, body_hi)] for one dispatch arm, [] for
         an empty arm, 'nested' for a lone nested H-test, else None."""
         idx = [i for i in range(lo, hi) if lines[i].strip()]
@@ -573,7 +573,13 @@ class _FlowMixin:
         for j in idx:
             if j >= fpos:
                 break
-            dm = self._HASH_DECL_RX.match(lines[j].strip())
+            tj = lines[j].strip()
+            lm2 = re.match(r'^L_([0-9a-fA-F]+):$', tj)
+            if lm2:
+                if lm2.group(1) in jumped:
+                    return None
+                continue
+            dm = self._HASH_DECL_RX.match(tj)
             if not dm:
                 return None
             defined[dm.group(1)] = dm.group(2).strip()
@@ -682,9 +688,11 @@ class _FlowMixin:
         body_txt = '\n'.join(lines[blo:bhi])
         if self._SWITCH_BREAK_RX.search(body_txt) \
                 or self._SWITCH_GOTO_RX.search(body_txt) \
-                or self._SWITCH_LBL_RX.search(body_txt) \
                 or self._HASH_SWITCH_RX.search(body_txt):
             return None
+        for lbl in re.findall(r'L_([0-9a-fA-F]+):', body_txt):
+            if lbl in jumped:
+                return None
         if re.search(r'(?<![\w.])%s(?![\w])' % re.escape(H), body_txt):
             return None
         if re.search(r'(?<![\w.])%s(?![\w])' % re.escape(S), body_txt):
@@ -696,7 +704,7 @@ class _FlowMixin:
                 return None
         return [(lit, blo, bhi)]
 
-    def _hash_walk(self, lines, if_idx, H, S):
+    def _hash_walk(self, lines, if_idx, H, S, jumped):
         """(cases, end_idx) for an H-test if-tree, or (None, None)."""
         n = len(lines)
         while if_idx < n and not lines[if_idx].strip():
@@ -720,9 +728,9 @@ class _FlowMixin:
             return None, None
         cases = []
         r = self._hash_confirm(lines, b + 1, close, H, S,
-                               const if op == '==' else None)
+                               const if op == '==' else None, jumped)
         if r == 'nested':
-            r2, e2 = self._hash_walk(lines, b + 1, H, S)
+            r2, e2 = self._hash_walk(lines, b + 1, H, S, jumped)
             if r2 is None:
                 return None, None
             while e2 < close and not lines[e2].strip():
@@ -749,9 +757,9 @@ class _FlowMixin:
             if ec < 0:
                 return None, None
             r = self._hash_confirm(lines, k + 1, ec, H, S,
-                                   const if op == '!=' else None)
+                                   const if op == '!=' else None, jumped)
             if r == 'nested':
-                r2, e2 = self._hash_walk(lines, k + 1, H, S)
+                r2, e2 = self._hash_walk(lines, k + 1, H, S, jumped)
                 if r2 is None:
                     return None, None
                 while e2 < ec and not lines[e2].strip():
@@ -766,7 +774,7 @@ class _FlowMixin:
             return cases, ec + 1
         if nxt < n and lines[nxt].strip().startswith('else if (') \
                 and lines[nxt].strip().endswith(')'):
-            r2, end2 = self._hash_walk(lines, nxt, H, S)
+            r2, end2 = self._hash_walk(lines, nxt, H, S, jumped)
             if r2 is None:
                 return None, None
             cases.extend(r2)
@@ -817,7 +825,8 @@ class _FlowMixin:
                 i += 1
                 continue
             indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
-            cases, end = self._hash_walk(lines, j, H, S)
+            jumped = set(re.findall(r'goto L_([0-9a-fA-F]+);', '\n'.join(lines)))
+            cases, end = self._hash_walk(lines, j, H, S, jumped)
             if cases is None or len(cases) < 3:
                 out.append(lines[i])
                 i += 1
@@ -836,6 +845,44 @@ class _FlowMixin:
                 continue
             span = '\n'.join(lines[i + 1:j] + lines[end:])
             if re.search(r'(?<![\w.])%s(?![\w])' % re.escape(H), span):
+                out.append(lines[i])
+                i += 1
+                continue
+            bodyidx = set()
+            for _lit, _blo, _bhi in cases:
+                bodyidx.update(range(_blo, _bhi))
+            temps = set()
+            for k in range(i, end):
+                if k in bodyidx:
+                    continue
+                t = lines[k].strip()
+                if not t:
+                    continue
+                lm = re.match(r'^L_([0-9a-fA-F]+):$', t)
+                if lm and lm.group(1) in jumped:
+                    out.append(lines[i])
+                    i += 1
+                    cases = None
+                    break
+                dm = self._HASH_DECL_RX.match(t)
+                if dm:
+                    temps.add(dm.group(1))
+            if cases is None:
+                continue
+            outside = '\n'.join(lines[:i] + lines[end:])
+            bad = False
+            for t in temps:
+                rx = r'(?<![\w.])%s(?![\w])' % re.escape(t)
+                if re.search(rx, outside):
+                    bad = True
+                    break
+                for _lit, _blo, _bhi in cases:
+                    if re.search(rx, '\n'.join(lines[_blo:_bhi])):
+                        bad = True
+                        break
+                if bad:
+                    break
+            if bad:
                 out.append(lines[i])
                 i += 1
                 continue
