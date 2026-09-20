@@ -1551,6 +1551,32 @@ class _CallsMixin:
                 want0 = max(wants)
                 if len(args) > want0:
                     args = args[:want0]
+            shapes = set()
+            for c in cands:
+                m3 = None
+                if c[0] == 'method':
+                    m3 = self.meta.methods[c[1]]
+                elif c[0] == 'generic':
+                    md3 = self.il.method_specs[c[1]][0]
+                    if 0 <= md3 < len(self.meta.methods):
+                        m3 = self.meta.methods[md3]
+                if m3 is not None:
+                    rt3 = self.il.types[m3.return_type] \
+                        if 0 <= m3.return_type < len(self.il.types) else None
+                    shapes.add((m3.is_static, m3.param_count,
+                                bool(rt3 is not None and self.il.returns_sret(rt3))))
+            if len(shapes) > 1 and hasattr(self.il, '_sf_field_size'):
+                ae0 = arg_exprs[0] if arg_exprs else None
+                off = getattr(ae0, '_stack_offset', None)
+                if off is not None:
+                    for key in [k for k in self.regs if k.startswith('!mem:')]:
+                        _, lo, n = key.split(':'); lo, n = int(lo), int(n)
+                        if lo <= off < lo + n:
+                            del self.regs[key]
+                    for addr, slot in self.stack_map.items():
+                        if addr == off:
+                            self.stack_values.pop(slot, None)
+                            break
 
         # --- struct-return: Foo(&s_N, ...) with valuetype return -> s_N = Foo(...)
         # When the callee is an instance property getter, the sret buffer is
@@ -1678,6 +1704,17 @@ class _CallsMixin:
             # explicit interface implementations carry dotted accessor names
             # (IFace.get_X); the accessor checks read the last segment
             mbase = mname.rpartition('.')[2] if '.' in mname else mname
+            # a proved generic identity (exact hidden-slot match) prints its
+            # closed token; the metadata open name feeds only the guards
+            if info is not None and info[0] == 'generic':
+                try:
+                    gname = self.il.generic_method_name(info[1])
+                except Exception:
+                    gname = None
+                if gname is not None and gname == name:
+                    lt = gname.find('<')
+                    if 0 < lt and lt > gname.rfind('.'):
+                        mdot = gname[gname.rfind('.') + 1:]
             # fix 69b: args[0] is the receiver only when the return
             # does NOT need a hidden sret buffer -- Win64 puts the
             # buffer in RCX and shifts the receiver to RDX when it
@@ -1851,9 +1888,9 @@ class _CallsMixin:
                         if dt is not None and dt.is_valuetype else None
                     slot = args[0][1:] if args and args[0].startswith('&') else None
                     if slot is None and off is not None:
-                        for addr, name in self.stack_map.items():
+                        for addr, slot_nm in self.stack_map.items():
                             if addr == off:
-                                slot = name
+                                slot = slot_nm
                                 break
                     if off is not None and sz is not None and slot is not None:
                         self._stack_store(off, sz, Expr(slot, (m2.declaring, 0x11 << 16), 'obj'))

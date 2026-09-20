@@ -11,7 +11,7 @@ import struct
 import pytest
 from iced_x86 import Decoder
 
-from il2cpp import Expr, Lifter
+from il2cpp import Decompiler, Expr, Lifter
 
 INT = (0, 0x08 << 16)
 F32 = (0, 0x0C << 16)
@@ -44,6 +44,60 @@ def execute(lift, hex_bytes):
     insns = list(Decoder(64, bytes.fromhex(hex_bytes), ip=0x1000))
     for index, ins in enumerate(insns):
         lift._insn(ins, insns, index, None, insns[-1].next_ip)
+
+
+def test_native_count_sugar_fires_for_native_list():
+    from types import SimpleNamespace as NS
+    from il2cpp import Decompiler
+    dec = Decompiler.__new__(Decompiler)
+    dec._var_types = {'list1': (0, 0)}
+    dec.L = NS(il=NS(type_name=lambda ty: 'Obi.ObiNativeContactList'))
+    assert dec._native_count_sugar('num1 < ((byte*)list1 + 0x28)[0]') == \
+        'num1 < list1.Count'
+    assert dec._native_count_sugar('num1 < *(list1 + 0x28)') == \
+        'num1 < list1.Count'
+
+
+def test_native_count_sugar_declines_others():
+    from types import SimpleNamespace as NS
+    from il2cpp import Decompiler
+    dec = Decompiler.__new__(Decompiler)
+    dec._var_types = {}
+    dec.L = NS(il=NS(type_name=lambda ty: 'Obi.ObiNativeContactList'))
+    s = 'num1 < ((byte*)list1 + 0x28)[0]'
+    assert dec._native_count_sugar(s) == s
+    dec._var_types = {'a': (0, 0)}
+    dec.L = NS(il=NS(type_name=lambda ty: 'int[]'))
+    assert dec._native_count_sugar(s.replace('list1', 'a')) == s.replace('list1', 'a')
+
+
+def test_bool_materialization_retypes_all_bool_use_temp():
+    from il2cpp import Decompiler
+    dec = Decompiler.__new__(Decompiler)
+    dec._var_types = {}
+    lines = [
+        "int num1 = 0;",
+        "num1 = (levelMeter1.CurrentAvgAmp * this.sensitivity > this.speakingAmpThreshold ? 1 : 0);",
+        "this.activationMic.SetActive(flag9 & num1);",
+    ]
+    dec._var_types = {'flag9': (0, 0x02 << 16)}
+    assert dec._bool_materialization_pass(list(lines)) == [
+        "bool num1 = false;",
+        "num1 = levelMeter1.CurrentAvgAmp * this.sensitivity > this.speakingAmpThreshold;",
+        "this.activationMic.SetActive(flag9 & num1);",
+    ]
+
+
+def test_bool_materialization_declines_int_use():
+    from il2cpp import Decompiler
+    dec = Decompiler.__new__(Decompiler)
+    dec._var_types = {}
+    lines = [
+        "int num1 = 0;",
+        "num1 = (a > b ? 1 : 0);",
+        "num1 += 1;",
+    ]
+    assert dec._bool_materialization_pass(list(lines)) == lines
 
 
 def test_value_test_compares_against_zero():
@@ -118,11 +172,14 @@ def test_overlapping_store_splits_surviving_ranges():
     assert lift._stack_piece(0x24, 4).text == '1.0f'
 
 
-def test_gapped_tiles_decline():
+def test_gapped_request_returns_proven_prefix():
     lift = struct_lifter()
-    lift._stack_store(0x20, 4, Expr('a', INT, 'int'))
-    lift._stack_store(0x28, 4, Expr('b', INT, 'int'))
-    assert lift._stack_piece(0x20, 12) is None
+    lift._stack_store(0x20, 4, Expr('a', F32, 'float'))
+    lift._stack_store(0x28, 4, Expr('b', F32, 'float'))
+    tiled = lift._stack_piece(0x20, 12)
+    assert tiled is not None and len(tiled._parts) == 1
+    assert lift._piece_value(tiled, 0, 4, F32).text == 'a'
+    assert lift._piece_value(tiled, 4, 4, F32) is None
 
 
 def test_narrow_provenance_records_prefix_not_nothing():
@@ -265,6 +322,24 @@ def test_write_barrier_records_the_pointer_store():
     lift._insn(ins, [ins], 0, None, ins.next_ip)
     assert '!mem:-56:8' in lift.regs
     assert any('s_28' in s[1] and 'prev1' in s[1] for s in lift.out)
+
+
+def test_nonzero_slice_reroots_to_base():
+    from il2cpp import Expr as _Expr
+    lift = struct_lifter()
+    base = _Expr('m', V3, 'obj')
+    frag = lift._fragment(base, 4, 8)
+    assert lift._piece_value(frag, 0, 4, F32).text == 'm.y'
+    assert lift._piece_value(frag, 4, 4, F32).text == 'm.z'
+
+
+def test_straddling_fragment_keeps_origin_type():
+    lift = struct_lifter()
+    origin = Expr('v', V3, 'obj')
+    frag = lift._fragment(origin, 0, 8)
+    assert frag.ty == V3
+    assert frag.kind == 'bits'
+    assert lift._piece_value(frag, 0, 4, F32).text == 'v.x'
 
 
 def test_hint_never_downgrades_a_typed_operand():
@@ -422,3 +497,138 @@ def test_color_partial_bytes_decline():
     origin = Expr('c', None, 'float')
     origin._bytes = struct.pack('<4f', 1.0, 0.0, 0.0, 1.0)
     assert lift._piece_value(origin, 0, 8, V3) is None
+
+
+def rgba_lifter():
+    chain = {0x10: ('r', 1), 0x14: ('g', 1), 0x18: ('b', 1), 0x1C: ('a', 1)}
+    il = NS(
+        types=[INT, F32, V3],
+        _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+        _sf_field_size=lambda ty, _: {F32: 4, V3: 16}.get(ty),
+        _closed_type_key=lambda t: t,
+        instance_field_chain=lambda td: chain,
+        type_from_ptr=lambda ptr: None,
+        type_name=lambda ty: 'MyGame.Tint',
+    )
+    lift = lifter(il=il)
+    lift.meta = NS(typedefs=[NS(is_valuetype=True, name='Tint')])
+    return lift
+
+
+def test_rgba_struct_bytes_render_own_constructor():
+    lift = rgba_lifter()
+    origin = Expr('c', None, 'float')
+    origin._bytes = struct.pack('<4f', 1.0, 0.0, 0.0, 1.0)
+    got = lift._piece_value(origin, 0, 16, V3)
+    assert got is not None
+    assert got.text == 'new MyGame.Tint(1.0f, 0.0f, 0.0f, 1.0f)'
+    assert 'UnityEngine.Color' not in got.text
+
+
+def test_three_float_struct_declines_color_assembly():
+    lift = struct_lifter()
+    origin = Expr('c', None, 'float')
+    origin._bytes = struct.pack('<4f', 1.0, 0.0, 0.0, 1.0)
+    assert lift._piece_value(origin, 0, 16, V3) is None
+
+
+def ternary_dec():
+    dec = Decompiler.__new__(Decompiler)
+    dec._var_types = {}
+    return dec
+
+
+def test_ternary_bool_arm_reconciliation():
+    # MicAudioCanvas.Update: the false-arm `0` is a phi copy that never
+    # passes the lifter `_fimm`, so the fold keeps `int num2`. The true
+    # arm's identical text is bool-declared elsewhere (itself `_var_types`
+    # bool tracking), proving the ternary bool: the literal becomes
+    # `false` and the shared temp takes the `bool` declaration.
+    dec = ternary_dec()
+    lines = [
+        "bool flag9 = this._recorder.IsCurrentlyTransmitting;",
+        "if (obj12 == InputMode.OpenMic)",
+        "{",
+        "int num2 = this._recorder.IsCurrentlyTransmitting;",
+        "}",
+        "else",
+        "{",
+        "int num2 = 0;",
+        "}",
+        "this.openMic.SetActive(num2);",
+    ]
+    assert dec._ternary_pass(list(lines)) == [
+        "bool flag9 = this._recorder.IsCurrentlyTransmitting;",
+        "bool num2 = obj12 == InputMode.OpenMic"
+        " ? this._recorder.IsCurrentlyTransmitting : false;",
+        "this.openMic.SetActive(num2);",
+    ]
+    # no bool proof anywhere: the int decl and the `0` arm survive.
+    dec2 = ternary_dec()
+    lines2 = [
+        "if (cond1)",
+        "{",
+        "int num2 = obj3;",
+        "}",
+        "else",
+        "{",
+        "int num2 = 0;",
+        "}",
+    ]
+    assert dec2._ternary_pass(list(lines2)) == [
+        "int num2 = cond1 ? obj3 : 0;",
+    ]
+    # the literal must be exactly `0`/`1` (`00` declines).
+    dec3 = ternary_dec()
+    lines3 = [
+        "bool flag9 = this._recorder.IsCurrentlyTransmitting;",
+        "if (cond1)",
+        "{",
+        "int num2 = this._recorder.IsCurrentlyTransmitting;",
+        "}",
+        "else",
+        "{",
+        "int num2 = 00;",
+        "}",
+    ]
+    assert dec3._ternary_pass(list(lines3)) == [
+        "bool flag9 = this._recorder.IsCurrentlyTransmitting;",
+        "int num2 = cond1 ? this._recorder.IsCurrentlyTransmitting : 00;",
+    ]
+
+
+def test_phi_decl_hoist_across_if_else():
+    # MicAudioCanvas.Update PTT shape: `bool flag6` is declared in both
+    # gamepad arms but read after the join. The hoist strips both tails
+    # to bare assignments and declares once above the `if`.
+    dec = Decompiler.__new__(Decompiler)
+    lines = [
+        "if (flag5)",
+        "{",
+        "UnityEngine.InputSystem.InputActionAsset obj15 = this.playerInput.actions;",
+        "bool flag6 = obj15[\"PushToTalk\"].IsPressed();",
+        "}",
+        "else",
+        "{",
+        "bool flag7 = Foo();",
+        "bool flag6 = flag7;",
+        "}",
+        "bool flag8 = flag6;",
+    ]
+    assert dec._phi_decl_hoist(list(lines)) == [
+        "bool flag6;",
+        "if (flag5)",
+        "{",
+        "UnityEngine.InputSystem.InputActionAsset obj15 = this.playerInput.actions;",
+        "flag6 = obj15[\"PushToTalk\"].IsPressed();",
+        "}",
+        "else",
+        "{",
+        "bool flag7 = Foo();",
+        "flag6 = flag7;",
+        "}",
+        "bool flag8 = flag6;",
+    ]
+    # an earlier assignment of the same temp declines (scope unproven).
+    lines2 = ["flag6 = Foo();"] + lines
+    assert dec._phi_decl_hoist(list(lines2)) == lines2

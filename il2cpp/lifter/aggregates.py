@@ -15,14 +15,15 @@ _COLOR_NAMES = {
 }
 
 
-def _color_text(raw16):
+def _color_text(raw16, type_name='UnityEngine.Color'):
     if len(raw16) != 16:
         return None
     vals = struct.unpack('<4f', raw16)
-    name = _COLOR_NAMES.get(vals)
-    if name is not None:
-        return name
-    return 'new UnityEngine.Color(%s, %s, %s, %s)' % tuple(repr_f32(v) for v in vals)
+    if type_name == 'UnityEngine.Color':
+        name = _COLOR_NAMES.get(vals)
+        if name is not None:
+            return name
+    return 'new %s(%s, %s, %s, %s)' % ((type_name,) + tuple(repr_f32(v) for v in vals))
 
 
 class _AggregatesMixin:
@@ -41,14 +42,42 @@ class _AggregatesMixin:
         # the first scalar field. Only exact scalar consumers may use that text.
         scalar = self._piece_value(origin, offset, width, None)
         result = Expr(scalar.text if scalar is not None else origin.text,
-                      scalar.ty if scalar is not None else None,
+                      scalar.ty if scalar is not None else origin.ty,
                       scalar.kind if scalar is not None else 'bits')
         result._slice = (origin, offset, width)
         return result
 
+    def _is_rgba_struct(self, td):
+        try:
+            chain = self.il.instance_field_chain(td)
+        except Exception:
+            return False
+        if not chain or len(chain) != 4:
+            return False
+        for off, want in ((0x10, 'r'), (0x14, 'g'), (0x18, 'b'), (0x1C, 'a')):
+            hit = chain.get(off)
+            if hit is None or hit[0] != want:
+                return False
+            try:
+                ft = self.il.types[hit[1]]
+            except Exception:
+                return False
+            if self.il._type_enum(ft) != 0x0c:
+                return False
+            try:
+                w = self.il._sf_field_size(ft, 0)
+            except Exception:
+                w = None
+            if w is not None and w != 4:
+                return False
+        return True
+
     def _piece_value(self, origin, offset, width, expected, depth=0):
         if depth > 8:
             return None
+        sl = getattr(origin, '_slice', None)
+        if sl is not None and sl[1] != 0:
+            return self._piece_value(sl[0], sl[1] + offset, width, expected, depth + 1)
         data = getattr(origin, '_bytes', None)
         if data is not None:
             if offset + width > len(data) or expected is None:
@@ -57,9 +86,12 @@ class _AggregatesMixin:
             te = self.il._type_enum(expected)
             if te == 0x11:
                 td = self._td_of(expected)
-                if td is not None and self.meta.typedefs[td].is_valuetype and self.il.type_name(expected) == 'UnityEngine.Color':
-                    if offset == 0 and width == 16:
-                        return Expr(_color_text(raw), expected, self._ty_kind(expected))
+                if td is not None and self.meta.typedefs[td].is_valuetype:
+                    tn = self.il.type_name(expected)
+                    if tn == 'UnityEngine.Color' or self._is_rgba_struct(td):
+                        if offset == 0 and width == 16:
+                            return Expr(_color_text(raw, tn), expected, self._ty_kind(expected))
+                        return None
                     return None
             if te == 0x0c and width == 4:
                 text = repr_f32(struct.unpack('<f', raw)[0])
@@ -149,19 +181,19 @@ class _AggregatesMixin:
             if part is None:
                 continue
             tiles.append((lo, part[0], part[1], n))
-        tiles.sort()
+        tiles.sort(key=lambda t: t[0])
         cur, acc = start, []
         for lo, origin, off, n in tiles:
             if lo + n <= cur:
                 continue
             if lo != cur:
-                return None
+                break
             take = min(n, start + width - cur)
             acc.append((cur - start, origin, off + (cur - lo), take))
             cur += take
             if cur >= start + width:
                 break
-        if cur < start + width or not acc:
+        if not acc or acc[0][0] != 0:
             return None
         result = Expr('', None, 'bits')
         result._parts = acc
@@ -179,13 +211,16 @@ class _AggregatesMixin:
             return None
         chain = self.il.instance_field_chain(td) or {}
         fields = []
+        any_clean = False
         for off, (name, ti) in sorted(chain.items()):
             ft = self.il.types[ti]
             width = self.il._sf_field_size(ft, 0)
             if width is None or off < 0x10 or off - 0x10 + width > size:
                 return None
             value = self._stack_piece(address + off - 0x10, width, ft)
-            if value is None:
+            if value is not None and not value.text and getattr(value, '_parts', None):
+                value = self._piece_value(value, 0, width, ft)
+            if value is None or not value.text:
                 return None
             fields.append(name + ' = ' + value.text)
         return ('new ' + self.il.type_name(ty) + ' { ' + ', '.join(fields) + ' }') if fields else None
@@ -194,7 +229,8 @@ class _AggregatesMixin:
         if not text.startswith('&') or not self._byval_struct(ty):
             return None
         addresses = [key for key, name in self.stack_map.items() if name == text[1:]]
-        return self._stack_struct(addresses[0], ty) if len(addresses) == 1 else None
+        r = self._stack_struct(addresses[0], ty) if len(addresses) == 1 else None
+        return r
 
     def _aggregate_load(self, ins):
         width = MemorySizeExt.size(ins.memory_size)
@@ -202,7 +238,11 @@ class _AggregatesMixin:
         if address is not None:
             frag = self._stack_piece(address, width)
             if frag is not None and not frag.text:
-                frag.text = self.slot_var(ins.memory_displacement)
+                slot = self.slot_var(ins.memory_displacement)
+                frag.text = slot
+                sty = self.slot_types.get(slot)
+                if sty is not None and frag.ty is None:
+                    frag.ty = sty
             return frag
         if ins.memory_base == IReg.RIP or ins.memory_index != IReg.NONE:
             return None

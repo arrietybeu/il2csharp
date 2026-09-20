@@ -305,6 +305,60 @@ class _HighLevelMixin:
             lines = new
         return lines
 
+    @staticmethod
+    def _ternary_stripped(text):
+        """Outer whitespace and wrapping parens off; the wrapper must own
+        its parens (balanced inside), so `(0)` strips but `(f(0)` never
+        matches. Used by the ternary bool-arm reconciliation."""
+        t = (text or '').strip()
+        while len(t) >= 2 and t.startswith('(') and t.endswith(')'):
+            inner = t[1:-1]
+            depth = 0
+            ok = True
+            for c in inner:
+                if c == '(':
+                    depth += 1
+                elif c == ')':
+                    depth -= 1
+                    if depth < 0:
+                        ok = False
+                        break
+            if not ok or depth != 0:
+                break
+            t = inner.strip()
+        return t
+
+    def _ternary_arm_is_bool(self, other, lines):
+        """True when a non-literal ternary arm is proved bool: a `flagN`
+        token (the rename stamps the te == 0x02 proof into the name --
+        flagN locals are bool by construction), a token still carrying
+        its pre-rename te == 0x02 entry in `_var_types` (the lifter
+        `_fimm` proof family: 0/1 into a bool location is false/true),
+        or an expression whose identical text a `bool` declaration holds
+        elsewhere in this method (same text over scope-rooted names --
+        `this`/fields, no rename locals a sibling scope could redeclare
+        -- so the static type agrees; that sibling `bool` itself came
+        from `_var_types` tracking)."""
+        o = (other or '').strip()
+        if not o:
+            return False
+        if re.fullmatch(r'flag\d+', o):
+            return True
+        ty = getattr(self, '_var_types', {}).get(o)
+        if isinstance(ty, tuple) and len(ty) > 1 \
+                and ((ty[1] >> 16) & 0xFF) == 0x02:
+            return True
+        if re.search(r'(?<![\w.])(?:obj\d+|num\d+|flag\d+|real\d+'
+                     r'|[vst]\d+|s_[0-9a-fA-F]+)(?![\w])', o):
+            return False
+        for ln in lines:
+            s = ln.strip()
+            m = re.match(r'^bool\s+[\w.]+\s*(?<![=!<>])=(?![=>])\s*'
+                         r'(.*?);\s*$', s)
+            if m and self._ternary_stripped(m.group(1)) == o:
+                return True
+        return False
+
     def _ternary_pass(self, lines: List[str]) -> List[str]:
         """`if (c) { x = a; } else { x = b; }` -> `x = c ? a : b;` -- when
         both arms are a single assignment to the same lvalue. Each arm's
@@ -352,13 +406,153 @@ class _HighLevelMixin:
                             lv, cm, m1.group(2)[len(cm) + 1:]))
                         i += 8
                         continue
+                    rhs_a, rhs_b = m1.group(2), m2.group(2)
+                    sa = self._ternary_stripped(rhs_a)
+                    sb = self._ternary_stripped(rhs_b)
+                    # Bool-arm reconciliation: a phi-copy `0`/`1` arm never
+                    # passes the lifter `_fimm`, so the fold keeps the int
+                    # decl (`int num2 = c ? prop : 0`) and feeds 0/1 to bool
+                    # params. When exactly one arm is the literal and the
+                    # other is bool-proved, spell the literal `false`/`true`
+                    # and take the `bool` declaration for the shared temp.
+                    # The literal must be exactly `0`/`1`; anything else
+                    # declines. Non-ternary statements never reach here.
+                    if (sa in ('0', '1')) != (sb in ('0', '1')):
+                        other = sb if sa in ('0', '1') else sa
+                        if self._ternary_arm_is_bool(other, lines):
+                            if sa in ('0', '1'):
+                                rhs_a = 'true' if sa == '1' else 'false'
+                            else:
+                                rhs_b = 'true' if sb == '1' else 'false'
+                            dm = re.match(r'^(.*\S)\s+([\w.]+)$', lv)
+                            if dm and dm.group(1) != 'bool':
+                                lv = 'bool %s' % dm.group(2)
                     out.append('%s%s = %s ? %s : %s;' % (
                         lines[i][:len(lines[i]) - len(lines[i].lstrip())],
-                        lv, cond, m1.group(2), m2.group(2)))
+                        lv, cond, rhs_a, rhs_b))
                     i += 8
                     continue
             out.append(lines[i])
             i += 1
+        return self._bool_materialization_pass(out)
+
+    _TERNMAT_RX = re.compile(r'^([A-Za-z_][\w.]*) = \((.*)\)\s*;$')
+
+    @staticmethod
+    def _ternmat_split(inner):
+        depth = 0
+        qi = None
+        for n, c in enumerate(inner):
+            if c in ('"', "'"):
+                return None
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+            elif depth == 0 and c == '?':
+                qi = n
+                break
+        if qi is None:
+            return None
+        cond, rest = inner[:qi], inner[qi + 1:]
+        depth = 0
+        for n, c in enumerate(rest):
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+            elif depth == 0 and c == ':':
+                return cond, rest[:n], rest[n + 1:]
+        return None
+
+    def _bool_cond_proved(self, cond, lines):
+        c = self._ternary_stripped(cond)
+        if not c or re.search(r'(?<![=!<>])=(?![=>])', c):
+            return False
+        if c.startswith('!'):
+            return True
+        if re.search(r'\bis\b|&&|\|\||(?<![=!<>+\-*/%&|^])(?:<=|>=|==|!=|<|>)(?![=>])', c):
+            return True
+        return self._ternary_arm_is_bool(c, lines)
+
+    def _bool_use_ok(self, line, tok, lines):
+        for m in re.finditer(r'(?<![\w.])' + re.escape(tok) + r'(?![\w])', line):
+            before, after = line[:m.start()], line[m.end():]
+            if re.search(r'!\s*$', before):
+                continue
+            if re.search(r'==\s*(true|false)\s*$', after) or re.search(r'!=\s*(true|false)\s*$', after):
+                continue
+            bm = re.search(r'([\w.]+)\s*([&|]{1,2})\s*$', before)
+            am = re.match(r'\s*([&|]{1,2})\s*([\w.]+)', after)
+            other = None
+            if bm:
+                other = bm.group(1)
+            elif am:
+                other = am.group(2)
+            if other is not None and (re.fullmatch(r'flag\d+', other) or self._ternary_arm_is_bool(other, lines)):
+                continue
+            return False
+        return True
+
+    def _bool_materialization_pass(self, lines):
+        out = list(lines)
+        for i, st in enumerate(out):
+            s = st.strip()
+            m = self._TERNMAT_RX.match(s)
+            if m is None:
+                continue
+            tok, inner = m.group(1), m.group(2)
+            if '.' in tok:
+                continue
+            sp = self._ternmat_split(inner)
+            if sp is None:
+                continue
+            cond, arm_a, arm_b = sp
+            sa, sb = self._ternary_stripped(arm_a), self._ternary_stripped(arm_b)
+            if {sa, sb} != {'0', '1'}:
+                continue
+            if not self._bool_cond_proved(cond, out):
+                continue
+            ind = st[:len(st) - len(st.lstrip())]
+            new_rhs = cond.strip() if sa == '1' else '!(%s)' % cond.strip()
+            decl_idx, decl_ty = None, None
+            for j, ln in enumerate(out):
+                if j == i:
+                    continue
+                dm = re.match(r'^(int|bool)\s+' + re.escape(tok) + r'\s*(=.*?)?;\s*$', ln.strip())
+                if dm:
+                    if decl_idx is not None:
+                        decl_idx = -1
+                        break
+                    decl_idx, decl_ty = j, dm.group(1)
+                    if dm.group(2) is not None and self._ternary_stripped(dm.group(2)[1:]) not in ('0', '1'):
+                        decl_idx = -1
+                        break
+            if decl_idx is None or decl_idx < 0:
+                continue
+            ok = True
+            for j, ln in enumerate(out):
+                if j == i or j == decl_idx:
+                    continue
+                if not self._bool_use_ok(ln, tok, out):
+                    ok = False
+                    break
+                if re.search(r'(?<![\w.])' + re.escape(tok) + r'\s*(?:[+\-*/%&|^]|<<|>>)?=(?![=>])', ln):
+                    ok = False
+                    break
+            if not ok:
+                continue
+            if decl_ty == 'bool':
+                out[i] = '%s%s = %s;' % (ind, tok, new_rhs)
+                continue
+            if decl_ty != 'int':
+                continue
+            dl = out[decl_idx]
+            dind = dl[:len(dl) - len(dl.lstrip())]
+            initm = re.match(r'^int\s+' + re.escape(tok) + r'\s*=\s*(.*?)\s*;\s*$', dl.strip())
+            init_txt = 'false' if initm is None or self._ternary_stripped(initm.group(1)) == '0' else 'true'
+            out[decl_idx] = '%sbool %s = %s;' % (dind, tok, init_txt)
+            out[i] = '%s%s = %s;' % (ind, tok, new_rhs)
         return out
 
     # ------------------------------------------------------------------
@@ -543,6 +737,25 @@ class _HighLevelMixin:
             return '%s %s %s.Length' % (m.group(1), m.group(2), recv)
         return self._LEN_RX.sub(rep, cond)
 
+    _NATIVELEN_RX = re.compile(r'(?:\(\(byte\*\)([\w.]+) \+ 0x28\)\[0\]|\*\(([\w.]+) \+ 0x28\))')
+
+    def _native_count_sugar(self, text: str) -> str:
+        """`((byte*)a + 0x28)[0]` is a native-list count load when the
+        receiver is exactly Obi.ObiNativeContactList (count at +0x28).
+        Anything else -- including untyped receivers -- keeps raw text."""
+        def rep(m):
+            recv = m.group(1) or m.group(2)
+            ty = self._var_types.get(recv)
+            if ty is not None:
+                try:
+                    tn = self.L.il.type_name(ty)
+                except Exception:
+                    tn = ''
+                if tn == 'Obi.ObiNativeContactList':
+                    return '%s.Count' % recv
+            return m.group(0)
+        return self._NATIVELEN_RX.sub(rep, text)
+
     def _for_sugar(self, lines: List[str]) -> List[str]:
         """while + counter phi -> for. The increment is the phi copy on the back
         edge, the initial value the copy on the entry edge."""
@@ -578,7 +791,7 @@ class _HighLevelMixin:
                     and not self._used_outside(lines, i, close, var, init_idx):
                 decl = 'int '
             head = '%s%s' % (decl, ('%s = %s' % (var, init)) if init is not None else '')
-            cond = self._len_sugar(self._simplify_cond(cond))
+            cond = self._native_count_sugar(self._len_sugar(self._simplify_cond(cond)))
             lines[i] = 'for (%s; %s; %s)' % (head, cond, step_txt)
             del lines[last]
             if init_idx is not None:
@@ -588,7 +801,7 @@ class _HighLevelMixin:
         for i, st in enumerate(lines):
             t = st.strip()
             if t.startswith('if (') or t.startswith('while ('):
-                lines[i] = self._len_sugar(st)
+                lines[i] = self._native_count_sugar(self._len_sugar(st))
         return lines
 
 

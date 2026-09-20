@@ -1,5 +1,34 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: recovery follow-up round 2 (2026-09-20, unpromoted)
+
+Continues the prior session (committed 5b13c9d). Same rules: `final_out/`
+untouched, no snapshot regen, no promotion. CRLF/no-BOM kept via binary
+patches; `tests/test_recovery_followup.py` (LF) now pins 40+ behaviors.
+
+- Exact-tiling composites with per-tile routing (`_parts`), proven-prefix
+  recording, fragment type preservation, slot-type fill on composites.
+- Ignored-call flush twin-proofed (mov-copies, phi copies, rendered text);
+  ambiguous-shape calls union-kill arg0 slots; byref params kill slot
+  caches (viscosity head back); `.ctor`-on-stack-buffer records.
+- Call rendering: exact generic `<T>` tokens (method-level args only),
+  VT-echo/exact-first guards (`.m_State`/`.m_StateBlock` back),
+  List `.Count`, native-list `+0x28` `.Count` sugar, static RGBA bytes to
+  `Color.*`/`new Color` (+ generalized RGBA structs).
+- Dec passes: ternary bool-arm reconciliation, assignment-ternary `? 1:0`
+  materialization with all-uses-bool retype, phi-decl hoist (Update mic
+  block fully bool-typed; enum decls via hint-guard; IntPtr tests null).
+- Reverted with evidence: partial struct assembly (undeclared slots),
+  identity/single-origin folds, fragment re-root reversal confusion.
+- Fixed-then-verified regressions: 31664 ctor/store/return, 32837 stale
+  zeros, 104428 call type, 31361/2, 45016, 126258 null-check, 5769 byte.
+- Gates: portable 711 green; full suite ~807 passed / 24 failed, every
+  failure triaged (improvements-awaiting-regen vs genuine: 32837-shape,
+  104428-tail, 32832/11974 unclear, 83s neutral/brittle).
+- Leftovers: Navigation path-sensitive facts, color ternary arms, SIMD
+  lanes, `GetComponent` (done), mic scope (done), per-golden regen only
+  after gates.
+
 ## Current work: decompiler recovery follow-up (2026-09-19, unpromoted)
 
 Continues `nowtodo.md` (2026-09-19 stop record, committed alongside): the

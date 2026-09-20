@@ -104,6 +104,7 @@ class _StructureMixin:
         raw = self._forhead_call_fold(raw)
         raw = self._switch_to_if(raw)
         raw = self._rename_locals(raw)
+        raw = self._phi_decl_hoist(raw)
         raw = self._bool_sugar(raw, m)
         raw = self._flag_inline(raw)
         raw = self._compound_assign(raw)
@@ -197,6 +198,175 @@ class _StructureMixin:
     # a role decided 13:12 is a coin flip, and the two roles render
     # differently (`throw;` vs `throw x;`), so require a decisive margin
     _EH_HELPER_MIN_DOMINANCE = 4
+
+    @staticmethod
+    def _phi_match_brace(lines, open_idx):
+        """Index of the line closing the brace opened at open_idx, or None."""
+        d = 0
+        for k in range(open_idx, len(lines)):
+            d += lines[k].count('{') - lines[k].count('}')
+            if k > open_idx and d <= 0:
+                return k
+        return None
+
+    @staticmethod
+    def _phi_tail_decl(s):
+        """(type, tok, rhs) for a `T x = rhs;` tail line, else None. The `=`
+        must be lone (no ==/=>/compound); `var` never qualifies."""
+        t = s.strip()
+        if not t.endswith(';'):
+            return None
+        eq = -1
+        for k, c in enumerate(t):
+            if c != '=':
+                continue
+            prev = t[k - 1] if k > 0 else ''
+            nxt = t[k + 1] if k + 1 < len(t) else ''
+            if prev in ('=', '!', '<', '>', '+', '-', '*', '/', '%',
+                        '&', '|', '^') or nxt in ('=', '>'):
+                continue
+            eq = k
+            break
+        if eq < 0:
+            return None
+        lhs, rhs = t[:eq].rstrip(), t[eq + 1:].strip()
+        if rhs.endswith(';'):
+            rhs = rhs[:-1].strip()
+        if not rhs:
+            return None
+        m = re.match(r'^(.+?)\s+([A-Za-z_@]\w*)$', lhs)
+        if not m:
+            return None
+        typ = m.group(1)
+        if typ == 'var' \
+                or not re.fullmatch(r'[A-Za-z_@][\w@.<>,\[\]*? ]+', typ):
+            return None
+        return typ, m.group(2), rhs
+
+    def _phi_decl_match(self, lines, i):
+        """Full hoist match at i, or None: `if (c) { ..; T x = a; } else
+        { ..; T x = b; }` with x read after the join. Returns (indent,
+        tok, typ, tc, ec, a1, a2, rhs1, rhs2) with absolute tail indices.
+        Every guard must hold: same token, same declared type word, tails
+        last in their arms, no flow-break in either arm, no earlier read
+        of x in the arms, no earlier visible decl/assignment of x, no
+        address-taken anywhere, a later read of x, and arms longer than
+        the lone tail (the pure single-assignment shape belongs to the
+        ternary, which folds it with its declaration intact)."""
+        n = len(lines)
+        s = lines[i].strip()
+        if not (s.startswith('if (') and s.endswith(')')):
+            return None
+        if i + 1 >= n or lines[i + 1].strip() != '{':
+            return None
+        tc = self._phi_match_brace(lines, i + 1)
+        if tc is None or tc + 2 >= n:
+            return None
+        if lines[tc].strip() != '}' or lines[tc + 1].strip() != 'else' \
+                or lines[tc + 2].strip() != '{':
+            return None
+        ec = self._phi_match_brace(lines, tc + 2)
+        if ec is None:
+            return None
+        then = lines[i + 2:tc]
+        els = lines[tc + 3:ec]
+        nn1 = [k for k, b in enumerate(then) if b.strip()]
+        nn2 = [k for k, b in enumerate(els) if b.strip()]
+        if not nn1 or not nn2:
+            return None
+        if len(nn1) == 1 and len(nn2) == 1:
+            return None
+        p1 = self._phi_tail_decl(then[nn1[-1]])
+        p2 = self._phi_tail_decl(els[nn2[-1]])
+        if p1 is None or p2 is None:
+            return None
+        typ1, tok1, rhs1 = p1
+        typ2, tok2, rhs2 = p2
+        if tok1 != tok2 or typ1 != typ2:
+            return None
+        tok, typ = tok1, typ1
+        rx = re.compile(r'(?<![\w.])%s(?![\w])' % re.escape(tok))
+        flow = re.compile(r'^(?:return|goto|throw|break|continue)\b')
+        for body in (then, els):
+            for b in body:
+                if flow.match(b.strip()):
+                    return None
+        a1 = i + 2 + nn1[-1]
+        a2 = tc + 3 + nn2[-1]
+        for k in range(i + 2, a1):
+            if rx.search(lines[k]):
+                return None
+        for k in range(tc + 3, a2):
+            if rx.search(lines[k]):
+                return None
+        if rx.search(rhs1) or rx.search(rhs2):
+            return None
+        addr = re.compile(r'(?<!&)&(?!&)\s*%s\b|\b(?:ref|out|in)\s+%s\b'
+                          % (re.escape(tok), re.escape(tok)))
+        if any(addr.search(b) for b in lines):
+            return None
+        decl = re.compile(r'(?<![\w.])%s(?![\w])\s*(=(?![=>])|;)'
+                          % re.escape(tok))
+        tdecl = re.compile(
+            r'[A-Za-z_@][\w@.<>,\[\]*?]*\s+%s(?![\w])'
+            r'(?=\s*(?:=(?![=])|;|\bin\b|\)))' % re.escape(tok))
+        for k in range(i):
+            if decl.search(lines[k]) or tdecl.search(lines[k]):
+                return None
+        read = False
+        for k in range(ec + 1, n):
+            if tdecl.search(lines[k]):
+                return None
+            if rx.search(lines[k]):
+                read = True
+        if not read:
+            return None
+        indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+        return indent, tok, typ, tc, ec, a1, a2, rhs1, rhs2
+
+    def _phi_decl_hoist(self, lines):
+        """Hoist twin arm declarations above their `if`/`else`.
+
+        `if (c) { ..; T x = a; } else { ..; T x = b; }` with x read after
+        the join leaves x scoped to each arm (block-scoped declarations
+        from `_rename_locals`): strip both tail decls to bare assignments
+        and hoist one `T x;` above the `if`. See `_phi_decl_match` for the
+        full guard list. A temp hoisted at two diamonds would redeclare,
+        so a temp matching twice declines everywhere. Runs between
+        `_rename_locals` (decl spellings exist) and `_bool_sugar` (which
+        is flag-only and never sees the hoisted bare decl)."""
+        n = len(lines)
+        found = []
+        for q in range(n):
+            hit = self._phi_decl_match(lines, q)
+            if hit is not None:
+                found.append((q, hit))
+        counts = {}
+        for _, hit in found:
+            counts[hit[1]] = counts.get(hit[1], 0) + 1
+        at = {q: hit for q, hit in found if counts[hit[1]] == 1}
+        out = []
+        i = 0
+        while i < n:
+            hit = at.get(i)
+            if hit is None:
+                out.append(lines[i])
+                i += 1
+                continue
+            indent, tok, typ, tc, ec, a1, a2, rhs1, rhs2 = hit
+            l1 = lines[a1]
+            ind1 = l1[:len(l1) - len(l1.lstrip())]
+            l2 = lines[a2]
+            ind2 = l2[:len(l2) - len(l2.lstrip())]
+            out.append('%s%s %s;' % (indent, typ, tok))
+            out.extend(lines[i:a1])
+            out.append('%s%s = %s;' % (ind1, tok, rhs1))
+            out.extend(lines[a1 + 1:tc + 3])
+            out.extend(lines[tc + 3:a2])
+            out.append('%s%s = %s;' % (ind2, tok, rhs2))
+            out.extend(lines[a2 + 1:ec + 1])
+            i = ec + 1
+        return out
 
     def _ensure_eh_helper_set(self):
         """Prove the program's throw helpers once, from the whole binary.
