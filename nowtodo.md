@@ -103,5 +103,6 @@ m_State/m_StateBlock, 31664 construction, SIMD twins (70050 golden-exact,
 Still open with evidence/designs in docs/todo.md: Navigation merge-side
 facts (read-side phi atoms disproved), per-arm Color (repros: mi
 23917/27827/26794), 22 goldens awaiting gated regen. switch(string)
-phase 1 landed (mi 25293/24765/25577 fold; 24694 gotos decline).
+phase 1 landed (mi 25293/24765/25577/26314 fold; 24694 gotos decline;
+jumped-label + temp-use hardening). final_out/ untouched.
 final_out/ untouched.

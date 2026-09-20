@@ -66,11 +66,10 @@ tests match prior triage).
   smallest complete + 4 twins, 24765, 24694 with loop-continue arms);
   divergent color ternaries in 8 methods (23917 contact red/green
   headline, 27827 3-way, 26794 if/else stores).
-- DEFERRED with designs (not regressed, still open): `switch(string)`
-  restoration (~150-line structural rebuild; hash tests redundant given
-  confirms but callee purity via IL candidates is load-bearing);
-  per-arm Color (bytes lost at text level; load can't know Color vs
-  Vector2 — needs consumer-type proof); Navigation merge-side design.
+- DEFERRED with designs (not regressed, still open): per-arm Color
+  (bytes lost at text level; load can't know Color vs Vector2 — needs
+  consumer-type proof); Navigation merge-side design.
+  (`switch(string)` landed in 3d below.)
 - Leftovers: 22 triaged goldens (regen only after gates).
 
 ## Current work: recovery follow-up round 3b (2026-09-20, unpromoted)
