@@ -93,3 +93,14 @@ $env:IL2CSHARP_BINARY = (Resolve-Path 'testgame/GameAssembly.dll').Path
 python -m pytest -q
 python tools/inspect_methods.py --metadata $env:IL2CSHARP_METADATA --binary $env:IL2CSHARP_BINARY --va 0x180565720 0x1805656D0 0x180565750 0x18069DC90 0x1806AF040 0x180515DA0 0x180606AF0 --save work/mic_review_resume.json
 ```
+
+## Addendum 2026-09-20 (round 3c, unpromoted)
+
+Items 6/7/8 mostly landed since the stop record: generic GetComponent,
+list/nativelist Count, mic enum/bool/scope, event +=/-=, 32837 zeros,
+m_State/m_StateBlock, 31664 construction, SIMD twins (70050 golden-exact,
+107123 /* nothing */). Full suite 822 passed / 22 failed (all triaged).
+Still open with evidence/designs in docs/todo.md: Navigation merge-side
+facts (read-side phi atoms disproved), switch(string) restoration
+(examples: mi 25293/24765/24694), per-arm Color (repros: mi 23917/27827
+/26794), 22 goldens awaiting gated regen. final_out/ untouched.

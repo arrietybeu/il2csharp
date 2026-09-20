@@ -374,6 +374,12 @@ class _ValuesMixin:
         return td_idx is not None and self.meta.typedefs[td_idx].is_valuetype
 
     def _field_expr(self, base: Expr, disp: int, size: int) -> Expr:
+        if size == 8 and getattr(self, '_xor_twin_loads', None) \
+                and getattr(self, '_cur_ip', None) in self._xor_twin_loads:
+            # proved packed-xor twin lane (double3 negate): the
+            # packed twins keep member sugar, the scalar lane stays
+            # a raw deref -- refining it also mistypes its store.
+            return Expr('*(%s %s)' % (base.text, disp_add(disp)), None, 'ptr')
         if base.kind == 'ptr' and (base.text or '').startswith('&'):
             # &s_N addressing a typed valuetype slot (the sret buffer
             # echoed in RAX after a struct-return call): member loads

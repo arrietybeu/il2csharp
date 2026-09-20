@@ -266,6 +266,11 @@ class _AggregatesMixin:
 
     def _aggregate_load(self, ins):
         width = MemorySizeExt.size(ins.memory_size)
+        if width == 8 and getattr(self, '_xor_twin_loads', None) \
+                and ins.ip in self._xor_twin_loads:
+            # proved packed-xor twin lane: decline the container
+            # fragment so the load falls through to the raw deref.
+            return None
         address = self._stack_address(ins)
         if address is not None:
             frag = self._stack_piece(address, width)

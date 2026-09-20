@@ -65,6 +65,98 @@ class _BuildMixin:
         return visited != len(blocks)
 
     @staticmethod
+    def _xor_twin_load_sites(insns, bin):
+        """Scalar movsd loads feeding a packed-xor twin stay raw.
+
+        MSVC negates a double3 column as a packed pair (16B load,
+        copy, broadcast, two xorps vs the same -0.0 mask, recombine,
+        one 16B store) plus a scalar third lane (8B load, xorps vs
+        the same mask, 8B store). The packed lanes keep member sugar
+        (`val.cN`) while the scalar lane must stay a raw byte deref:
+        refining it to `val.cN.z` also mistypes the store `double*`.
+        Only scalar 8B loads with a same-mask, same-base packed twin
+        at disp - 16 are marked; every unproven shape keeps today's
+        spelling, which is at worst cosmetic -- raw is always honest.
+        """
+        out = set()
+        if not insns or bin is None:
+            return out
+        _NEG0 = b'\x00\x00\x00\x00\x00\x00\x00\x80'
+        _XOR = (Mnemonic.XORPS, Mnemonic.XORPD)
+        _COPY = (Mnemonic.MOVAPS, Mnemonic.MOVAPD)
+        _W16 = (Mnemonic.MOVUPS, Mnemonic.MOVUPD,
+                Mnemonic.MOVAPS, Mnemonic.MOVAPD)
+        _W8 = (Mnemonic.MOVSD, Mnemonic.MOVQ)
+        _W4 = (Mnemonic.MOVSS, Mnemonic.MOVD)
+        _NONW = (Mnemonic.CMP, Mnemonic.TEST, Mnemonic.COMISS,
+                 Mnemonic.UCOMISS, Mnemonic.COMISD, Mnemonic.UCOMISD)
+
+        def writes(ins, reg):
+            return (ins.op0_kind == OpKind.REGISTER
+                    and reg_name(ins.op0_register) == reg
+                    and ins.mnemonic not in _NONW)
+
+        def trace(reg, before):
+            cur = reg
+            for pos in range(before - 1, max(-1, before - 201), -1):
+                ins = insns[pos]
+                if ins.mnemonic == Mnemonic.CALL:
+                    return None
+                if not writes(ins, cur):
+                    continue
+                mn = ins.mnemonic
+                if mn in _COPY and ins.op1_kind == OpKind.REGISTER:
+                    cur = reg_name(ins.op1_register)
+                    continue
+                if mn in (Mnemonic.UNPCKHPD, Mnemonic.UNPCKLPD) \
+                        and ins.op1_kind == OpKind.REGISTER \
+                        and reg_name(ins.op1_register) == cur:
+                    continue
+                if mn in _W16 + _W8 + _W4 \
+                        and ins.op1_kind == OpKind.MEMORY:
+                    if ins.memory_base == IReg.RIP:
+                        return ('const', ins.ip_rel_memory_address)
+                    if ins.memory_index != IReg.NONE \
+                            or ins.memory_base == IReg.NONE:
+                        return None
+                    w = 16 if mn in _W16 else (8 if mn in _W8 else 4)
+                    return ('mem', reg_name(ins.memory_base),
+                            ins.memory_displacement, w, ins.ip)
+                return None
+            return None
+
+        lanes = []
+        for pos, ins in enumerate(insns):
+            if ins.mnemonic not in _XOR \
+                    or ins.op0_kind != OpKind.REGISTER \
+                    or ins.op1_kind != OpKind.REGISTER:
+                continue
+            dst = reg_name(ins.op0_register)
+            src = reg_name(ins.op1_register)
+            if dst == src:
+                continue
+            for lane_reg, mask_reg in ((dst, src), (src, dst)):
+                lane = trace(lane_reg, pos)
+                mask = trace(mask_reg, pos)
+                if lane is None or mask is None or mask[0] != 'const':
+                    continue
+                try:
+                    const = bytes(bin.read(mask[1], 8))
+                except Exception:
+                    continue
+                if const != _NEG0 or lane[0] != 'mem':
+                    continue
+                lanes.append((mask[1], lane[1], lane[2], lane[3], lane[4]))
+        packed = set()
+        for (maddr, base, disp, w, _lip) in lanes:
+            if w == 16:
+                packed.add((maddr, base, disp))
+        for (maddr, base, disp, w, lip) in lanes:
+            if w == 8 and (maddr, base, disp - 16) in packed:
+                out.add(lip)
+        return out
+
+    @staticmethod
     def _sqrt_low_lane_sites(insns, helper):
         """Prove packed instructions whose high lane cannot be observable.
 
@@ -199,6 +291,7 @@ class _BuildMixin:
             return ['/* no code */']
         L._sqrt_low_sites = self._sqrt_low_lane_sites(
             insns, getattr(L, 'rt_sqrt', None))
+        L._xor_twin_loads = self._xor_twin_load_sites(insns, getattr(L, 'bin', None))
         L._memory_rhs_loop_guard = self._memory_rhs_needs_loop_guard(insns)
         self.skip_ips = skip
         self.entry_ip = insns[0].ip

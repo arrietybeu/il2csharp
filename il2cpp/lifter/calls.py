@@ -79,6 +79,47 @@ class _CallsMixin:
         cache[va] = res
         return res
 
+    def _dead_shared_forwarder(self, target, ins):
+        """True when a pending bare-statement must be declined: the caller
+        address has several metadata owners (a shared body), the call
+        target has exactly one, and the instruction after the call is
+        an abort (int3/ud2) -- the result is dead by construction and
+        naming one sibling for all arms repeats the batch-11
+        confidently-wrong-name fault. Every gate declines to the old
+        flush behavior."""
+        if target is None:
+            return False
+        il = getattr(self, 'il', None)
+        m = getattr(self, '_current_method', None)
+        if il is None or m is None:
+            return False
+        try:
+            cands = getattr(il, 'addr_candidates', None) or {}
+            own = cands.get(m.addr)
+            if not own or len(own) < 2:
+                return False
+            tgt = cands.get(target)
+            if tgt is None or len(tgt) != 1:
+                return False
+        except Exception:
+            return False
+        try:
+            b = getattr(self, 'bin', None)
+            nx_ip = ins.next_ip
+            if b is None or not b.is_exec_va(nx_ip):
+                return False
+            code = b.read(nx_ip, 16)
+            if not code:
+                return False
+            dec = Decoder(64, code, DecoderOptions.NONE)
+            dec.ip = nx_ip
+            nx = next(iter(dec))
+            if nx.mnemonic not in (Mnemonic.INT3, Mnemonic.UD2):
+                return False
+        except Exception:
+            return False
+        return True
+
     # fix 93: the noreturn raisers the discovery pass names from the
     # exception-class string their wrapper chain lea's
     # (`raise_IndexOutOfRangeException`,
@@ -1925,6 +1966,8 @@ class _CallsMixin:
             if not getattr(self, 'dry', False) and mi is not None and not \
                     self.meta.methods[mi].name.rpartition('.')[2].startswith('get_') \
                     and len(call) >= _USE_BIND_MIN:
+                if self._dead_shared_forwarder(target, ins):
+                    return
                 pc = getattr(self, '_pending_calls', None)
                 if pc is None:
                     pc = self._pending_calls = []

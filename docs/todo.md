@@ -1,5 +1,45 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: recovery follow-up round 3c (2026-09-20, unpromoted)
+
+Same rules: `final_out/` untouched, no snapshot regen, no promotion.
+Portable 718 green; full suite 822 passed / 22 failed (70050 + 107123
+restored to golden, no new breaks; remaining 18 snapshots + 4 review
+tests match prior triage).
+
+- SIMD twin-consistent, both shapes (design: twin-unanimity with
+  raw/honest fallback; looseness is cosmetic-only, never wrongness).
+  - Shape B (107123 vorn_u32 -> `/* nothing */`): `_dead_shared_forwarder`
+    in `calls.py` declines the pending bare-statement when the caller VA
+    is multi-candidate, the target is single-candidate, and the next
+    insn is int3/ud2. Single-caller `RemoveAll` still flushes.
+  - Shape A (70050 double3x3 negate, byte-exact golden): `_xor_twin_load_sites`
+    scan in `build.py` (sqrt-site precedent) proves same -0.0 const +
+    same base reg + packed-16/scalar-8 adjacency; scalar loads decline
+    member sugar in `_aggregate_load` + `_field_expr`, the `_R4_TY`
+    width rule restores `byte*`, textpass renders the golden.
+- Event `+=`/`-=` folds mirroring `set_` (void-gated, 3 unit tests);
+  native-list `.Count` for field receivers; exact `<T>` narrowed to
+  method-level args after a live misfire; assignment-ternary bool
+  materialization with all-uses retype.
+- DISPROVED with evidence (no source change): Navigation phi-atom
+  read-side acceptance. The phi atoms are Navigation-typed chunks
+  (v165/v166), so the bool Wrap field can take neither (compile break
+  under loose naming; `v166.m_Mode` misread via struct-chain). Needs
+  merge-side unanimous-subrange preservation (the stuck design).
+- Censuses (read-only, JSON under `%TEMP%/opencode`): hash-switch
+  family is real — ComputeStringHash + range splits + string confirms,
+  single-write pure temps (25293 FPSController.ConvertStringToKeyCode
+  smallest complete + 4 twins, 24765, 24694 with loop-continue arms);
+  divergent color ternaries in 8 methods (23917 contact red/green
+  headline, 27827 3-way, 26794 if/else stores).
+- DEFERRED with designs (not regressed, still open): `switch(string)`
+  restoration (~150-line structural rebuild; hash tests redundant given
+  confirms but callee purity via IL candidates is load-bearing);
+  per-arm Color (bytes lost at text level; load can't know Color vs
+  Vector2 — needs consumer-type proof); Navigation merge-side design.
+- Leftovers: 22 triaged goldens (regen only after gates).
+
 ## Current work: recovery follow-up round 3b (2026-09-20, unpromoted)
 
 Subagent-assisted fixes + reverts. Same rules: `final_out/` untouched, no
