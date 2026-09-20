@@ -18,6 +18,7 @@ class _AnalyzeMixin:
         L._blocks = blocks
         m_returns = self._returns_value(m)
         self.phi_pre = {}
+        L._phi_bytes = {}
 
         def fresh_regs(counting):
             # pass 1 never counts uses (dry), so it runs on a plain dict:
@@ -553,6 +554,7 @@ class _AnalyzeMixin:
         # ---- SSA destruction: materialize each phi as a copy on its in-edges
         self.phi_names = set(phi.values())
         self._build_phi_copies(blocks, phi, FLAGS)
+        L._phi_bytes = self.phi_bytes
         L._flush_pending_calls(getattr(self, 'phi_copies', None))
 
     # ------------------------------------------------------------------
@@ -563,6 +565,7 @@ class _AnalyzeMixin:
         Emit `phi = <value at end of P>;` on every edge P->B so the variable has
         a visible definition instead of appearing out of nowhere."""
         perblk: Dict[int, Dict[str, Dict[int, str]]] = {}
+        self.phi_bytes = {}
         L = self.L
         L._cur_ip = -1
         for (bid, k), name in phi.items():
@@ -592,6 +595,13 @@ class _AnalyzeMixin:
                 finally:
                     L.out = save_out
                 vals[p] = v.text
+                raw = getattr(v, '_bytes', None)
+                if raw is None:
+                    sl = getattr(v, '_slice', None)
+                    if sl is not None and len(sl) == 3 and sl[1] == 0 and sl[2] == 16:
+                        raw = getattr(sl[0], '_bytes', None)
+                if isinstance(raw, (bytes, bytearray)) and len(raw) == 16:
+                    self.phi_bytes.setdefault((bid, name), {})[p] = bytes(raw)
             if vals:
                 perblk.setdefault(bid, {})[name] = vals
         alias = self._coalesce_phis(perblk)

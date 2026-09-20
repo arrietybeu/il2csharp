@@ -221,6 +221,38 @@ class _AggregatesMixin:
             if value is not None and not value.text and getattr(value, '_parts', None):
                 value = self._piece_value(value, 0, width, ft)
             if value is None or not value.text:
+                # Phi-merge fallback: both arms stored 16B RGBA here but the
+                # merged phi text lost provenance. Unanimous 16B across every
+                # recorded pred may stand in; any disagreement declines.
+                _ct = None
+                if size == 16:
+                    try:
+                        _tn = self.il.type_name(ty)
+                    except Exception:
+                        _tn = None
+                    if _tn and (_tn == 'UnityEngine.Color'
+                               or (td is not None and self._is_rgba_struct(td))):
+                        _names = set()
+                        _frag = self._stack_piece(address, size)
+                        if _frag is not None:
+                            _sl = getattr(_frag, '_slice', None)
+                            if _sl is not None and len(_sl) == 3 \
+                                    and getattr(_sl[0], 'text', None):
+                                _names.add(_sl[0].text)
+                            for _, _po, _, _ in getattr(_frag, '_parts', None) or []:
+                                if getattr(_po, 'text', None):
+                                    _names.add(_po.text)
+                        for _key, _per in (getattr(self, '_phi_bytes', None) or {}).items():
+                            if _key[1] not in _names:
+                                continue
+                            _vals = list(_per.values())
+                            if _vals and all(isinstance(_v, (bytes, bytearray)) and len(_v) == 16
+                                             for _v in _vals) \
+                                    and all(bytes(_v) == bytes(_vals[0]) for _v in _vals[1:]):
+                                _ct = _color_text(bytes(_vals[0]), _tn)
+                                break
+                if _ct is not None:
+                    return _ct
                 return None
             fields.append(name + ' = ' + value.text)
         return ('new ' + self.il.type_name(ty) + ' { ' + ', '.join(fields) + ' }') if fields else None

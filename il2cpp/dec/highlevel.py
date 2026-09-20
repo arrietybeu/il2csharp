@@ -745,7 +745,7 @@ class _HighLevelMixin:
         Anything else -- including untyped receivers -- keeps raw text."""
         def rep(m):
             recv = m.group(1) or m.group(2)
-            ty = self._var_types.get(recv)
+            ty = self._native_count_recv_ty(recv)
             if ty is not None:
                 try:
                     tn = self.L.il.type_name(ty)
@@ -755,6 +755,23 @@ class _HighLevelMixin:
                     return '%s.Count' % recv
             return m.group(0)
         return self._NATIVELEN_RX.sub(rep, text)
+
+    def _native_count_recv_ty(self, recv):
+        ty = self._var_types.get(recv)
+        if ty is not None:
+            return ty
+        try:
+            base, _, field = recv.partition('.')
+            if base != 'this' or not field or '.' in field:
+                return None
+            td = getattr(self.L, '_current_td', None)
+            chain = self.L.il.instance_field_chain(td.index)
+            for _, (name, ti) in (chain or {}).items():
+                if name == field:
+                    return self.L.il.types[ti]
+        except Exception:
+            return None
+        return None
 
     def _for_sugar(self, lines: List[str]) -> List[str]:
         """while + counter phi -> for. The increment is the phi copy on the back
@@ -802,6 +819,8 @@ class _HighLevelMixin:
             t = st.strip()
             if t.startswith('if (') or t.startswith('while ('):
                 lines[i] = self._native_count_sugar(self._len_sugar(st))
+            elif '+ 0x28' in t:
+                lines[i] = self._native_count_sugar(st)
         return lines
 
 

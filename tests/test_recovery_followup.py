@@ -46,6 +46,20 @@ def execute(lift, hex_bytes):
         lift._insn(ins, insns, index, None, insns[-1].next_ip)
 
 
+def test_native_count_sugar_fires_for_field_receiver():
+    from types import SimpleNamespace as NS
+    from il2cpp import Decompiler
+    OBI = (9, 0)
+    dec = Decompiler.__new__(Decompiler)
+    dec._var_types = {}
+    dec.L = NS(il=NS(type_name=lambda ty: 'Obi.ObiNativeContactList',
+                     instance_field_chain=lambda td: {0x40: ('frame', 5)},
+                     types=[None] * 5 + [OBI]),
+               _current_td=NS(index=7))
+    assert dec._native_count_sugar('n < ((byte*)this.frame + 0x28)[0]') == \
+        'n < this.frame.Count'
+
+
 def test_native_count_sugar_fires_for_native_list():
     from types import SimpleNamespace as NS
     from il2cpp import Decompiler
@@ -632,3 +646,36 @@ def test_phi_decl_hoist_across_if_else():
     # an earlier assignment of the same temp declines (scope unproven).
     lines2 = ["flag6 = Foo();"] + lines
     assert dec._phi_decl_hoist(list(lines2)) == lines2
+
+def phi_color_lifter():
+    chain = {0x10: ('r', 1), 0x14: ('g', 1), 0x18: ('b', 1), 0x1C: ('a', 1)}
+    il = NS(
+        types=[INT, F32, V3],
+        _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+        _sf_field_size=lambda ty, _: {F32: 4, V3: 16}.get(ty),
+        _closed_type_key=lambda t: t,
+        instance_field_chain=lambda td: chain,
+        type_from_ptr=lambda ptr: None,
+        type_name=lambda ty: 'UnityEngine.Color',
+    )
+    lift = lifter(il=il)
+    lift.meta = NS(typedefs=[NS(is_valuetype=True, name='Color')])
+    lift._phi_bytes = {}
+    return lift
+
+
+def test_phi_unanimous_bytes_assemble_color():
+    lift = phi_color_lifter()
+    raw = struct.pack('<4f', 1.0, 0.0, 0.0, 1.0)
+    lift._stack_store(0x20, 16, Expr('v999', None, 'float'))
+    lift._phi_bytes = {(7, 'v999'): {3: raw, 5: raw}}
+    assert lift._stack_struct(0x20, V3) == 'UnityEngine.Color.red'
+
+
+def test_phi_disagreeing_bytes_decline():
+    lift = phi_color_lifter()
+    red = struct.pack('<4f', 1.0, 0.0, 0.0, 1.0)
+    green = struct.pack('<4f', 0.0, 1.0, 0.0, 1.0)
+    lift._stack_store(0x20, 16, Expr('v999', None, 'float'))
+    lift._phi_bytes = {(7, 'v999'): {3: red, 5: green}}
+    assert lift._stack_struct(0x20, V3) is None

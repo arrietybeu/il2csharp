@@ -1,5 +1,50 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: recovery follow-up round 3b (2026-09-20, unpromoted)
+
+Subagent-assisted fixes + reverts. Same rules: `final_out/` untouched, no
+snapshot regen, no promotion.
+
+- Exact generic `<T>` call tokens (method-level args only; type-level
+  declined after a misfire caught by golden 21027).
+- COUNT macro simplified to two shapes; native-list field receivers.
+- Assignment-ternary `? 1:0` materialization with all-uses-bool retype;
+  phi-decl hoist (mic block fully bool-typed; Update verified).
+- Ambiguous-shape slot kill (32837 zeros gone); name-shadow renames.
+- Reverted with evidence: full SIMD tracking (stash-proven 0 wins, broke
+  twins/sqrt in 3 goldens), partial structs (undeclared slots),
+  identity/single-origin folds.
+- Gates: portable green; game goldens hold prior fixes (31361/2, 45016,
+  21027, review83 typed-shared, review81).
+- Leftovers: Navigation path-sensitive facts, color ternary arms, full
+  SIMD redesign (twin-consistent), 24 triaged goldens (regen vs genuine:
+  32837-shape, 104428-tail, 32832/11974 unclear).
+
+## Current work: recovery follow-up round 3 (2026-09-20, unpromoted)
+
+Subagent-assisted round (4 analyses + 2 implementations, all gated).
+Same rules: `final_out/` untouched, no snapshot regen, no promotion.
+
+- Exact generic `<T>` call tokens from proved slot identity (method-level
+  type args only; generic-type case declined after a misfire).
+- Byref params kill slot caches (80548 head back); ambiguous-shape calls
+  union-kill arg0 slots (32837 stale zeros gone); `.ctor`-on-stack-buffer
+  records construction (31664 whole).
+- VT-echo/exact-first guards (m_State/m_StateBlock); fragment type
+  preservation (104428 call type); static RGBA bytes to Color (generalized
+  structs, phi-bytes infra that honestly declines divergent arms).
+- Ternary bool reconciliation, assignment `? 1:0` materialization with
+  all-uses-bool retype, phi-decl hoist (mic block fully bool-typed);
+  native-list `+0x28` Count sugar incl. field receivers.
+- Reverted with evidence: full SIMD tracking (0 wins, broke twins/sqrt in
+  3 goldens — stash-proven), partial structs (undeclared slots),
+  identity/single-origin folds.
+- Gates: portable 718 green (45 followup tests); full suite 816 passed / 24 failed, every failure triaged
+  (improvements-awaiting-regen vs genuine: 32837-shape, 104428-tail,
+  32832/11974 unclear, 83s neutral/brittle).
+- Leftovers: Navigation path-sensitive facts, color ternary arms, full
+  SIMD redesign (twin-consistent), per-golden regen only after gates.
+
 ## Current work: recovery follow-up round 2 (2026-09-20, unpromoted)
 
 Continues the prior session (committed 5b13c9d). Same rules: `final_out/`
