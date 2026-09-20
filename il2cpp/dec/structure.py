@@ -153,6 +153,7 @@ class _StructureMixin:
         # the switch-synthesis input; nothing after this point
         # restructures them
         raw = self._switch_synth(raw)
+        raw = self._hash_string_switch(raw)
         # fix 55: LAST -- `_drop_dead_locals` (flow-insensitive) and
         # `_copy_prop`'s sweep (blocked by any later goto) both run
         # before the late `_hoist_shared_tails` mints more dead

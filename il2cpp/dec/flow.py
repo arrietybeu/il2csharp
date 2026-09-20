@@ -398,6 +398,458 @@ class _FlowMixin:
             i = nxt
         return out
 
+    _HASH_DEF_RX = re.compile(r'^uint (\w+) = (?:\(uint\))?(.+);$')
+    _HASH_CALL_RX = re.compile(r'^(.+)\(([^()]*)\)$')
+    _HASH_SUB_RX = re.compile(r'^[A-Za-z_]\w*$')
+    _HASH_LIT_RX = re.compile(r'^"((?:\\.|[^"\\])*)"$')
+    _HASH_ARG_RX = re.compile(r'^(\w+)\s*,\s*(.+?)\s*$')
+    _HASH_EQUALS_RX = re.compile(r'^(?:[\w.]*\.)?Equals$')
+    _HASH_OPEQ_RX = re.compile(r'^(?:[\w.]*\.)?op_Equality$')
+    _HASH_NAME_RX = re.compile(r'^(?:[\w.]*\.)?ComputeStringHash$')
+    _HASH_SUBVA_RX = re.compile(r'^sub_([0-9a-f]+)')
+    _HASH_IF_RX = re.compile(r'^if \((\w+)\s*(<=|<|==|!=|>=|>)\s*(\d+)\s*\)$')
+    _HASH_DECL_RX = re.compile(r'^(?:object|string) (\w+) = (.*?);$')
+    _HASH_SWITCH_RX = re.compile(r'^\s*switch\b')
+
+    @staticmethod
+    def _hash_fnv1a(s):
+        h = 2166136261
+        b = s.encode('utf-16-le')
+        for i in range(0, len(b), 2):
+            h = ((h ^ (b[i] | (b[i + 1] << 8))) * 16777619) & 0xFFFFFFFF
+        return h
+
+    @staticmethod
+    def _hash_unescape(t):
+        out = []
+        i = 0
+        simple = {'n': '\n', 'r': '\r', 't': '\t', '0': '\0',
+                  'a': '\a', 'b': '\b', 'f': '\f', 'v': '\v'}
+        while i < len(t):
+            c = t[i]
+            if c != '\\':
+                out.append(c)
+                i += 1
+                continue
+            if i + 1 >= len(t):
+                return None
+            e = t[i + 1]
+            if e in ('\\', '"'):
+                out.append(e)
+                i += 2
+            elif e in simple:
+                out.append(simple[e])
+                i += 2
+            elif e == 'u' and i + 5 < len(t):
+                try:
+                    out.append(chr(int(t[i + 2:i + 6], 16)))
+                except ValueError:
+                    return None
+                i += 6
+            else:
+                return None
+        return ''.join(out)
+
+    @staticmethod
+    def _hash_escape(s):
+        out = []
+        for c in s:
+            o = ord(c)
+            if c == '\\':
+                out.append('\\\\')
+            elif c == '"':
+                out.append('\\"')
+            elif c == '\n':
+                out.append('\\n')
+            elif c == '\r':
+                out.append('\\r')
+            elif c == '\t':
+                out.append('\\t')
+            elif 32 <= o < 127:
+                out.append(c)
+            else:
+                out.append('\\u%04x' % o)
+        return ''.join(out)
+
+    def _hash_callee_names(self, callee):
+        """Method names for a call text, or None when unresolvable."""
+        m = self._HASH_SUBVA_RX.match(callee)
+        if m:
+            try:
+                cands = (getattr(self.L.il, 'addr_candidates', None) or {}).get(int(m.group(1), 16))
+                if not cands:
+                    return None
+                names = []
+                for kind, idx in cands:
+                    if kind != 'method':
+                        return None
+                    names.append(self.L.meta.methods[idx].name)
+                return names
+            except Exception:
+                return None
+        return [callee]
+
+    def _hash_is_hashcall(self, callee):
+        if self._HASH_NAME_RX.match(callee):
+            return True
+        if not self._HASH_SUBVA_RX.match(callee):
+            return False
+        names = self._hash_callee_names(callee)
+        return names is not None and len(names) > 0 \
+            and all(n == 'ComputeStringHash' for n in names)
+
+    def _hash_is_equalscall(self, callee):
+        if self._HASH_EQUALS_RX.match(callee) or self._HASH_OPEQ_RX.match(callee):
+            return True
+        if not self._HASH_SUBVA_RX.match(callee):
+            return False
+        names = self._hash_callee_names(callee)
+        if names is None or not names:
+            return False
+        if not all(n in ('Equals', 'op_Equality') for n in names):
+            return False
+        try:
+            tds = set()
+            for kind, idx in (getattr(self.L.il, 'addr_candidates', None) or {}).get(
+                    int(self._HASH_SUBVA_RX.match(callee).group(1), 16)) or []:
+                if kind != 'method':
+                    return False
+                tds.add(self.L.meta.methods[idx].declaring)
+            if len(tds) != 1:
+                return False
+            td = self.L.meta.typedefs[next(iter(tds))]
+            return td.name == 'String'
+        except Exception:
+            return False
+
+    def _hash_confirm(self, lines, lo, hi, H, S, eq):
+        """[(literal, body_lo, body_hi)] for one dispatch arm, [] for
+        an empty arm, 'nested' for a lone nested H-test, else None."""
+        idx = [i for i in range(lo, hi) if lines[i].strip()]
+        if not idx:
+            return []
+        n = len(lines)
+        fpos = None
+        felse = None
+        for p in idx:
+            t = lines[p].strip()
+            if not (t.startswith('if (') and t.endswith(')')):
+                continue
+            hm = self._HASH_IF_RX.match(t)
+            if hm and hm.group(1) == H:
+                if p == idx[0]:
+                    return 'nested'
+                return None
+            q = p + 1
+            while q < n and not lines[q].strip():
+                q += 1
+            if q >= n or lines[q].strip() != '{':
+                continue
+            bc = _match_brace(lines, q)
+            if bc < 0:
+                continue
+            e2 = bc + 1
+            while e2 < n and not lines[e2].strip():
+                e2 += 1
+            if e2 < n and lines[e2].strip() == 'else':
+                k2 = e2 + 1
+                while k2 < n and not lines[k2].strip():
+                    k2 += 1
+                if k2 >= n or lines[k2].strip() != '{':
+                    continue
+                ec2 = _match_brace(lines, k2)
+                if ec2 < 0:
+                    continue
+                if ec2 == idx[-1]:
+                    fpos = p
+                    felse = (k2 + 1, ec2)
+                    break
+            elif bc == idx[-1]:
+                fpos = p
+                break
+        if fpos is None:
+            return None
+        defined = {}
+        for j in idx:
+            if j >= fpos:
+                break
+            dm = self._HASH_DECL_RX.match(lines[j].strip())
+            if not dm:
+                return None
+            defined[dm.group(1)] = dm.group(2).strip()
+        first = lines[fpos].strip()
+        cond = first[4:-1].strip()
+        q0 = fpos + 1
+        while q0 < n and not lines[q0].strip():
+            q0 += 1
+        fb = _match_brace(lines, q0)
+        neg = False
+        if cond.startswith('!'):
+            rest = cond[1:].strip()
+            if len(rest) >= 2 and rest.startswith('(') and rest.endswith(')'):
+                depth = 0
+                ok = True
+                for ch in rest[1:-1]:
+                    if ch == '(':
+                        depth += 1
+                    elif ch == ')':
+                        depth -= 1
+                        if depth < 0:
+                            ok = False
+                            break
+                if not ok or depth != 0:
+                    return None
+                rest = rest[1:-1].strip()
+            cond = rest
+            neg = True
+        if neg:
+            if felse is None:
+                return None
+            if any(lines[i].strip() for i in range(q0 + 1, fb)):
+                return None
+            body_span = felse
+        else:
+            if felse is not None:
+                return None
+            body_span = (q0 + 1, fb)
+        lits = set()
+        parts = cond.split('==')
+        if len(parts) == 2 and parts[0].strip() == S and fpos == idx[0]:
+            lm = self._HASH_LIT_RX.match(parts[1].strip())
+            if not lm:
+                return None
+            lit = self._hash_unescape(lm.group(1))
+            if lit is None:
+                return None
+            lits.add(lit)
+        else:
+            callrhs = None
+            fm = re.match(r'^(?:\(bool\))?(\w+)$', cond)
+            if fm and self._HASH_SUB_RX.match(fm.group(1)) and fm.group(1) != S:
+                v = fm.group(1)
+                if v not in defined:
+                    return None
+                callrhs = defined[v]
+            else:
+                dm2 = re.match(r'^(?:\(bool\))?(.+)$', cond)
+                inner = dm2.group(1).strip() if dm2 else None
+                cm0 = self._HASH_CALL_RX.match(inner) if inner else None
+                if not cm0 or not self._hash_is_equalscall(cm0.group(1)):
+                    return None
+                callrhs = inner
+            cm = self._HASH_CALL_RX.match(callrhs)
+            if not cm or not self._hash_is_equalscall(cm.group(1)):
+                return None
+            am = self._HASH_ARG_RX.match(cm.group(2))
+            if not am:
+                return None
+            a1, a2 = am.group(1), am.group(2)
+            other = a2 if a1 == S else (a1 if a2 == S else None)
+            if other is None:
+                return None
+            lm = self._HASH_LIT_RX.match(other)
+            if lm:
+                lit = self._hash_unescape(lm.group(1))
+                if lit is None:
+                    return None
+                lits.add(lit)
+            elif other in defined:
+                lm = self._HASH_LIT_RX.match(defined[other])
+                if not lm:
+                    return None
+                lit = self._hash_unescape(lm.group(1))
+                if lit is None:
+                    return None
+                lits.add(lit)
+            else:
+                return None
+            for t, rhs in defined.items():
+                lm = self._HASH_LIT_RX.match(rhs)
+                if lm:
+                    lit2 = self._hash_unescape(lm.group(1))
+                    if lit2 is None or lit2 not in lits:
+                        return None
+                    continue
+                cm2 = self._HASH_CALL_RX.match(rhs)
+                if not cm2 or not self._hash_is_equalscall(cm2.group(1)):
+                    return None
+        if eq is None or len(lits) != 1:
+            return None
+        lit = next(iter(lits))
+        if self._hash_fnv1a(lit) != eq:
+            return None
+        blo, bhi = body_span
+        body_txt = '\n'.join(lines[blo:bhi])
+        if self._SWITCH_BREAK_RX.search(body_txt) \
+                or self._SWITCH_GOTO_RX.search(body_txt) \
+                or self._SWITCH_LBL_RX.search(body_txt) \
+                or self._HASH_SWITCH_RX.search(body_txt):
+            return None
+        if re.search(r'(?<![\w.])%s(?![\w])' % re.escape(H), body_txt):
+            return None
+        if re.search(r'(?<![\w.])%s(?![\w])' % re.escape(S), body_txt):
+            return None
+        if re.search(r'(?<![\w.])%s\s*=(?![=>])' % re.escape(S), '\n'.join(lines[lo:hi])):
+            return None
+        for t in defined:
+            if re.search(r'(?<![\w.])%s(?![\w])' % re.escape(t), body_txt):
+                return None
+        return [(lit, blo, bhi)]
+
+    def _hash_walk(self, lines, if_idx, H, S):
+        """(cases, end_idx) for an H-test if-tree, or (None, None)."""
+        n = len(lines)
+        while if_idx < n and not lines[if_idx].strip():
+            if_idx += 1
+        if if_idx >= n:
+            return None, None
+        s = lines[if_idx].strip()
+        if s.startswith('else '):
+            s = s[5:].strip()
+        hm = self._HASH_IF_RX.match(s)
+        if not hm or hm.group(1) != H:
+            return None, None
+        op, const = hm.group(2), int(hm.group(3))
+        b = if_idx + 1
+        while b < n and not lines[b].strip():
+            b += 1
+        if b >= n or lines[b].strip() != '{':
+            return None, None
+        close = _match_brace(lines, b)
+        if close < 0:
+            return None, None
+        cases = []
+        r = self._hash_confirm(lines, b + 1, close, H, S,
+                               const if op == '==' else None)
+        if r == 'nested':
+            r2, e2 = self._hash_walk(lines, b + 1, H, S)
+            if r2 is None:
+                return None, None
+            while e2 < close and not lines[e2].strip():
+                e2 += 1
+            if e2 != close:
+                return None, None
+            cases.extend(r2)
+        elif r is None:
+            if any(lines[i].strip() for i in range(b + 1, close)):
+                return None, None
+            r = []
+        else:
+            cases.extend(r)
+        nxt = close + 1
+        while nxt < n and not lines[nxt].strip():
+            nxt += 1
+        if nxt < n and lines[nxt].strip() == 'else':
+            k = nxt + 1
+            while k < n and not lines[k].strip():
+                k += 1
+            if k >= n or lines[k].strip() != '{':
+                return None, None
+            ec = _match_brace(lines, k)
+            if ec < 0:
+                return None, None
+            r = self._hash_confirm(lines, k + 1, ec, H, S,
+                                   const if op == '!=' else None)
+            if r == 'nested':
+                r2, e2 = self._hash_walk(lines, k + 1, H, S)
+                if r2 is None:
+                    return None, None
+                while e2 < ec and not lines[e2].strip():
+                    e2 += 1
+                if e2 != ec:
+                    return None, None
+                cases.extend(r2)
+            elif r is None:
+                return None, None
+            else:
+                cases.extend(r)
+            return cases, ec + 1
+        if nxt < n and lines[nxt].strip().startswith('else if (') \
+                and lines[nxt].strip().endswith(')'):
+            r2, end2 = self._hash_walk(lines, nxt, H, S)
+            if r2 is None:
+                return None, None
+            cases.extend(r2)
+            return cases, end2
+        return cases, nxt
+
+    def _hash_string_switch(self, lines: List[str]) -> List[str]:
+        """`switch (string)` over a ComputeStringHash dispatch tree.
+
+        Roslyn lowers `switch` on strings to a hash binary-search with
+        a string-equality confirm per arm. The range tests only route;
+        each confirm (`S == "lit"` or `Equals(S, lit)` under a hash
+        equality the FNV-1a value verifies) is the real dispatch, so a
+        tree of them is exactly `switch (S)` with the tail as default.
+        Every leaf proves itself: hash callee unanimously
+        ComputeStringHash, confirm literal's FNV-1a equals the arm's
+        hash constant, pairwise-distinct hashes (a collision would fire
+        the wrong case), Equals callees on String, bodies free of
+        rebindable flow and S/H references, and H dead past the tree.
+        Anything unproven keeps the honest if-tree. Runs after
+        _switch_synth; `_drop_dead_lastdef` below collects the dead
+        literal/equals temps the extraction orphans."""
+        n = len(lines)
+        out: List[str] = []
+        i = 0
+        while i < n:
+            dm = self._HASH_DEF_RX.match(lines[i].strip())
+            if not dm:
+                out.append(lines[i])
+                i += 1
+                continue
+            H, calltext = dm.group(1), dm.group(2)
+            cm = self._HASH_CALL_RX.match(calltext)
+            if not cm or not self._hash_is_hashcall(cm.group(1)):
+                out.append(lines[i])
+                i += 1
+                continue
+            S = cm.group(2).strip()
+            if not self._HASH_SUB_RX.match(S):
+                out.append(lines[i])
+                i += 1
+                continue
+            j = i + 1
+            while j < n and not lines[j].strip():
+                j += 1
+            if j >= n:
+                out.append(lines[i])
+                i += 1
+                continue
+            indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+            cases, end = self._hash_walk(lines, j, H, S)
+            if cases is None or len(cases) < 3:
+                out.append(lines[i])
+                i += 1
+                continue
+            seen = set()
+            ok = True
+            for lit, _blo, _bhi in cases:
+                h = self._hash_fnv1a(lit)
+                if lit in seen or h in [self._hash_fnv1a(x) for x in seen]:
+                    ok = False
+                    break
+                seen.add(lit)
+            if not ok:
+                out.append(lines[i])
+                i += 1
+                continue
+            span = '\n'.join(lines[i + 1:j] + lines[end:])
+            if re.search(r'(?<![\w.])%s(?![\w])' % re.escape(H), span):
+                out.append(lines[i])
+                i += 1
+                continue
+            out.append(indent + 'switch (%s)' % S)
+            out.append(indent + '{')
+            for lit, blo, bhi in cases:
+                out.append(indent + '    case "%s":' % self._hash_escape(lit))
+                out.append(indent + '    {')
+                self._emit_case_body(out, lines, blo, bhi, indent)
+                out.append(indent + '    }')
+            out.append(indent + '}')
+            i = end
+        return out
+
     def _name_interface_dispatch(self, lines: List[str]) -> List[str]:
         """todo lead #3: name an interface-dispatch call il2cpp made
         through its runtime interfaceOffsets search (typeof(IFace) +

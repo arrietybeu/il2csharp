@@ -1,5 +1,27 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: recovery follow-up round 3d (2026-09-20, unpromoted)
+
+Same rules: `final_out/` untouched, no snapshot regen, no promotion.
+Portable 718 green; full suite 822 passed / 22 failed (identical triaged
+set as 3c — the pass moved none of them).
+
+- `switch(string)` phase 1 (`_hash_string_switch` in `flow.py`, after
+  `_switch_synth`): Roslyn string-switch is a ComputeStringHash
+  binary-search + per-arm string-equality confirm; ranges only route,
+  confirms dispatch. FNV-1a/32 over UTF-16 units verified against 20
+  observed constants; every leaf proves itself (unanimous
+  ComputeStringHash callee via IL candidates, literal FNV == arm hash
+  const, pairwise-distinct hashes, String Equals/op_Equality callees,
+  no rebindable flow or S/H refs, H dead past tree, >=3 cases).
+  Handles direct `==`, temp-mediated and inline Equals confirms, and
+  negated `if (!V) {} else {}` pass-time shapes; declension for gotos,
+  loop arms, collisions, unverified leaves. Dead literal/equals temps
+  collected downstream. Folds 25293 (8 cases), 24765 (8 cases +
+  breaks), twin 25577; 24694 declines honestly (gotos).
+- Leftovers: per-arm Color (needs consumer-type proof), Navigation
+  merge-side facts, 22 goldens awaiting gated regen.
+
 ## Current work: recovery follow-up round 3c (2026-09-20, unpromoted)
 
 Same rules: `final_out/` untouched, no snapshot regen, no promotion.
