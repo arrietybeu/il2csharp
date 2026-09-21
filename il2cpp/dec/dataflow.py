@@ -54,13 +54,13 @@ class _DataflowMixin:
             for st, (nm, rhs) in zip(lines, cand):
                 if nm is None:
                     live.update(self._TOKRX.findall(st.strip()))
-                elif self._IMPURE.search(rhs):
+                elif self._impure(rhs):
                     live.update(t for t in self._TOKRX.findall(rhs) if t != nm)
             changed = True
             while changed:
                 changed = False
                 for nm, rhs in cand:
-                    if nm is not None and nm in live and not self._IMPURE.search(rhs):
+                    if nm is not None and nm in live and not self._impure(rhs):
                         for tok in self._TOKRX.findall(rhs):
                             if tok != nm and tok not in live:
                                 live.add(tok)
@@ -81,7 +81,7 @@ class _DataflowMixin:
             for i, (nm, rhs) in enumerate(cand):
                 if nm is None or nm in live:
                     continue
-                if not self._IMPURE.search(rhs):
+                if not self._impure(rhs):
                     drop.add(i)
                     continue
                 if remaining[rhs_all[i]] > 1:
@@ -96,6 +96,15 @@ class _DataflowMixin:
     _TDEF_RX = re.compile(r'^(?:var )?(t\d+) = (.*);$')
     _CMT_RX = re.compile(r'/\*.*?\*/')
 
+    def _impure(self, rhs: str) -> bool:
+        """Impurity test blind to interposed block comments: a shared-body
+        call renders `sub_VA/*shared body, N candidates*/(...)`, and the
+        comment between callee and paren defeats the bare _IMPURE shape
+        (108722's orphaned second call dropped as pure). An unresolved
+        or shared call is impure by definition, so strip comments before
+        testing; pure-load carve-outs still apply at the call sites."""
+        return bool(self._IMPURE.search(self._CMT_RX.sub('', rhs)))
+
     def _drop_dead_temps(self, lines: List[str]) -> List[str]:
         """Drop `var tN = ...;` materializations nothing reads. Kill-on-write
         binds a stale expression defensively at every store; when the register
@@ -108,7 +117,7 @@ class _DataflowMixin:
             out = []
             for st in lines:
                 m = self._TDEF_RX.match(st.strip())
-                if m and counts.get(m.group(1), 0) <= 1                         and not (self._IMPURE.search(m.group(2))
+                if m and counts.get(m.group(1), 0) <= 1                         and not (self._impure(m.group(2))
                          and not self._PURE_LOAD_RX.match(m.group(2))):
                     continue
                 out.append(st)
@@ -153,7 +162,7 @@ class _DataflowMixin:
             for st in lines:
                 s = st.strip()
                 m = self._LDEF_RX.match(s)
-                if m and not (self._IMPURE.search(m.group(2))
+                if m and not (self._impure(m.group(2))
                               and not self._PURE_LOAD_RX.match(m.group(2))) \
                         and 'goto' not in m.group(2):
                     parsed.append((True, m.group(1), m.group(2)))
@@ -720,7 +729,7 @@ class _DataflowMixin:
                     if m and not in_loop[i] and not goto_after \
                             and reads_after.get(m.group(1), 0) == 0 \
                             and 'goto' not in m.group(2) \
-                            and not (self._IMPURE.search(m.group(2))
+                            and not (self._impure(m.group(2))
                                      and not self._PURE_LOAD_RX.match(m.group(2))):
                         drop[i] = True
                 if not drop[i] and s:

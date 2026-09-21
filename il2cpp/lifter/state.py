@@ -715,6 +715,13 @@ class _StateMixin:
         # (aggregates.py; 18054/34279). Reset per method/pass like
         # _type_hints: slot names repeat across methods.
         self._ctor_slots = set()
+        # hidden-sret buffer homes reuse one temp per address: both
+        # `lea rcx,[rsp+30h]` + call sites fill the SAME native buffer,
+        # so the second result is a reassignment, not a fresh temp
+        # (32174 `primitiveValue1 = ...(1)`). Reassignment is exactly
+        # faithful -- the callee overwrites the buffer. Reset per
+        # method/pass with the rest: addresses repeat across methods.
+        self._sret_home_buf = {}
         self._last_tabread = None
         self.stack_values = {}
         byval_bits = (0x12 << 16)

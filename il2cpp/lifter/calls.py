@@ -1666,8 +1666,15 @@ class _CallsMixin:
             buf = args[0][1:]
             stack_address = getattr(arg_exprs[0], '_stack_offset', None) if arg_exprs else None
             if stack_address is not None and hasattr(self.il, '_sf_field_size'):
-                buf = self.new_var()
-                self._var_types[buf] = rty
+                prev = getattr(self, '_sret_home_buf', {}).get(stack_address)
+                if prev is not None and prev[1] == rty:
+                    buf = prev[0]
+                else:
+                    buf = self.new_var()
+                    self._var_types[buf] = rty
+                    hb = getattr(self, '_sret_home_buf', None)
+                    if hb is not None:
+                        hb[stack_address] = (buf, rty)
             rest = args[1:]
             short2 = None
             if mi is not None and 0 <= mi < len(self.meta.methods):

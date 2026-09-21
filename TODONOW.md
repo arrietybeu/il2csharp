@@ -302,6 +302,40 @@ CRLF/no-BOM asserted; `tests/test_recovery_completion.py` LF, 12 tests):
 
 (End of file - turn 10, 2026-09-21)
 
+## Addendum turn 11: impure-DCE + sret-share fixes, re-promote (2026-09-21)
+
+- 108722 FIXED: `_drop_dead_temps` dropped the orphaned 2nd shared
+  call because the `/*shared body*/` comment between callee and `(`
+  defeats `_IMPURE`. New `_impure` helper (comment-strip before test)
+  at the 6 DCE guard sites in `dec/dataflow.py` (copies/temps/locals/
+  lastdef). Unresolved/shared calls are impure by definition.
+- 32174 FIXED: one native sret buffer shared by both calls, but the
+  lifter minted a fresh temp per call. New `_sret_home_buf` map
+  (state + calls sret fold): same stack home + same rty reuses the
+  buffer temp, so the 2nd result is a reassignment
+  (`primitiveValue1 = ...(1)`). Reassignment is exactly faithful --
+  the callee overwrites the buffer. Residual: 16B-wide consumer
+  stores still read stale slot (obj20 unbound, unpinned, pre-existing
+  class).
+- 32833/32837 regens (effect retention): the same `_impure` fix keeps
+  one real native call each (0x1804FD690 x1, 0x180ECEC60 x1, both
+  disasm-proven executed once) plus the correct live cascade; pins
+  updated (+1/+2 lines).
+- 25687 deferred: 2nd `.point` needs shared-Vector3-getter resolution
+  (0x180895B20 shared by 8+ getters incl. RaycastHit.get_point;
+  receiver-type disambiguation = new feature). 32832/104428 deferred:
+  need retention research (Change/Schedule DCE, lane-temp
+  over-collapse). CRLF contract restored (17 files, bulk-checkout
+  damage; test_source_format green again).
+- Gates: portable 751 (all green), full 877/4 (32832, 67525-deferred,
+  104428, 25687 -- the diagnosed set, zero regressions), rebuild
+  r3g_out1 114458/0/0 brace 0, re-promoted to final_out
+  (byte-identical; +2 stub assemblies from retained calls).
+  Pushed per user call (commit `1cf3e1c` was turn 10; this turn's
+  files uncommitted).
+
+(End of file - turn 11, 2026-09-21)
+
 
 
 

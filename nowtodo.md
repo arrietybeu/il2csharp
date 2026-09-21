@@ -106,3 +106,17 @@ facts (read-side phi atoms disproved), per-arm Color (repros: mi
 phase 1 landed (mi 25293/24765/25577/26314 fold; 24694 gotos decline;
 jumped-label + temp-use hardening). final_out/ untouched.
 final_out/ untouched.
+
+## Addendum 2026-09-21 (round 3f, PROMOTED — this file superseded)
+
+This stop record is now historical. Status claims above ("not ready to
+promote, no commit/rebuild performed", "626 passed / 3 failed", items
+6/7/8 as future work) are all stale: rounds 3b-3f landed and committed
+(`1cf3e1c`), items 6/7/8 mostly shipped, and `final_out/` was promoted
+2026-09-21 from the gated `r3f_out1` candidate (114458 bodies, 0 failed,
+0 fallbacks; brace audit 0 unbalanced; byte-identical copy verified).
+
+Live record: `TODONOW.md` turn 10 + `docs/todo.md` round 3e. Remaining
+known work: 5 diagnosed FIX items (32832/104428/108722/32174/25687
+with fix specs), 67525 deferred (honest unknowns vs stale-luck pin).
+Do not resume from the checklist above; use the live docs.
