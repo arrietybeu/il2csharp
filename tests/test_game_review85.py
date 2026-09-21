@@ -127,9 +127,9 @@ def test_datetime_kind_compares_and_arguments_agree_on_the_same_table(
 
     # Kind==2 is Local, not Utc; Kind==1 had no key in the doubled table
     # and stayed a bare literal.
-    assert "if (dateTime1.Kind == DateTimeKind.Local)" in text
-    assert "dateTime1.Kind == 1" not in text
+    assert "if (dateTime2.Kind == DateTimeKind.Local)" in text
+    assert "dateTime2.Kind == 1" not in text
     # fix 85 reaches the argument of the same call the compares guard.
-    assert ("System.DateTime.SpecifyKind(dateTime1, DateTimeKind.Unspecified)"
+    assert ("System.DateTime.SpecifyKind(dateTime2, DateTimeKind.Unspecified)"
             in text)
-    assert "System.DateTime.SpecifyKind(dateTime1, 0)" not in text
+    assert "System.DateTime.SpecifyKind(dateTime2, 0)" not in text

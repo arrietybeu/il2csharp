@@ -390,12 +390,12 @@ def _bin_txt(a_txt, ap, op, b_txt, bp):
     if ap < p:
         if not _outer_parens(a_txt):
             a_txt = '(' + a_txt + ')'
-    elif _outer_parens(a_txt):
+    elif _outer_parens(a_txt) and not _has_top_ternary(a_txt[1:-1]):
         a_txt = a_txt[1:-1].strip()
     if bp <= p:
         if not _outer_parens(b_txt):
             b_txt = '(' + b_txt + ')'
-    elif _outer_parens(b_txt):
+    elif _outer_parens(b_txt) and not _has_top_ternary(b_txt[1:-1]):
         b_txt = b_txt[1:-1].strip()
     return '%s %s %s' % (a_txt, op, b_txt)
 

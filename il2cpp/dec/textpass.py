@@ -17,7 +17,7 @@ class _TextPassMixin:
     def _simplify_cond(cls, c: str) -> str:
         c = c.strip()
         m = re.match(r'^!\((.*)\)$', c)
-        if m:
+        if m and cls._negation_spans_whole(c):
             inner = m.group(1).strip()
             for op, neg in cls.NEG.items():
                 # try split at last occurrence of ' op ' outside quotes
@@ -30,7 +30,34 @@ class _TextPassMixin:
             return '!(%s)' % inner
         return c
 
-    FOLD_RE = re.compile(r'\((-?(?:0[xX][0-9a-fA-F]+|\d+)) ([+*/&|^-]|<<|>>) '
+    @staticmethod
+    def _negation_spans_whole(c: str) -> bool:
+        """True when the `!(` of `!(...)` closes at the final `)`.
+        A regex alone cannot tell `!((A) & (B))` (whole negation,
+        De Morgan applies) from `!(A) & (B)` (negated first operand
+        only); simplifying the latter drops the `!` and strands the
+        `&` arm outside the head -- unparseable (MinMaxAABB). String
+        literals never affect paren depth."""
+        if not c.startswith('!(') or not c.endswith(')'):
+            return False
+        depth = 0
+        for k in range(1, len(c)):
+            if _in_string(c, k):
+                continue
+            ch = c[k]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    return k == len(c) - 1
+        return False
+
+    # callee-adjacent guard (mirrors SUB_CMP_RE): folding inside a call's
+    # own parens (`s_28.ctor(0 + 1)` -> `s_28.ctor1`) deletes the argument
+    # list itself (XmlNodeConverter). Grouping parens (after space, open
+    # paren or operator) still fold.
+    FOLD_RE = re.compile(r'(?<![\w.>\]\)])\((-?(?:0[xX][0-9a-fA-F]+|\d+)) ([+*/&|^-]|<<|>>) '
                          r'(-?(?:0[xX][0-9a-fA-F]+|\d+))\)')
     ZEXT_RE = re.compile(r'\((-?(?:0[xX][0-9a-fA-F]+|\d+)) & (0[xX][0-9a-fA-F]+)/\*z\*/\)')
 
@@ -218,6 +245,13 @@ class _TextPassMixin:
         r'(?<!\*)\*((?:obj|s|t|v)\d+|this)(?:\.[A-Za-z_$][\w$]*)*')
     _NCONST_RX = re.compile(
         r'(?<![\w)])(?<!\w\s)(?<!\)\s)\*(0x[0-9a-fA-F]+|\d+)')
+    # a cast-prefixed constant deref (`(uint*)*16`, from a folded
+    # null-base address) is not a multiplication: the paren group is
+    # type-shaped (ends in `*`), so the inner `*` is a redundant
+    # deref -- the cast already provides pointerhood. `(a+b)*16`
+    # (operand, not cast) never matches and stays untouched.
+    _CAST_NCONST_RX = re.compile(
+        r'\(([A-Za-z_.<>\,\[\]\*? ]+\*)\)\*(0x[0-9a-fA-F]+|\d+)')
     _RCONST_RX = re.compile(r'\breturn\s+\*(0x[0-9a-fA-F]+|\d+)\s*;')
     _TYPEOF_KSTORE_RX = re.compile(
         r'^(\s*)typeof\(([^()]*)\)\s*\.\s*[A-Za-z_][\w$]*\s*=\s*[^=].*;')
@@ -307,6 +341,7 @@ class _TextPassMixin:
         residues become `ref objN`."""
         for _ in range(16):
             m = text
+            text = self._CAST_NCONST_RX.sub(r'(\1)\2', text)
             text = self._DSTAR_RX.sub(r'((byte*)\1)[0]', text)
             text = self._NCONST_RX.sub(r'((byte*)\1)[0]', text)
             if text == m:
@@ -379,7 +414,9 @@ class _TextPassMixin:
         # store) left a MISSING-node parse error: `L_x: /* ... */` needs a
         # statement after the label, and a comment alone doesn't count.
         raw = [self._TYPEOF_STORE_0_RX.sub(r'\1/* typeof(X) blob store at offset 0 */;', ln) for ln in raw]
-        raw = [self._TYPEOF_KSTORE_RX.sub(r'\1/* typeof(X) static-member store elided */;', ln) for ln in raw]
+        raw = [self._TYPEOF_KSTORE_RX.sub(
+            lambda m: m.group(0).replace('typeof(' + m.group(2) + ')', m.group(2), 1),
+            ln) for ln in raw]
         raw = [self._RCONST_RX.sub(r'return ((byte*)\1)[0];', ln) for ln in raw]
         raw = [self._DEFAULT_OP_RX.sub('0', ln) for ln in raw]
         for _ in range(3):

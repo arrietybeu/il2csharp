@@ -21,7 +21,7 @@ def test_fresh_closure_allocation_has_one_identity(game_decompiler):
     text = body(game_decompiler, 24160)
     assert text.count("new Outline.<>c()") == 1
     assert "Outline.<>c obj1 = new Outline.<>c();" in text
-    assert "typeof(Outline.<>c).<>9 = obj1;" in text
+    assert "Outline.<>c.<>9 = obj1;" in text
     assert "sub_180506120" not in text
 
 

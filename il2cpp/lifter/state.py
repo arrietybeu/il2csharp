@@ -1,5 +1,5 @@
 from il2cpp.prelude import *  # noqa: F401,F403
-from il2cpp.expr import Expr, _BINDABLE_KINDS, _RegState, _USE_BIND_MIN, _is_unresolved_gp, _mentions
+from il2cpp.expr import Expr, _BINDABLE_KINDS, _RegState, _USE_BIND_MIN, _bind_replace, _is_unresolved_gp, _mentions
 from il2cpp.metadata import MethodDef, TypeDef
 from il2cpp.names import safe_ident
 from il2cpp.runtime.core import Il2Cpp
@@ -709,6 +709,12 @@ class _StateMixin:
         # from a bare `T`, so the RHS call/index that produced it lost its
         # own `<T>` too and is worth re-annotating (_rename_locals).
         self._gp_blocked = set()
+        # slots proved constructed by an emitted `.ctor()` call below
+        # (calls.py) -- a whole-struct reload of one is the home
+        # itself, never a stale scalar or first-field slice
+        # (aggregates.py; 18054/34279). Reset per method/pass like
+        # _type_hints: slot names repeat across methods.
+        self._ctor_slots = set()
         self._last_tabread = None
         self.stack_values = {}
         byval_bits = (0x12 << 16)
@@ -838,7 +844,9 @@ class _StateMixin:
         right now -- reads the temp. Counting is per expression object, not
         per text: two calls with identical text are two values, and each
         binds on its own uses."""
-        if self.dry or self._copying or e is None or e._no_bind:
+        if self.dry or self._copying or e is None or e._no_bind \
+                or e.kind == 'sfblob' \
+                or (e.kind == 'klass' and e.text.startswith('typeof(')):
             return
         t = e.text
         if len(t) < _USE_BIND_MIN or t[0] == '&':
@@ -979,7 +987,7 @@ class _StateMixin:
                     continue
                 if s.startswith('var ') and s.rstrip().endswith('= %s;' % old):
                     continue
-                st[i] = s.replace(old, v)
+                st[i] = _bind_replace(s, old, v)
             elif type(s) is tuple:
                 c = s[1]
                 if old not in c or c == line:
@@ -990,17 +998,17 @@ class _StateMixin:
                     continue
                 if c.startswith('var ') and c.rstrip().endswith('= %s;' % old):
                     continue
-                st[i] = (s[0], c.replace(old, v), s[2])
+                st[i] = (s[0], _bind_replace(c, old, v), s[2])
         # a use #1 may have rendered into the block's condition / return /
         # switch index rather than a statement: those are plain strings on
         # the block, rewritten the same way
         if dblk is not None:
             if dblk.cond and old in dblk.cond:
-                dblk.cond = dblk.cond.replace(old, v)
+                dblk.cond = _bind_replace(dblk.cond, old, v)
             if dblk.ret and old in dblk.ret:
-                dblk.ret = dblk.ret.replace(old, v)
+                dblk.ret = _bind_replace(dblk.ret, old, v)
             if dblk.switch_idx and old in dblk.switch_idx:
-                dblk.switch_idx = dblk.switch_idx.replace(old, v)
+                dblk.switch_idx = _bind_replace(dblk.switch_idx, old, v)
         # cross-block render sites (batch 38): the window above covers
         # only the declaration's own block, so a use that rendered in a
         # LATER block kept the full text -- the duplicate impure render
@@ -1050,15 +1058,15 @@ class _StateMixin:
                 if c and old in c and not (c.startswith('var ')
                                            and c.rstrip().endswith('= %s;' % old)):
                     if type(s) is str:
-                        stt[si] = c.replace(old, v)
+                        stt[si] = _bind_replace(c, old, v)
                     else:
-                        stt[si] = (s[0], c.replace(old, v), s[2])
+                        stt[si] = (s[0], _bind_replace(c, old, v), s[2])
             if sblk.cond and old in sblk.cond:
-                sblk.cond = sblk.cond.replace(old, v)
+                sblk.cond = _bind_replace(sblk.cond, old, v)
             if sblk.ret and old in sblk.ret:
-                sblk.ret = sblk.ret.replace(old, v)
+                sblk.ret = _bind_replace(sblk.ret, old, v)
             if sblk.switch_idx and old in sblk.switch_idx:
-                sblk.switch_idx = sblk.switch_idx.replace(old, v)
+                sblk.switch_idx = _bind_replace(sblk.switch_idx, old, v)
         e._sites = None
         e.text = v
         e._prec = None   # the temp name is an atom
@@ -1096,7 +1104,11 @@ class _StateMixin:
                 continue
             by_blk.setdefault(id(dp[0]), (dp[0], []))[1].append((dp[1], e, ip, asm))
         for blk, items in by_blk.values():
-            for idx, e, ip, asm in sorted(items, reverse=True):
+            # stable descending by defpos; ties (which crashed the old
+            # bare-tuple sort on Expr compare) iterate in reverse
+            # discovery order so the insert-at-idx lands them in native
+            # execution order.
+            for idx, e, ip, asm in sorted(reversed(items), key=lambda t: t[0], reverse=True):
                 blk.stmts.insert(min(idx, len(blk.stmts)), e.text + ';')
 
     def emit(self, ip, code, asm):

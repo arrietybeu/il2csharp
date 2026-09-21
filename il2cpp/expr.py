@@ -83,6 +83,42 @@ def _mentions(text, name):
     return False
 
 
+def _bind_replace(text, old, new):
+    """Rewrite whole-token occurrences of `old` with `new`.
+
+    `_bind` materializes a twice-rendered expression to a temp and
+    rewrites later renderings. A plain substring replace cuts inside
+    longer identifiers sharing the prefix: binding
+    `ConsoleUINavigation.<>c.<>9` rewrote the static-field store
+    `ConsoleUINavigation.<>c.<>9__1_0 = ...` into the undeclared
+    `t1012__1_0`. A match extended by an identifier character on the
+    right is a longer name, not this value; a match preceded by an
+    identifier character, `.` or `>` is a member suffix (`x.old`,
+    `p->old`), not this value either. Member access ON the value
+    (`old.member`, `old(...)`, `old[...]`) still rewrites."""
+    if not old or old not in text:
+        return text
+    out = []
+    i = 0
+    n = len(old)
+    while True:
+        j = text.find(old, i)
+        if j == -1:
+            out.append(text[i:])
+            break
+        before = text[j - 1] if j > 0 else ''
+        after = text[j + n] if j + n < len(text) else ''
+        if (before and (before in _WORDCH or before in '.>')) \
+                or (after and after in _WORDCH):
+            out.append(text[i:j + 1])
+            i = j + 1
+            continue
+        out.append(text[i:j])
+        out.append(new)
+        i = j + n
+    return ''.join(out)
+
+
 _BARE_TOKEN_RX = re.compile(r'^(v\d+|t\d+)$')
 
 

@@ -47,7 +47,7 @@ def test_typed_shared_result_stays_after_its_native_predecessor(game_decompiler)
 
 def test_shared_void_result_is_kept_as_a_side_effect(game_decompiler):
     text = body(game_decompiler, 32833)
-    call = 'sub_182695690/*shared body, 2 candidates*/(&obj2, 0);'
+    call = 'sub_182695690/*shared body, 2 candidates*/(&obj3, 0);'
     assert text.count(call) == 2
     assert f'object obj' not in '\n'.join(
         line for line in text.splitlines() if 'sub_182695690' in line)

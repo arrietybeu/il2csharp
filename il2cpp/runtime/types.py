@@ -3,6 +3,9 @@ from il2cpp.common import compressed_int, csharp_type_name, i32, read_compressed
 from il2cpp.csharp import FA_LITERAL, FA_STATIC, field_attrs
 from il2cpp.names import sanitize_qualifier
 
+_SYNTH_NEXT_VA = [0x70000000]
+
+
 class _TypesMixin:
     def _nested_owner(self, ti: int):
         """Owner typedef index for a nested type, or None. The typedef
@@ -121,6 +124,25 @@ class _TypesMixin:
 
     def _generic_inst_name(self, gc_ptr, depth) -> str:
         b = self.bin
+        synth = self.__dict__.get('_synthetic_insts', {}).get(gc_ptr)
+        if synth is not None:
+            base_tup, arg_tups = synth
+            te = self._type_enum(base_tup)
+            dd = base_tup[0] if base_tup else 0
+            full = None
+            if te in (0x11, 0x12) and 0 <= dd < len(self.meta.typedefs):
+                full = sanitize_qualifier(csharp_type_name(self.typedef_full(dd)))
+                if full.startswith('__StaticArrayInitTypeSize='):
+                    full = '__StaticArrayInitTypeSize_' + full[len('__StaticArrayInitTypeSize='):]
+                base = full
+            else:
+                base = 'object'
+            sargs = [self.type_name(a, depth + 1) for a in arg_tups]
+            if full is not None:
+                dist = self._distribute_nested_args(dd, full, sargs)
+                if dist is not None:
+                    return dist
+            return '%s<%s>' % (base, ', '.join(sargs))
         o = b.va2off(gc_ptr)
         if o is None:
             return 'object'
@@ -607,6 +629,15 @@ class _TypesMixin:
                 return (te, ik, self.bin.d[o + 8], byref) \
                     if ik is not None and o + 8 < len(self.bin.d) else None
             if te == 0x15:               # GENERICINST
+                synth = self.__dict__.get('_synthetic_insts', {}).get(data)
+                if synth is not None:
+                    base_tup, arg_tups = synth
+                    bk = walk(base_tup, depth + 1, seen | {marker})
+                    if bk is None:
+                        return None
+                    keys = tuple(walk(a, depth + 1, seen | {marker}) for a in arg_tups)
+                    return (te, bk, keys, byref) \
+                        if all(k is not None for k in keys) else None
                 o = self.bin.va2off(data)
                 if o is None:
                     return None
@@ -631,6 +662,104 @@ class _TypesMixin:
         cache[ty] = result
         return result
 
+    _SYNTH_BASE = 0x70000000
+
+    def _synthetic_inst(self, base_tup, arg_tups, bits=(0x15 << 16)):
+        """Closed GENERICINST tuple for `base_tup` applied to `arg_tups`.
+
+        Some closed nested types (e.g. `Dictionary<K,V>.Enumerator` for a
+        concrete `K,V`) have no row in `il.types`; without a tuple no
+        consumer (names, keys, receiver proofs) can see them. The tuple's
+        data is a fake VA keying a side table on this instance -- every
+        binary-reading consumer consults the table first and keeps
+        today's behavior otherwise. Fake VAs live far below any image
+        section, are allocated monotonically process-wide (class-level
+        name caches are shared across Il2Cpp instances), and are cached
+        by (base, args, bits) so dry/real passes and repeated calls agree.
+        `type_from_ptr` stays table-ignorant on purpose (its identity
+        cache must keep meaning real addresses). Returns None unless the
+        base is a CLASS/VALUETYPE tuple and every argument is closed."""
+        if not isinstance(base_tup, tuple) or len(base_tup) != 2:
+            return None
+        if self._type_enum(base_tup) not in (0x11, 0x12):
+            return None
+        if not (0 <= base_tup[0] < len(self.meta.typedefs)):
+            return None
+        args = tuple(arg_tups) if arg_tups is not None else None
+        if args is None or not args:
+            return None
+        for a in args:
+            if not isinstance(a, tuple) or len(a) != 2:
+                return None
+            if self._closed_type_key(a) is None:
+                return None
+        cache = self.__dict__.setdefault('_synthetic_cache', {})
+        key = (base_tup, args, bits)
+        va = cache.get(key)
+        if va is None:
+            va = _SYNTH_NEXT_VA[0]
+            _SYNTH_NEXT_VA[0] = va + 1
+            cache[key] = va
+            self.__dict__.setdefault('_synthetic_insts', {})[va] = (base_tup, args)
+        return (va, bits)
+
+    def _synthetic_lookup(self, va):
+        return self.__dict__.get('_synthetic_insts', {}).get(va)
+
+    def _subst_closed(self, ty, class_args, method_args, depth=0):
+        """Closed tuple for `ty` with VAR/MVAR substituted, even nested.
+
+        Single-level VAR/MVAR uses the spec's class (0x13) or method
+        (0x1e) instantiation, preserving the return signature's byref bit
+        (the old `candidate_return_type` rule, unchanged). A GENERICINST
+        whose every argument closes rebuilds through `_synthetic_inst`
+        (no binary row need exist); anything unbound, unreadable, or
+        partially closed declines with None -- never a half-open guess.
+        Already-closed non-generic shapes pass through untouched."""
+        if depth > 8:
+            return None
+        if ty is None or not isinstance(ty, tuple) or len(ty) != 2:
+            return None
+        data, bits = ty
+        te = (bits >> 16) & 0xFF
+        if te in (0x13, 0x1e):
+            args = class_args if te == 0x13 else method_args
+            if not args:
+                return None
+            if not (0 <= data < len(self.meta.generic_parameters)):
+                return None
+            ordinal = self.meta.generic_parameters[data][4]
+            actual = args[ordinal] if 0 <= ordinal < len(args) else None
+            if actual is None or not isinstance(actual, tuple) or len(actual) != 2:
+                return None
+            if self._closed_type_key(actual) is None:
+                return None
+            # Type arguments cannot themselves be byref.  The return
+            # signature owns that bit; the argument owns enum/data.
+            return (actual[0], (actual[1] & ~(1 << 29)) | (bits & (1 << 29)))
+        if te == 0x15:
+            o = self.bin.va2off(data)
+            if o is None:
+                return None
+            base_tup = self.type_from_ptr(u64(self.bin.d, o))
+            instp = u64(self.bin.d, o + 8)
+            io = self.bin.va2off(instp) if instp else None
+            if io is None:
+                return None
+            open_args = self._argv_type_tuples(u64(self.bin.d, io), u64(self.bin.d, io + 8))
+            if open_args is None:
+                return None
+            closed = []
+            for a in open_args:
+                sa = self._subst_closed(a, class_args, method_args, depth + 1)
+                if sa is None:
+                    return None
+                closed.append(sa)
+            return self._synthetic_inst(base_tup, tuple(closed), bits)
+        if self._closed_type_key(ty) is None:
+            return None
+        return ty
+
     def candidate_return_type(self, candidate):
         """Closed return type for one address candidate, if provable."""
         cache = self.__dict__.setdefault('_candidate_return_type_cache', {})
@@ -649,20 +778,11 @@ class _TypesMixin:
         if 0 <= mi < len(self.meta.methods):
             ri = self.meta.methods[mi].return_type
             ty = self.types[ri] if 0 <= ri < len(self.types) else None
-            te = self._type_enum(ty)
-            if spec is not None and te in (0x13, 0x1e) \
-                    and 0 <= ty[0] < len(self.meta.generic_parameters):
-                ordinal = self.meta.generic_parameters[ty[0]][4]
-                inst = spec[1] if te == 0x13 else spec[2]
-                args = self._method_spec_type_args(inst)
-                actual = args[ordinal] \
-                    if args is not None and 0 <= ordinal < len(args) else None
-                if actual is not None:
-                    # Type arguments cannot themselves be byref.  The return
-                    # signature owns that bit; the argument owns enum/data.
-                    ty = (actual[0], (actual[1] & ~(1 << 29))
-                          | (ty[1] & (1 << 29)))
-            if self._closed_type_key(ty) is not None:
+            if spec is not None:
+                result = self._subst_closed(
+                    ty, self._method_spec_type_args(spec[1]),
+                    self._method_spec_type_args(spec[2]))
+            elif self._closed_type_key(ty) is not None:
                 result = ty
         cache[candidate] = result
         return result

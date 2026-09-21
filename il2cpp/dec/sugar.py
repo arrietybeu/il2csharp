@@ -485,6 +485,8 @@ class _SugarMixin:
         for s in lines:
             s = self._bzext_strip(s)
             if ret_is_bool:
+                if s in ('return 0;', 'return 1;'):
+                    s = 'return true;' if s == 'return 1;' else 'return false;'
                 m = re.match(r'^return \(([^?]+?) \? 1 : 0\);$', s)
                 if m and (re.search(r'[<>!=]', m.group(1)) or re.fullmatch(r'flag\d+', m.group(1).strip())):
                     s = 'return %s;' % m.group(1)
@@ -498,8 +500,12 @@ class _SugarMixin:
             # itself a ternary (junk renders like `a ? 1 : 0 | b != 0 ? 1 : 0`)
             # is never unfolded; the paren-wrapped form was validated
             # tree-wide in earlier batches and stays exactly as is.
-            s = re.sub(r'\b(flag\d+) = \((.+?) \? 1 : 0\);$', r'\1 = \2;', s)
-            s = re.sub(r'\bbool (flag\d+) = \((.+?) \? 1 : 0\);$', r'bool \1 = \2;', s)
+            # paren-wrapped forms use the same [^?] guard as the plain
+            # ones below: a lazy (.+?) spans a `&`-joined pair of
+            # ternaries (`(A ? 1 : 0) & (B ? 1 : 0)`), dropping the outer
+            # parens asymmetrically into unparseable text (101899 etc.).
+            s = re.sub(r'\b(flag\d+) = \(([^?]+?) \? 1 : 0\);$', r'\1 = \2;', s)
+            s = re.sub(r'\bbool (flag\d+) = \(([^?]+?) \? 1 : 0\);$', r'bool \1 = \2;', s)
             s = re.sub(r'\bbool (flag\d+) = ([^?]+?) \? 1 : 0;$', r'bool \1 = \2;', s)
             s = re.sub(r'\b(flag\d+) = ([^?]+?) \? 1 : 0;$', r'\1 = \2;', s)
             s = re.sub(r'\bbool (flag\d+) = ([^?]+?) \? 1 : 0;$', r'bool \1 = \2;', s)

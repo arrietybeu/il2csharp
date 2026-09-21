@@ -976,6 +976,14 @@ class _CallsMixin:
         produces)."""
         dst = args[0][1:] if args[0].startswith('&') else args[0]
         src2 = args[1] if len(args) > 1 else '?'
+        # a constant-folded null-base address (`16`, `(16)`) is not a
+        # variable: `16 = v;` never parses and `*16 = v;` breaks the
+        # tree-sitter grammar. Spell it as the deref the plain-store
+        # twin uses (`((byte*)16)[0]` parses); the twin comparison
+        # canonicalizes primitive casts, so the duplicate still drops.
+        mnum = re.fullmatch(r'\(?((?:0[xX][0-9a-fA-F]+|\d+))\)?', dst or '')
+        if mnum:
+            return '((byte*)%s)[0]' % mnum.group(1), src2
         # storing a bare temp into a typed location types the temp -- the
         # write-barrier idiom is a SEPARATE emit path from _write_mem (a
         # reference-typed store almost always compiles through the barrier,
@@ -1420,6 +1428,32 @@ class _CallsMixin:
                     if i < len(args):
                         args = args[:i] + args[i + 1:]
                     break
+        # A fresh delegate plus its metadata method pointer proves the ctor,
+        # even when the native body is shared with Invoke specializations.
+        delegate_target = None
+        if recv is not None and len(arg_exprs) > 1:
+            ptr_index = next((i for i, value in enumerate(arg_exprs[1:], 1)
+                              if value is not None and value.kind == 'methodinfo'), None)
+            ptr = arg_exprs[ptr_index] if ptr_index is not None else None
+            invoke = self._delegate_invoke_method(recv.ty) if ptr is not None else None
+            if invoke is not None and ptr is not None and ptr.kind == 'methodinfo' \
+                    and getattr(ptr, '_mi', None) is not None:
+                td = self._td_of(recv.ty)
+                ctors = [ci for ci in self.meta.type_methods(self.meta.typedefs[td])
+                         if self.meta.methods[ci].name == '.ctor'
+                         and self.meta.methods[ci].param_count == 2]
+                if len(set(ctors)) == 1:
+                    info = ('method', ctors[0])
+                    name = self.il.method_simple_name(ctors[0])
+                    target_method = self.meta.methods[ptr._mi]
+                    target_owner = self.meta.typedefs[target_method.declaring]
+                    receiver = arg_exprs[ptr_index - 1] if ptr_index > 1 else None
+                    if target_method.is_static:
+                        owner = ((target_owner.namespace + '.') if target_owner.namespace else '') + target_owner.name
+                    else:
+                        owner = _recv_fold(receiver.text) if receiver is not None else None
+                    if owner is not None:
+                        delegate_target = owner + '.' + target_method.name
         rty = None
         mi = None
         shared_rty = False
@@ -1434,6 +1468,11 @@ class _CallsMixin:
                         rty = closed_return
                     self._call_class_args = self.il._method_spec_type_args(
                         self.il.method_specs[info[1]][1])
+        if info and info[0] == 'generic':
+            home = self._proved_struct_home(info, args, rty)
+            if home is not None:
+                self.slot_types.setdefault(home[0], home[1])
+                self._type_hints.setdefault(home[0], home[1])
         # The callee identity can remain honestly ambiguous while every
         # registered owner still declares the exact same closed return type.
         # Use only that all-candidates consensus: it fixes the result register,
@@ -1681,7 +1720,12 @@ class _CallsMixin:
                 self.emit(ins.ip, '%s = %s(%s);' % (buf, name, ', '.join(rest)), asm)
             self.slot_types[buf] = rty
             if stack_address is not None and hasattr(self.il, '_sf_field_size'):
-                self._stack_store(stack_address, self.il._sf_field_size(rty, 0), Expr(buf, rty, 'obj'))
+                # unknown layout sizes record no facts (an open generic
+                # definition has no row): storing a None width crashes the
+                # span math below, and piece reads off it would be guesses.
+                _sz = self.il._sf_field_size(rty, 0)
+                if _sz is not None:
+                    self._stack_store(stack_address, _sz, Expr(buf, rty, 'obj'))
             # Win64 sret ABI: the callee echoes the hidden buffer
             # pointer back in RAX, and MSVC callers read the result
             # through it (`movsd xmm1,[rax]`) -- without this binding
@@ -1776,6 +1820,8 @@ class _CallsMixin:
                 self.emit(ins.ip, '%s..ctor(%s);' %
                           (init_kind, ', '.join(rest)), asm)
                 return
+            if delegate_target is not None:
+                rest = [delegate_target]
             if m2.name == '.ctor' and not m2.is_static \
                     and self._complete_fresh_constructor(recv, rest):
                 return
@@ -1808,6 +1854,10 @@ class _CallsMixin:
                 elif mbase.startswith('set_') and len(rest) == 1 and not rty_has_value(self, rty):
                     cand = None
                     lv = '%s.%s' % (_recv_fold(recv_txt), mbase[4:])
+                    acc_hint = self._hint_accessor_recv(recv, m2)
+                    if acc_hint is not None:
+                        self.slot_types.setdefault(acc_hint[0], acc_hint[1])
+                        self._type_hints.setdefault(acc_hint[0], acc_hint[1])
                     self._kill_stale(lv)
                     self.emit(ins.ip, '%s = %s;' % (lv, rest[0]), asm)
                     for rr in VOLATILE:
@@ -1936,11 +1986,25 @@ class _CallsMixin:
                     sz = self.il._sf_field_size((m2.declaring, 0x11 << 16), 0) \
                         if dt is not None and dt.is_valuetype else None
                     slot = args[0][1:] if args and args[0].startswith('&') else None
+                    if slot is None and args and re.match(r'^s_[0-9a-fA-F]+$', args[0]):
+                        # the member fold strips the `&` (1899-1912);
+                        # a slot-shaped receiver still names its home
+                        # (18054: `s_48.ctor(t0, t1)` lost both `&`
+                        # and the receiver's stack offset).
+                        slot = args[0]
                     if slot is None and off is not None:
                         for addr, slot_nm in self.stack_map.items():
                             if addr == off:
                                 slot = slot_nm
                                 break
+                    if slot is not None:
+                        # construction proof, sizing-independent: the
+                        # sized store below still needs off+sz (an open
+                        # genericinst ctor has no provable size), but
+                        # the home is constructed either way.
+                        cs = getattr(self, '_ctor_slots', None)
+                        if cs is not None:
+                            cs.add(slot)
                     if off is not None and sz is not None and slot is not None:
                         self._stack_store(off, sz, Expr(slot, (m2.declaring, 0x11 << 16), 'obj'))
                         self.slot_types[slot] = (m2.declaring, 0x11 << 16)

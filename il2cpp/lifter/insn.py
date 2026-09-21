@@ -591,16 +591,21 @@ class _InsnMixin:
             # ADD/SUB of an object address and a constant is also how
             # native code forms a field address for a GC write barrier.
             if mn in (Mnemonic.ADD, Mnemonic.SUB) and a is not None \
-                    and a.kind == 'obj' and A(1) in IMM_OPS \
+                    and a.kind in ('obj', 'sfblob') and A(1) in IMM_OPS \
                     and _reg_size(ins.op0_register) == 8:
                 offset = imm_of(ins, 1) * (1 if mn == Mnemonic.ADD else -1)
                 field = self._field_expr(a, offset, 8)
                 if field.ty is not None and not field.text.startswith('*') \
-                        and field.text.startswith(_recv_fold(a.text) + '.'):
+                        and (field.text.startswith(_recv_fold(a.text) + '.') or a.kind == 'sfblob'):
                     e = self._mk('&' + field.text, field.ty, 'ptr')
                     self.set_reg(dst, e)
                     self.flags = (e, Expr('0', None, 'int'))
                     return
+            if mn == Mnemonic.XOR and btxt == '1' and a is not None \
+                    and a.ty is not None and self.il._type_enum(a.ty) == 0x02:
+                self.set_reg(dst, self._mk('!(%s)' % a.text, a.ty, 'int'))
+                self.flags = None
+                return
             # GPR arithmetic/logic is integer by construction (floats go
             # through SSE): type the operands and, when nothing better is
             # known, the result
@@ -722,6 +727,22 @@ class _InsnMixin:
                           a.ty if (a is not None and isinstance(a.ty, tuple)) else fty, 'float')
             fe._prec = _BIN_PREC.get(op)
             self.set_reg(dst, fe)
+            return
+        if mn == Mnemonic.UNPCKLPS:
+            dst = reg_name(ins.op0_register)
+            left = self.reg(dst)
+            right = (self.reg(reg_name(ins.op1_register)) if A(1) == OpKind.REGISTER
+                     else self._read_mem(ins, asm))
+            packed = Expr('?', None, 'bits')
+            parts = []
+            for lo, origin, offset in ((0, left, 0), (4, right, 0),
+                                       (8, left, 4), (12, right, 4)):
+                if origin is not None:
+                    value = self._piece_value(origin, offset, 4, _R4_TY)
+                    if value is not None:
+                        parts.append((lo, value, 0, 4))
+            packed._parts = parts
+            self.set_reg(dst, packed)
             return
         if mn in (Mnemonic.XORPS, Mnemonic.XORPD, Mnemonic.ANDPS, Mnemonic.ANDNPS,
                   Mnemonic.ORPS, Mnemonic.PXOR):
@@ -1219,6 +1240,9 @@ class _InsnMixin:
                 e = Expr(usg.get('text', '?'), ty, 'obj')
                 if k == 6:
                     e._usg_idx = usg['idx']
+                elif k == 3 and usg.get('method') is not None:
+                    e.kind = 'methodinfo'
+                    e._mi = usg['method']
                 return e
             q = self.bin.qword(slot)
             if q is not None and self.bin.is_exec_va(q):
@@ -1692,11 +1716,26 @@ class _InsnMixin:
         # first writer wins, same as the byref-slot convention.
         if lv.startswith('s_') and ins.op_kind(1) == OpKind.REGISTER:
             se = self.reg(reg_name(ins.op1_register))
-            if se is not None and se.ty is not None and se.kind == 'arr':
-                self.slot_types.setdefault(lv, se.ty)
-                self._type_hints.setdefault(lv, se.ty)
+            hty = self._struct_home_ty(se) if se is not None else None
+            if se is not None and se.ty is not None \
+                    and (se.kind == 'arr' or hty is not None):
+                ty = se.ty if se.kind == 'arr' else hty
+                self.slot_types.setdefault(lv, ty)
+                self._type_hints.setdefault(lv, ty)
         src = self._src_text(ins)
         src = self._fimm(src, self._lv_ty)
+        if self._lv_ty is None and (ins.op_kind(1) in IMM_OPS
+                or (ins.op_kind(1) == OpKind.REGISTER
+                    and _int_lit(src) is not None)):
+            # a scalar immediate at a struct-typed home's base addresses
+            # the home's first field, not the whole struct (`mov [home],0`
+            # zeroes Navigation.m_Mode). Render it field-precisely so the
+            # line still compiles once the home is struct-typed; decline
+            # (today's scalar) when the proof fails anywhere.
+            fp = self._home_field_store(lv, MemorySizeExt.size(ins.memory_size), src)
+            if fp is not None:
+                lv, src = fp[0], fp[1]
+                self._lv_ty = fp[2]
         if lv in self.stack_map.values():
             sev = None
             if ins.op_kind(1) in IMM_OPS:
@@ -1822,6 +1861,45 @@ class _InsnMixin:
         except struct.error:
             pass
         return src
+
+    def _home_field_store(self, lv, width, src):
+        """Field-precise (lvalue, text, type) for a scalar immediate at a
+        struct-typed home's base, or None to keep today's scalar spelling.
+
+        Every step is proved from metadata, never guessed: the home's
+        recorded struct type must be an exact closed valuetype, the store
+        must be strictly smaller than the struct (a full-home zero is not
+        one field), the offset-0 field must exist at its exact width, and
+        the rendered literal must compile there (integer fields always do;
+        enum/bool/float fields only when `_fimm` names the member)."""
+        if not isinstance(lv, str) or not re.fullmatch(r's_[0-9a-fA-F]+', lv):
+            return None
+        ty = (getattr(self, 'slot_types', None) or {}).get(lv)
+        if not isinstance(ty, tuple) or ((ty[1] >> 29) & 1) \
+                or ((ty[1] >> 16) & 0xFF) != 0x11:
+            return None
+        if self.il._closed_type_key(ty) is None:
+            return None
+        td = self._td_of(ty)
+        if td is None or not self.meta.typedefs[td].is_valuetype:
+            return None
+        size = self.il.value_type_size(td)
+        if size is None or not (width < size):
+            return None
+        chain = self.il.instance_field_chain(td) or {}
+        ent = chain.get(0x10)
+        if ent is None:
+            return None
+        name, ti = ent
+        fty = self.il.types[ti] if 0 <= ti < len(self.il.types) else None
+        if fty is None or self.il._sf_field_size(fty, 0) != width:
+            return None
+        fte = (fty[1] >> 16) & 0xFF
+        text = self._fimm(src, fty)
+        if text == src and fte not in (0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                                      0x0a, 0x0b, 0x18, 0x19):
+            return None
+        return ('%s.%s' % (lv, name), text, fty)
 
     def _src_text(self, ins) -> str:
         k = ins.op_kind(1)

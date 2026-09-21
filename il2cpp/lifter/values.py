@@ -250,6 +250,21 @@ class _ValuesMixin:
                         self._type_hints.setdefault(nm, pointee)
                     elif _BARE_HINT_RX.match(nm):
                         self._type_hints.setdefault(nm, pointee)
+                else:
+                    ck = getattr(self.il, '_closed_type_key', None)
+                    trust_ok = trust and self._byval_struct(pt) \
+                        and (ck is None or ck(pt) is not None)
+                    if trust_ok:
+                        # a by-VALUE struct travels by hidden pointer: `&s_N`
+                        # is the value's home, not an address the callee keeps
+                        # (the byref case above already returned). The declared
+                        # substituted parameter type proves the home's content --
+                        # the saved Navigation at Dictionary.Add. setdefault:
+                        # first writer wins, same as the byref-slot convention.
+                        nm = at[1:]
+                        if nm.startswith('s_'):
+                            self.slot_types.setdefault(nm, pt)
+                            self._type_hints.setdefault(nm, pt)
                 # fix 54: now that the declared parameter is in hand,
                 # spell the `&` the way C# would. The old render came
                 # from decompiler.py's `_ADDR_LOCAL_RX`, whose lookbehind
@@ -325,6 +340,13 @@ class _ValuesMixin:
         # an address-of temp stays pointer-kind: call-arg type hints must
         # not type it as the pointee
         t = Expr(v, e.ty, 'ptr' if e.text.startswith('&') else e.kind, e.recv)
+        # the temp freezes this exact value: identity proofs survive the
+        # move (a methodinfo temp that loses `_mi` crashes the delegate
+        # path indexing it -- 8 sweep failures -- instead of resolving).
+        if getattr(e, '_mi', None) is not None:
+            t._mi = e._mi
+        if getattr(e, '_usg_idx', None) is not None:
+            t._usg_idx = e._usg_idx
         seen[e.text] = t
         return t
 
@@ -443,8 +465,10 @@ class _ValuesMixin:
                     'str' if fte == 0x0e else (
                         'float' if fte in (0x0c, 0x0d) else (
                             'obj' if fte >= 0x10 else 'int')))
-                return Expr('%s.%s' % (base.text.replace('.__static_fields', ''), nm),
-                            fty, fkind)
+                owner = base.text.replace('.__static_fields', '')
+                if owner.startswith('typeof(') and owner.endswith(')'):
+                    owner = owner[7:-1]
+                return Expr('%s.%s' % (owner, nm), fty, fkind)
             return Expr('%s.__static_%x' % (base.text, disp), None, 'obj')
         if base.kind == 'local' and base.text in self.slot_types:
             # a typed stack slot (&s_N given to a byref/sret) resolves its
@@ -619,6 +643,14 @@ class _ValuesMixin:
             find_object = getattr(self.il, '_system_object_td', None)
             return find_object() if find_object is not None else None
         if te == 0x15:
+            synth = getattr(self.il, '_synthetic_lookup', lambda v: None)(data)
+            if synth is not None:
+                base_tup = synth[0]
+                if base_tup:
+                    te2 = self.il._type_enum(base_tup)
+                    if te2 in (0x11, 0x12) and base_tup[0] < len(self.meta.typedefs):
+                        return base_tup[0]
+                return None
             o = self.bin.va2off(data)
             if o is None:
                 return None
@@ -646,6 +678,9 @@ class _ValuesMixin:
         """Concrete Il2CppType arguments of a GENERICINST, if readable."""
         if ty is None or self.il._type_enum(ty) != 0x15:
             return None
+        synth = getattr(self.il, '_synthetic_lookup', lambda v: None)(ty[0])
+        if synth is not None:
+            return list(synth[1])
         o = self.bin.va2off(ty[0])
         if o is None:
             return None
@@ -659,6 +694,111 @@ class _ValuesMixin:
             tp = self.bin.qword(argv + k * 8) if argv else None
             out.append(self.il.type_from_ptr(tp) if tp else None)
         return out
+
+    def _proved_struct_home(self, info, args, rty):
+        """(slot, type) for a proved-generic struct home, else None.
+
+        A closed valuetype instantiation passed by hidden pointer proves
+        the home's content: for an instance method RCX is this-or-buffer
+        and for a struct return RCX is the buffer -- in both cases args[0]
+        names the struct home when it spells `&s_N` (23762: the
+        enumerator homes fed to GetEnumerator/MoveNext/Dispose, whose
+        MethodRef slots prove closed `Enumerator<Selectable,Navigation>`
+        identities). Static non-struct calls keep today's spelling
+        (parameter territory, covered by arg hints), and any byref- or
+        pointer-typed formal parameter declines (the `&s_N` could be its
+        argument, not a struct home). Only slot_types/_type_hints gain
+        entries; rendering, sret and trust paths are untouched."""
+        if not info or info[0] != 'generic':
+            return None
+        synth_fn = getattr(self.il, '_synthetic_inst', None)
+        spec_args_fn = getattr(self.il, '_method_spec_type_args', None)
+        specs = getattr(self.il, 'method_specs', None)
+        methods = getattr(self.meta, 'methods', None)
+        typedefs = getattr(self.meta, 'typedefs', None)
+        types = getattr(self.il, 'types', None)
+        if None in (synth_fn, spec_args_fn, specs, methods, typedefs, types):
+            return None
+        if not isinstance(info, tuple) or len(info) != 2:
+            return None
+        if not (0 <= info[1] < len(specs)):
+            return None
+        spec = specs[info[1]]
+        if not isinstance(spec, tuple) or len(spec) != 3:
+            return None
+        if not (0 <= spec[0] < len(methods)):
+            return None
+        m = methods[spec[0]]
+        td_idx = getattr(m, 'declaring', -1)
+        if not (0 <= td_idx < len(typedefs)):
+            return None
+        td = typedefs[td_idx]
+        if not getattr(td, 'is_valuetype', False):
+            return None
+        class_args = spec_args_fn(spec[1])
+        if not class_args:
+            return None
+        gdecl = synth_fn((td_idx, 0x11 << 16), tuple(class_args))
+        if gdecl is None:
+            return None
+        if getattr(m, 'is_static', True):
+            if not isinstance(rty, tuple) or len(rty) != 2:
+                return None
+            if ((rty[1] >> 16) & 0xFF) != 0x11 or ((rty[1] >> 29) & 1):
+                return None
+            try:
+                params = self.meta.method_params(m)
+            except Exception:
+                return None
+            for p in params:
+                pti = getattr(p, 'type', -1)
+                pt = types[pti] if 0 <= pti < len(types) else None
+                if not isinstance(pt, tuple) or len(pt) != 2:
+                    return None
+                if ((pt[1] >> 29) & 1) or ((pt[1] >> 16) & 0xFF) in (0x0f, 0x10):
+                    return None
+        if not args or not re.fullmatch(r'&s_[0-9a-fA-F]+', args[0] or ''):
+            return None
+        return (args[0][1:], gdecl)
+
+    def _hint_accessor_recv(self, recv, m2):
+        """(slot, type) for a property-accessor receiver, else None.
+
+        A resolved instance accessor call proves its receiver's type
+        through the declaring typedef (23762: `set_navigation` on an
+        untyped `s_90` home proves Selectable). Only slots and bare
+        temps qualify; dotted receivers already resolve through their
+        base, and `this` needs nothing. Address-taken `&s_N` records on
+        the home when the owner is a value type (byref-`this` homes hold
+        the struct). Open generic owners decline (instantiation proof
+        is separate machinery), as do type-token, address and method
+        kinds. The caller records the pair with setdefault."""
+        if recv is None or m2 is None:
+            return None
+        if getattr(m2, 'is_static', True):
+            return None
+        td_idx = getattr(m2, 'declaring', -1)
+        typedefs = getattr(self.meta, 'typedefs', None)
+        if typedefs is None or not (0 <= td_idx < len(typedefs)):
+            return None
+        td = typedefs[td_idx]
+        if getattr(td, 'generic_container', -1) != -1:
+            return None
+        text = getattr(recv, 'text', None) or ''
+        kind = getattr(recv, 'kind', None)
+        if kind in ('ptr', 'klass', 'usage', 'sfblob', 'initflag',
+                    'methodinfo', 'fptr', 'vtmethod', 'null'):
+            if not (kind == 'ptr' and text.startswith('&')
+                    and getattr(td, 'is_valuetype', False)):
+                return None
+            nm = text[1:]
+        else:
+            nm = text
+        if not re.fullmatch(r's_[0-9a-fA-F]+|t\d+', nm):
+            return None
+        ty = (td_idx, (0x11 << 16) if getattr(td, 'is_valuetype', False)
+              else (0x12 << 16))
+        return (nm, ty)
 
     def _class_type_subst(self, ty):
         """Substitute a delegate TypeDef's VAR with its instance argument."""
@@ -689,6 +829,10 @@ class _ValuesMixin:
             return True
         if te != 0x15:
             return False
+        synth = getattr(self.il, '_synthetic_lookup', lambda v: None)(ty[0])
+        if synth is not None:
+            base_tup = synth[0]
+            return bool(base_tup) and self.il._type_enum(base_tup) == 0x11
         try:
             o = self.bin.va2off(ty[0])
             if o is None:
@@ -697,6 +841,32 @@ class _ValuesMixin:
         except Exception:
             return False
         return bool(t) and self.il._type_enum(t) == 0x11
+
+    def _struct_home_ty(self, e):
+        """Proved struct type for a value stored into a stack home.
+
+        A whole-field XMM/GPR value (e.g. an m_Navigation load) carries
+        its struct type through the register; recording it on the slot
+        lets the renamer declare the home honestly instead of `object`.
+        Partial aggregate slices never qualify; open generics, byrefs
+        and address-kind values decline, same as the call-site hints.
+        """
+        if e is None or not isinstance(getattr(e, 'ty', None), tuple):
+            return None
+        if getattr(e, 'kind', None) not in ('obj', 'local', 'float'):
+            return None
+        if getattr(e, '_slice', None) is not None \
+                or getattr(e, '_parts', None) is not None:
+            return None
+        ty = e.ty
+        if ((ty[1] >> 29) & 1) or ((ty[1] >> 16) & 0xFF) != 0x11:
+            return None
+        if self.il._closed_type_key(ty) is None:
+            return None
+        td = self._td_of(ty)
+        if td is None or not self.meta.typedefs[td].is_valuetype:
+            return None
+        return ty
 
     def _klass_member(self, disp):
         return {KLASS_STATIC_FIELDS: 'static_fields', KLASS_INITIALIZED: 'initialized',

@@ -3466,6 +3466,21 @@ class _HighLevelMixin:
                     return None
                 return walk(inner, depth + 1)
             if te == 0x15:
+                synth = getattr(il, '_synthetic_lookup', lambda v: None)(data)
+                if synth is not None:
+                    base_tup, arg_tups = synth
+                    rb = walk(base_tup, depth + 1)
+                    if rb is True:
+                        return True
+                    if rb is None:
+                        return None
+                    for a in arg_tups:
+                        ra = walk(a, depth + 1)
+                        if ra is True:
+                            return True
+                        if ra is None:
+                            return None
+                    return False
                 try:
                     o = bin.va2off(data)
                     if o is None:

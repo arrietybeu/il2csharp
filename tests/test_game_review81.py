@@ -41,8 +41,8 @@ def test_packed_float_intrinsic_recovers_every_lane_independently(game_decompile
     # ground truth) instead of the old byte spelling; the `0f` zeroing
     # store keeps its byte form.
     for offset in ("0x0", "0x4", "0x8", "0xc"):
-        assert f"((float*)obj4 + {offset})[0]" in text
-    assert "((byte*)obj4 + 0x0)[0] = 0f;" in text
+        assert f"((float*)obj3 + {offset})[0]" in text
+    assert "((byte*)obj3 + 0x0)[0] = 0f;" in text
     assert text.count("Math.Sqrt(") == 4
     assert "sub_1804ce6d8" not in text
     assert "unknown" not in text

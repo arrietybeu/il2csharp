@@ -1,0 +1,367 @@
+"""Regressions for native UI/contact recovery, independent of output snapshots."""
+from types import SimpleNamespace as NS
+
+from il2cpp import Decompiler, Expr
+from il2cpp.text import _ATOM_PREC, _bin_txt
+from test_recovery_followup import lifter, execute, struct_lifter, V3, F32
+
+
+def test_binary_composition_keeps_conditional_grouping():
+    ternary = '((capacity <= 16) ? 16 : capacity)'
+    assert _bin_txt(ternary, _ATOM_PREC, '-', '1', _ATOM_PREC) == ternary + ' - 1'
+    assert _bin_txt('n', _ATOM_PREC, '|', ternary, _ATOM_PREC) == 'n | ' + ternary
+
+
+def test_class_metadata_is_not_instance_aggregate_storage():
+    from iced_x86 import Decoder
+    lift = struct_lifter()
+    for kind in ('klass', 'usage', 'sfblob'):
+        lift.regs['RAX'] = Expr('typeof(V3)', V3, kind)
+        ins = next(iter(Decoder(64, bytes.fromhex('f30f1000'), ip=0x1000)))
+        assert lift._aggregate_load(ins) is None
+
+
+def test_unpack_low_float_lanes_preserves_both_components():
+    lift = struct_lifter()
+    lift.regs.update(XMM0=Expr('x', F32, 'float'), XMM1=Expr('y', F32, 'float'))
+    execute(lift, '0f14c1')  # unpcklps xmm0,xmm1
+    packed = lift.regs['XMM0']
+    assert lift._piece_value(packed, 0, 4, F32).text == 'x'
+    assert lift._piece_value(packed, 4, 4, F32).text == 'y'
+    assert lift._piece_value(packed, 8, 4, F32) is None
+
+
+def test_boolean_xor_one_is_logical_negation():
+    lift = lifter({'RAX': Expr('enabled', (0, 0x02 << 16), 'int')})
+    execute(lift, '83f001')
+    assert lift.regs['RAX'].text == '!(enabled)'
+
+
+def test_boolean_constant_returns():
+    dec = Decompiler.__new__(Decompiler)
+    dec.L = NS(il=NS(types=[(0, 0x02 << 16)], _type_enum=lambda t: 2))
+    assert dec._bool_sugar(['return 0;', 'return 1;'], NS(return_type=0)) == [
+        'return false;', 'return true;']
+
+from il2cpp.expr import _bind_replace
+
+
+def test_bind_replace_blocks_longer_identifier_prefix():
+    # Blocker 2: binding `...<>c.<>9` must not rewrite the static-field
+    # store `...<>c.<>9__1_0` into the undeclared `t1012__1_0`.
+    lhs = 'ConsoleUINavigation.<>c.<>9__1_0 = predicate13;'
+    assert _bind_replace(lhs, 'ConsoleUINavigation.<>c.<>9', 't1012') == lhs
+
+
+def test_bind_replace_allows_member_access_on_value():
+    rhs = 'new P((ConsoleUINavigation.<>c.<>9).<OnEnable>b__1_0);'
+    assert _bind_replace(rhs, 'ConsoleUINavigation.<>c.<>9', 't1012') == \
+        'new P((t1012).<OnEnable>b__1_0);'
+
+
+def test_bind_replace_blocks_token_prefix_and_member_suffix():
+    assert _bind_replace('obj12 = obj1;', 'obj1', 'v9') == 'obj12 = v9;'
+    assert _bind_replace('x.oldname = 1;', 'oldname', 'v9') == 'x.oldname = 1;'
+    assert _bind_replace('p->field = q;', 'field', 'v9') == 'p->field = q;'
+
+from il2cpp.expr import Expr as _Expr
+
+
+def test_struct_home_ty_accepts_whole_field_values():
+    from il2cpp.expr import _BOOL_TY
+    lift = struct_lifter()
+    assert lift._struct_home_ty(_Expr('nav', V3, 'float')) == V3
+    assert lift._struct_home_ty(_Expr('nav', V3, 'obj')) == V3
+    # slices, addresses, scalars and open generics decline
+    sl = _Expr('nav', V3, 'float')
+    sl._slice = (sl, 0, 4)
+    assert lift._struct_home_ty(sl) is None
+    assert lift._struct_home_ty(_Expr('&s_1', V3, 'ptr')) is None
+    assert lift._struct_home_ty(_Expr('n', F32, 'float')) is None
+    assert lift._struct_home_ty(_Expr('n', _BOOL_TY, 'int')) is None
+
+
+def test_home_field_store_names_first_field():
+    lift = struct_lifter()
+    lift.il.value_type_size = lambda td: 12
+    lift.slot_types['s_50'] = V3
+    assert lift._home_field_store('s_50', 4, '0') == ('s_50.x', '0.0f', F32)
+    assert lift._home_field_store('s_51', 4, '0') is None
+    assert lift._home_field_store('s_50', 12, '0') is None
+
+
+def test_byval_struct_home_hint_from_call_param():
+    lift = struct_lifter()
+    lift.il.returns_sret = lambda r: False
+    lift.meta.method_params = lambda m: [NS(type=2)]
+    lift.meta.methods = [NS(name='Add', declaring=0, is_static=False, param_count=1)]
+    lift._call_class_args = None
+    args = ['recv', '&s_20']
+    exprs = [None, _Expr('s_20', None, 'local')]
+    lift._hint_arg_types(args, exprs, 0, None)
+    assert lift.slot_types.get('s_20') == V3
+    assert args[1] == 's_20'
+
+def test_packed_constant_load_is_pure():
+    from il2cpp.dec.flow import _FlowMixin
+    assert _FlowMixin._PURE_LOAD_RX.match('(float2)(0.0f, 1.0f)')
+    assert not _FlowMixin._PURE_LOAD_RX.match('(float2)(Foo(), 1.0f)')
+    dec = Decompiler.__new__(Decompiler)
+    lines = ['object obj34 = (float2)(0.0f, 1.0f);',
+             'UnityEngine.Gizmos.set_color(UnityEngine.Color.cyan);']
+    assert dec._drop_dead_locals(lines) == lines[1:]
+
+def _sub_lines(lines):
+    dec = Decompiler.__new__(Decompiler)
+    return dec._subexpr_cse(list(lines))
+
+
+def test_subexpr_pow2_chain_folds():
+    lines = ['int num2 = ((num1 > 16) ? num1 : 16) - 1;',
+             'int num3 = num2 | ((num1 > 16) ? num1 : 16) - 1 >> 16;']
+    assert _sub_lines(lines) == ['int num2 = ((num1 > 16) ? num1 : 16) - 1;',
+                                 'int num3 = num2 | num2 >> 16;']
+
+
+def test_subexpr_nested_or_chain_folds():
+    lines = ['int num1 = ((requiredCapacity <= 16) ? 16 : requiredCapacity) - 1;',
+             'int num2 = num1 | ((requiredCapacity <= 16) ? 16 : requiredCapacity) - 1 >> 16;',
+             'int num3 = num2 | (num1 | ((requiredCapacity <= 16) ? 16 : requiredCapacity) - 1 >> 16) >> 8;']
+    assert _sub_lines(lines)[2] == 'int num3 = num2 | num2 >> 8;'
+
+
+def test_subexpr_declines_calls_and_new():
+    lines = ['int num3 = num2 | Foo(num1) >> 16;',
+             'object obj9 = new Vector3 { x = contact1.pointB.x };',
+             'object obj10 = new Vector3 { x = contact1.pointB.x };']
+    assert _sub_lines(lines) == lines
+
+
+def test_subexpr_killed_by_store_label_and_loop():
+    a = ['int num2 = ((num1 > 16) ? num1 : 16) - 1;',
+         'num1 = x;',
+         'int num3 = num2 | ((num1 > 16) ? num1 : 16) - 1 >> 16;']
+    assert _sub_lines(a) == a
+    b = ['int num2 = ((num1 > 16) ? num1 : 16) - 1;',
+         'goto L_1;',
+         'L_1:',
+         'int num3 = num2 | ((num1 > 16) ? num1 : 16) - 1 >> 16;']
+    assert _sub_lines(b) == b
+    c = ['int num2 = ((num1 > 16) ? num1 : 16) - 1;',
+         'while (c)',
+         '{',
+         'int num3 = num2 | ((num1 > 16) ? num1 : 16) - 1 >> 16;',
+         '}']
+    assert _sub_lines(c) == c
+
+
+def test_subexpr_unstable_roots_decline_but_obj_roots_fold():
+    # phi/bool/float bit-temps and stack homes are foreign namespaces.
+    assert _sub_lines(['int num1 = v7.distance + 1;',
+                       'int num2 = v7.distance + 2;']) == [
+                       'int num1 = v7.distance + 1;',
+                       'int num2 = v7.distance + 2;']
+    # obj-rooted member fragment with an anchor decl folds later uses.
+    assert _sub_lines(['object obj12 = contact1.distance;',
+                       'int num1 = contact1.distance + 1;']) == [
+                       'object obj12 = contact1.distance;',
+                       'int num1 = obj12 + 1;']
+
+VT11 = (0, 0x11 << 16)
+
+
+def _home_lifter(static=False, params=(), rty=None):
+    from types import SimpleNamespace as NS2
+    il = NS2(
+        _synthetic_inst=lambda base, args: (0x70000000, 0x15 << 16)
+        if base == (0, 0x11 << 16) and tuple(args) == (VT11,) else None,
+        _method_spec_type_args=lambda inst: [VT11] if inst == 7 else None,
+        method_specs=[(0, 7, -1)],
+        types=[(0, (0x11 << 16) | (1 << 29))],
+        typedefs=[NS2(is_valuetype=True)],
+        methods=[NS2(declaring=0, is_static=static)],
+    )
+    il.meta = NS2(methods=il.methods, typedefs=il.typedefs,
+                  method_params=lambda m: [NS2(type=t) for t in params])
+    lift = lifter(il=il)
+    lift.meta = il.meta
+    lift.slot_types, lift._type_hints = {}, {}
+    return lift
+
+
+def test_proved_struct_home_instance_receiver():
+    lift = _home_lifter()
+    assert lift._proved_struct_home(('generic', 0), ['&s_80', 'recv'], None) ==         ('s_80', (0x70000000, 0x15 << 16))
+
+
+def test_proved_struct_home_static_needs_struct_return():
+    lift = _home_lifter(static=True)
+    assert lift._proved_struct_home(('generic', 0), ['&s_20'], VT11) ==         ('s_20', (0x70000000, 0x15 << 16))
+    assert lift._proved_struct_home(('generic', 0), ['&s_20'], None) is None
+    assert lift._proved_struct_home(('generic', 0), ['&s_20'], (0, 0x12 << 16)) is None
+
+
+def test_proved_struct_home_declines_params_and_shapes():
+    lift = _home_lifter(static=True)
+    assert lift._proved_struct_home(('generic', 0), ['&s_20'], VT11) is not None
+    lift2 = _home_lifter(static=True)
+    lift2.il.meta.method_params = lambda m: [NS(type=0)]
+    assert lift2._proved_struct_home(('generic', 0), ['&s_20'], VT11) is None
+    assert lift._proved_struct_home(('method', 0), ['&s_20'], VT11) is None
+    assert lift._proved_struct_home(('generic', 0), ['s_20'], VT11) is None
+    assert lift._proved_struct_home(('generic', 99), ['&s_20'], VT11) is None
+
+def _acc_lifter(static=False, valuetype=False, generic=False):
+    lift = lifter()
+    lift.meta = NS(
+        typedefs=[NS(is_valuetype=valuetype,
+                     generic_container=0 if generic else -1)],
+        methods=[NS(declaring=0, is_static=static)],
+    )
+    return lift
+
+
+def test_accessor_receiver_hint_types_slots():
+    from il2cpp.expr import Expr as _E
+    lift = _acc_lifter()
+    m = lift.meta.methods[0]
+    assert lift._hint_accessor_recv(_E('s_90', None, 'local'), m) ==         ('s_90', (0, 0x12 << 16))
+    liftv = _acc_lifter(valuetype=True)
+    mv = liftv.meta.methods[0]
+    assert liftv._hint_accessor_recv(_E('&s_50', None, 'ptr'), mv) ==         ('s_50', (0, 0x11 << 16))
+    assert liftv._hint_accessor_recv(_E('s_50', None, 'local'), mv) ==         ('s_50', (0, 0x11 << 16))
+
+
+def test_accessor_receiver_hint_declines():
+    from il2cpp.expr import Expr as _E
+    lift = _acc_lifter()
+    m = lift.meta.methods[0]
+    assert lift._hint_accessor_recv(_E('s_90', None, 'ptr'), m) is None
+    assert lift._hint_accessor_recv(_E('x.y', None, 'obj'), m) is None
+    assert lift._hint_accessor_recv(_E('v7', None, '?'), m) is None
+    assert lift._hint_accessor_recv(_E('s_90', None, 'local'),
+                                    _acc_lifter(static=True).meta.methods[0]) is None
+    liftg = _acc_lifter(generic=True)
+    assert liftg._hint_accessor_recv(_E('s_90', None, 'local'),
+                                     liftg.meta.methods[0]) is None
+    assert lift._hint_accessor_recv(None, m) is None
+    assert lift._hint_accessor_recv(_E('s_90', None, 'local'), None) is None
+
+def _cp_lines(lines):
+    dec = Decompiler.__new__(Decompiler)
+    return dec._copy_prop(list(lines))
+
+
+def test_copy_prop_declines_concrete_mismatch():
+    lines = ['System.Collections.Generic.Dictionary_2<A, B>.Enumerator obj4 = obj3.GetEnumerator();',
+             'UnityEngine.UI.Selectable obj6 = obj4;',
+             'obj6.navigation = obj16;']
+    assert _cp_lines(lines) == lines
+
+
+def test_copy_prop_folds_same_and_object():
+    assert _cp_lines(['System.TimeSpan obj14 = obj13;',
+                      'use(obj14);']) == ['use(obj13);']
+    assert _cp_lines(['object obj7 = obj4;',
+                      'use(obj7, obj4);']) == ['use(obj4, obj4);']
+
+def test_flush_pending_calls_with_tied_defpos():
+    # 129 build fallbacks: two pending calls sharing one defpos idx
+    # crashed `sorted` on Expr-vs-Expr compare. Ties keep insertion
+    # order now (stable key sort), deterministically.
+    from il2cpp.expr import Expr as _E
+    lift = lifter()
+    blk = NS(stmts=[])
+    e1 = _E('Foo()', None, 'obj')
+    e1._defpos = (blk, 0)
+    e2 = _E('Bar()', None, 'obj')
+    e2._defpos = (blk, 0)
+    lift.out = []
+    lift._pending_calls = [(e1, 1, None), (e2, 2, None)]
+    lift._flush_pending_calls(None)
+    assert blk.stmts == ['Foo();', 'Bar();']
+
+def test_kill_one_preserves_method_identity():
+    # 8 sweep failures: a killed methodinfo temp lost `_mi` (kind kept),
+    # crashing the delegate path that indexes it. The temp freezes the
+    # exact value, so identity proofs survive the move.
+    from il2cpp.expr import Expr as _E
+    lift = lifter()
+    e = _E('SomeMethod', None, 'methodinfo')
+    e._mi = 42
+    e._usg_idx = 7
+    t = lift._kill_one(e, 'SomeMethod', {})
+    assert t.text != 'SomeMethod'
+    assert t.kind == 'methodinfo'
+    assert t._mi == 42
+    assert t._usg_idx == 7
+
+def test_wb_operands_numeric_dst_renders_deref():
+    # A constant-folded null-base address is not a variable: `16 = v`
+    # never parses. The deref spelling parses and matches the
+    # plain-store twin so the duplicate still drops.
+    lift = lifter()
+    assert lift._wb_operands(['16', 'num3'], [None, None]) == \
+        ('((byte*)16)[0]', 'num3')
+    assert lift._wb_operands(['(16)', 'num3'], [None, None]) == \
+        ('((byte*)16)[0]', 'num3')
+    assert lift._wb_operands(['s_20', 'num3'], [None, None]) == \
+        ('s_20', 'num3')
+
+def test_subexpr_call_paren_survives_fold():
+    # 77059: folding the argument of a generic call must keep the
+    # call's own parens (`ToList<X>(obj)` never becomes `ToList<X>obj`).
+    assert _sub_lines(['object obj9 = a.B;',
+                       'object obj23 = System.Linq.Enumerable.ToList<X>(a.B);']) == [
+                       'object obj9 = a.B;',
+                       'object obj23 = System.Linq.Enumerable.ToList<X>(obj9);']
+    assert _sub_lines(['object obj9 = a.B;',
+                       'object obj23 = sub_1a2b/*shared body, 2 candidates*/(a.B);']) == [
+                       'object obj9 = a.B;',
+                       'object obj23 = sub_1a2b/*shared body, 2 candidates*/(obj9);']
+
+def test_unsafify_cast_prefixed_const_deref():
+    # `(uint*)*16` (folded null-base) is not a multiplication: the
+    # paren group is cast-shaped, so the inner deref drops and the
+    # honest address form parses. Operand parens never match.
+    from il2cpp.dec.textpass import _TextPassMixin
+    t = _TextPassMixin()
+    assert t._unsafify('((uint*)*16 + 0x3c)[0] = batchLayerMask;') == \
+        '((uint*)16 + 0x3c)[0] = batchLayerMask;'
+    assert t._unsafify('y = (a + b)*16;') == 'y = (a + b)*16;'
+    assert t._unsafify('x = (uint*)p + 4;') == 'x = (uint*)p + 4;'
+
+def _bs_lines(lines):
+    dec = Decompiler.__new__(Decompiler)
+    return dec._bool_sugar(list(lines))
+
+
+def test_bool_sugar_keeps_joined_ternary_pair():
+    # 101899: `(A ? 1 : 0) & (B ? 1 : 0)` is not a flaggable paren wrap;
+    # the lazy group used to span the join and drop parens asymmetrically.
+    line = ('bool flag1 = (body == x ? 1 : 0) & '
+            '(finally_ == y ? 1 : 0);')
+    assert _bs_lines([line]) == [line]
+
+
+def test_bool_sugar_still_folds_simple_wraps():
+    assert _bs_lines(['bool flag1 = (a == b ? 1 : 0);']) == \
+        ['bool flag1 = a == b;']
+    assert _bs_lines(['flag1 = (a == b ? 1 : 0);']) == ['flag1 = a == b;']
+
+def test_simplify_cond_keeps_partial_negation():
+    # MinMaxAABB: `!(A) & (B)` is not a whole negation; simplifying it
+    # drops the `!` and strands the `&` arm outside the head.
+    from il2cpp import Decompiler
+    assert Decompiler._simplify_cond('!(a) & (b)') == '!(a) & (b)'
+    assert Decompiler._simplify_cond('!((a) & (b))') == '!((a) & (b))'
+    assert Decompiler._simplify_cond('!(a == b)') == 'a != b'
+    assert Decompiler._simplify_cond('!(a)') == '!(a)'
+
+def test_fold_consts_keeps_call_arguments():
+    # XmlNodeConverter: `s_28.ctor(0 + 1)` is a call, not grouping --
+    # folding it deletes the argument list (`s_28.ctor1`).
+    from il2cpp.dec.textpass import _TextPassMixin as _T
+    assert _T._fold_consts('s_28.ctor(0 + 1);') == 's_28.ctor(0 + 1);'
+    assert _T._fold_consts('x = (0 + 1);') == 'x = 1;'
+    assert _T._fold_consts('foo((0 + 1));') == 'foo(1);'

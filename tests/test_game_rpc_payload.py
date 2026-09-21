@@ -51,6 +51,6 @@ def test_stores_use_typed_widths_and_pointer_first_order(game_decompiler):
 def test_offset_chain_has_one_typed_temp_per_extent(game_decompiler):
     text = body(game_decompiler)
     assert text.count('int num5 = num4 + (Fusion.Native.CopyFromArray<int>(') == 1
-    assert text.count('+ 12 + 4 + bytePtr1, inventoryAmounts_)') == 1
+    assert text.count('num4 + bytePtr1, inventoryAmounts_)') == 1
     assert 'simulationMessagePtr1->Offset' in text
     assert 'this._runner.SendRpc(simulationMessagePtr1);' in text

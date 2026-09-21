@@ -1445,8 +1445,15 @@ class _FlowMixin:
     # only accepted spelling, so every dead
     # `objN = typeof(X).__static_fields;` spill survived all three
     # dead-store drops. Member chains only -- no calls, no indexers.
+    # packed SIMD constant-pool loads (`(float2)(0.0f, 1.0f)`, the only
+    # packed spelling the lifter emits) are pure construction over
+    # literals: an unread one drops like any dead load. Paren-free args
+    # only, mirroring the typeof carve-out above -- a later pass may
+    # substitute a call into the args, and erasing that call with the
+    # dead store would drop a real effect.
     _PURE_LOAD_RX = re.compile(
         r'^(?:[\w.\[\] +-]+\.getClass\(\)'
-        r'|typeof\([^()]*\)(?:\.(?:<>)*[A-Za-z_]\w*)*)$')
+        r'|typeof\([^()]*\)(?:\.(?:<>)*[A-Za-z_]\w*)*'
+        r'|\(float2\)\([^()]*\))$')
 
     _RHS_TEXT_RX = re.compile(r'=\s*(.*);\s*$')

@@ -608,6 +608,10 @@ class _DataflowMixin:
         out.append(s[last:])
         return ''.join(out)
 
+    _CP_DECL_RX = re.compile(r'^\s*(?!return\b)([A-Za-z_@][^=;(){}]*?)\s+'
+                             r'(obj\d+|num\d+|flag\d+|real\d+|t\d+)\s*=(?![=])')
+    _CP_OBJECT_TYPES = frozenset(('object', 'System.Object'))
+
     def _copy_prop(self, lines: List[str]) -> List[str]:
         """Forward substitution for pure local-to-local copies (todo SS3
         #3: 171k `objN = objM;` + 2.1k `objN = this;` lines), then a
@@ -624,6 +628,11 @@ class _DataflowMixin:
         LOC = self._LOC_RX
         out = []
         active = {}
+        decl_ty = {}
+        for _st in lines:
+            _m = self._CP_DECL_RX.match(_st.strip())
+            if _m and _m.group(2) not in decl_ty:
+                decl_ty[_m.group(2)] = _m.group(1).strip()
         frames = []          # per brace level: [keys added there, is_loop]
         in_loop = []         # per emitted line: inside any loop frame
         last_ctrl = ''
@@ -680,7 +689,16 @@ class _DataflowMixin:
             if m and self._CP_BARE_RX.match(m.group(2)) \
                     and m.group(1) != m.group(2):
                 src = active.get(m.group(2), m.group(2))
-                active[m.group(1)] = src
+                dt = decl_ty.get(m.group(1))
+                st = decl_ty.get(src)
+                if dt is None or st is None \
+                        or dt in self._CP_OBJECT_TYPES \
+                        or st in self._CP_OBJECT_TYPES or dt == st:
+                    active[m.group(1)] = src
+                # else: declared concrete types disagree (a struct home
+                # copied over a typed temp, or vice versa) -- the copy is
+                # not value-preserving, so it never registers; both sides
+                # keep their own proved spellings.
                 if frames:
                     frames[-1][0].append(m.group(1))
             if self._CP_BREAK_RX.match(s2):
@@ -1024,6 +1042,276 @@ class _DataflowMixin:
         rx = re.compile(r'\b(%s)\b' % '|'.join(re.escape(t) for t in alias))
         return [rx.sub(lambda mm: alias.get(mm.group(1), mm.group(1)), st)
                 for st in out]
+
+    _SUB_DECL_TOK_RX = re.compile(r'^(num\d+|obj\d+|t\d+)$')
+    _SUB_OP_RX = re.compile(r'[.\[?+\-*/%&|^><]')
+    _SUB_NEW_RX = re.compile(r'(?<![\w.])new\s')
+    _SUB_UNSTABLE_RX = re.compile(r'(?<![\w.])(?:flag\d+|real\d+|v\d+|s_[0-9a-fA-F]+)(?![\w])')
+
+    def _sub_split_ternary(self, frag):
+        """Split the first `cond ? a : b` at its own nesting depth, or
+        None when the shape is not exactly that (nested/missing colons
+        decline; `??`, `?.` and quoted text never reach here -- the caller
+        filters them first). Depth is relative: real ternaries sit inside
+        grouping parens (`(T) - 1`), so absolute depth-0 matching would
+        miss every one. Parts may carry unbalanced parens; purity checks
+        do not care, and rewrites are literal text swaps."""
+        n = len(frag)
+        depth = 0
+        q = -1
+        dq = 0
+        i = 0
+        while i < n:
+            c = frag[i]
+            if c in '([{':
+                depth += 1
+            elif c in ')]}':
+                depth -= 1
+            elif c == '?':
+                q = i
+                dq = depth
+                break
+            i += 1
+        if q < 0:
+            return None
+        depth = dq
+        for j in range(q + 1, n):
+            c = frag[j]
+            if c in '([{':
+                depth += 1
+            elif c in ')]}':
+                depth -= 1
+            elif c == ':' and depth == dq and frag[j + 1:j + 2] != ':':
+                return (frag[:q], frag[q + 1:j], frag[j + 1:])
+        return None
+
+    def _sub_pure(self, frag):
+        """True when `frag` is a reusable pure computation: the exact
+        `_value_cse` purity test (`_IMPURE` over the typeof-carved text),
+        plus no allocation identity (`new`), no lambdas, no quoted text,
+        no `??`/`?.`, and at least one member/index/ternary/arithmetic
+        operator (bare-token copies stay in `_copy_prop`'s domain). A `?`
+        must split as a well-formed ternary; unstable namespaces
+        (bool/float bit-temps, phi `v`-temps, stack homes) decline --
+        their passes own them. All checks run on the whole fragment:
+        impurity anywhere (even inside one ternary arm) declines the
+        whole seed."""
+        if not frag:
+            return False
+        if '"' in frag or "'" in frag or '=>' in frag:
+            return False
+        if re.search(r'\?\?|\?\.', frag):
+            return False
+        if self._SUB_NEW_RX.search(frag):
+            return False
+        if self._IMPURE.search(self._VAL_PURETYOF_RX.sub('', frag)):
+            return False
+        if self._SUB_UNSTABLE_RX.search(frag):
+            return False
+        if '?' in frag and self._sub_split_ternary(frag) is None:
+            return False
+        if not self._SUB_OP_RX.search(frag):
+            return False
+        return True
+
+    def _sub_code_spans(self, line):
+        """(start, end) code spans of `line`: string literals cut out via
+        the literal split and `//` tails cut per segment, so a rewrite
+        can never land inside either. Block comments are refused by the
+        caller when a match would overlap one."""
+        spans = []
+        parts = self._VAL_STRLIT_SPLIT.split(line)
+        off = 0
+        for k, p in enumerate(parts):
+            if k % 2 == 0:
+                cut = p.find('//')
+                seg = p if cut < 0 else p[:cut]
+                spans.append((off, off + len(seg)))
+            off += len(p)
+        return spans
+
+    def _sub_comment_spans(self, line):
+        spans = []
+        i = 0
+        n = len(line)
+        while True:
+            j = line.find('/*', i)
+            if j < 0:
+                break
+            k = line.find('*/', j + 2)
+            if k < 0:
+                spans.append((j, n))
+                break
+            spans.append((j, k + 2))
+            i = k + 2
+        return spans
+
+    def _sub_replace_seg(self, seg, frag, tok):
+        """First whole-token occurrence of `frag` in one code segment.
+        A match extended by an identifier char on the right is a longer
+        name, not this value; a match preceded by an identifier char, `.`
+        or `>` is a member suffix, not this value (same discipline as
+        `_bind_replace`). Member access, calls, indexing and operators
+        ON the value still fold. One redundant paren layer left around
+        the bare temp strips: temps are atoms, grouping proves nothing.
+        Returns (new_seg, hit)."""
+        j = seg.find(frag)
+        if j < 0:
+            return seg, False
+        n = len(frag)
+        before = seg[j - 1] if j > 0 else ''
+        after = seg[j + n] if j + n < len(seg) else ''
+        if (before and (before.isalnum() or before in '_.>$')) \
+                or (after and (after.isalnum() or after == '_')):
+            return seg, False
+        new = seg[:j] + tok + seg[j + n:]
+        pre = j - 1
+        post = j + len(tok)
+        # only a grouping paren may go: a call/type/index context
+        # (`name(tok)`, `C<T>(tok)`, `a[i](tok)`, `sub_X/*c*/(tok)`)
+        # needs its parens to stay a call, while nested grouping
+        # (`f((tok))`) still folds.
+        if pre >= 0 and post < len(new) and new[pre] == '(' and new[post] == ')' \
+                and not (pre > 0 and (new[pre - 1].isalnum() or new[pre - 1] in '_.>]/$')):
+            return new[:pre] + tok + new[post + 1:], True
+        return new, True
+
+    def _subexpr_cse(self, lines: List[str]) -> List[str]:
+        """Nested pure-subexpression reuse (blocker 4: power-of-two fill).
+        `_value_cse` folds only whole-RHS duplicate decls of `obj/t`
+        temps and declines `?`; the lifter binds per expression object,
+        so two executions of one pure text never share a temp. This pass
+        closes exactly that gap for pure subexpressions: an anchor decl
+        (`num`/`obj`/`t` temp, single-assigned, pure RHS) lends its token
+        to later occurrences of its RHS text inside other decl RHSs
+        (`num3 = num2 | num2 >> 16` instead of re-expanding `T-1`).
+        Soundness mirrors the strictest existing passes: depth-scoped
+        anchors (like `_value_cse`), full reset on labels/gotos/case/
+        catch/finally plus return/throw/break/continue (like `_copy_prop`),
+        store/byref kills from any depth, no use across loop frames or
+        backward-goto spans (like `_drop_dead_lastdef`), single-assignment
+        anchors never address-taken (like `_value_cse`), and the fix-58b
+        invariant holds because call-shaped and `new` fragments can never
+        seed (a second identical call is a second execution)."""
+        for _ in range(4):
+            n = len(lines)
+            clean = [self._CMT_RX.sub('', _LIT_RX.sub('""', s.strip()))
+                     for s in lines]
+            in_loop = [False] * n
+            frames = []
+            last_ctrl = ''
+            for i, s in enumerate(clean):
+                in_loop[i] = any(frames)
+                if s == '{':
+                    frames.append(bool(self._LD_LOOP_RX.match(last_ctrl)))
+                    in_loop[i] = any(frames)
+                elif s.startswith('}'):
+                    if frames:
+                        frames.pop()
+                last_ctrl = s
+            label_at = {}
+            for i, s in enumerate(clean):
+                m = self._LD_LBL_RX.match(s)
+                if m:
+                    label_at.setdefault(m.group(1), i)
+            back = [False] * n
+            for j, s in enumerate(clean):
+                for g in self._LD_GOTO_RX.finditer(s):
+                    k = label_at.get(g.group(1))
+                    if k is not None and k <= j:
+                        for x in range(k, j + 1):
+                            back[x] = True
+            n_assigns = {}
+            taken = set()
+            for st in lines:
+                ms = ''.join(p if k % 2 == 0 else ''
+                             for k, p in enumerate(self._VAL_STRLIT_SPLIT.split(st.strip())))
+                for mm in self._VAL_KILL_ASSIGN_RX.finditer(ms):
+                    n_assigns[mm.group(1)] = n_assigns.get(mm.group(1), 0) + 1
+                for mm in self._VAL_KILL_BYREF_RX.finditer(ms):
+                    taken.add(mm.group(1))
+            anchors = []
+            anchor_at = {}
+            depth = 0
+            for i, st in enumerate(lines):
+                s = st.strip()
+                if s == '{':
+                    depth += 1
+                    continue
+                if s == '}':
+                    depth -= 1
+                    continue
+                m = self._LDEF_RX.match(s)
+                if not m:
+                    continue
+                tok, rhs = m.group(1), m.group(2)
+                if not self._SUB_DECL_TOK_RX.match(tok):
+                    continue
+                if n_assigns.get(tok, 0) != 1 or tok in taken:
+                    continue
+                if not self._sub_pure(rhs):
+                    continue
+                idents = {mm.group(0) for mm in re.finditer(r'[A-Za-z_]\w*', rhs)}
+                anchors.append((i, tok, rhs, idents, depth))
+                anchor_at[i] = len(anchors) - 1
+            if not anchors:
+                return lines
+            avail = []
+            depth = 0
+            changed = False
+            for i, st in enumerate(lines):
+                s = st.strip()
+                if s == '{':
+                    depth += 1
+                    continue
+                if s == '}':
+                    depth -= 1
+                    avail = [a for a in avail if a[4] <= depth]
+                    continue
+                if self._LBLDEF_RX.match(s) or 'goto ' in s \
+                        or s.startswith(('case ', 'default:', 'catch', 'finally')) \
+                        or self._CP_BREAK_RX.match(s):
+                    avail = []
+                    continue
+                ms = ''.join(p if k % 2 == 0 else ''
+                             for k, p in enumerate(self._VAL_STRLIT_SPLIT.split(s)))
+                kills = {mm.group(1) for mm in self._VAL_KILL_ASSIGN_RX.finditer(ms)}
+                kills |= {mm.group(1) for mm in self._VAL_KILL_BYREF_RX.finditer(ms)}
+                if kills:
+                    avail = [a for a in avail if not (a[3] & kills)]
+                if i in anchor_at:
+                    avail.append(anchors[anchor_at[i]])
+                m = self._LDEF_RX.match(s)
+                if not m or not self._SUB_DECL_TOK_RX.match(m.group(1)):
+                    continue
+                for a_idx, a_tok, a_frag, a_id, a_dep in sorted(
+                        [a for a in avail if a[0] < i and not in_loop[a[0]]
+                         and not in_loop[i] and not back[a[0]] and not back[i]],
+                        key=lambda a: -len(a[2])):
+                    if a_tok == m.group(1):
+                        continue
+                    spans = self._sub_code_spans(st)
+                    cspans = self._sub_comment_spans(st)
+                    done = False
+                    for b, e in spans:
+                        seg = st[b:e]
+                        if a_frag not in seg:
+                            continue
+                        new_seg, hit = self._sub_replace_seg(seg, a_frag, a_tok)
+                        if not hit:
+                            continue
+                        j = seg.find(a_frag)
+                        if any(j + b < ce and j + b + len(a_frag) > cb for cb, ce in cspans):
+                            continue
+                        lines[i] = st[:b] + new_seg + st[e:]
+                        changed = True
+                        done = True
+                        break
+                    if done:
+                        break
+            if not changed:
+                return lines
+        return lines
 
     # ------------------------------------------------------------------
     _ENTER_RX = re.compile(r'^System\.Threading\.Monitor\.Enter\((.+), (&[\w.]+)\);$')

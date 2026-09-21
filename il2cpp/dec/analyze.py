@@ -19,6 +19,8 @@ class _AnalyzeMixin:
         m_returns = self._returns_value(m)
         self.phi_pre = {}
         L._phi_bytes = {}
+        L._aggregate_phi_sources = {}
+        L._aggregate_phi_types = {}
 
         def fresh_regs(counting):
             # pass 1 never counts uses (dry), so it runs on a plain dict:
@@ -511,7 +513,8 @@ class _AnalyzeMixin:
                         # is often an untyped load, its back edge the typed
                         # arithmetic that updates the counter)
                         nn = [t for t in tys if t is not None]
-                        pty = nn[0] if len(set(nn)) == 1 else None
+                        type_key = getattr(L.il, '_closed_type_key', lambda t: t)
+                        pty = nn[0] if nn and len({type_key(t) for t in nn}) == 1 else None
                         if len(kinds) == 1:
                             pkind = next(iter(kinds))
                         else:
@@ -519,7 +522,12 @@ class _AnalyzeMixin:
                             pkind = next(iter(nnk)) if len(nnk) == 1 else '?'
                         if pty is not None:
                             self._var_types.setdefault(phi[key], pty)
+                        L._aggregate_phi_sources[phi[key]] = vals
                         merged[k] = Expr(phi[key], pty, pkind)
+                        if k.startswith('!mem:') and pty is not None:
+                            width = int(k.rsplit(':', 1)[1])
+                            if L.il._sf_field_size(pty, 0) == width:
+                                merged[k] = L._fragment(merged[k], 0, width)
                 # Kill-on-write across phi copies: a copy on an in-edge
                 # assigns the phi var, so any register whose text reads that
                 # var would re-render with the post-copy value inside this
@@ -595,6 +603,13 @@ class _AnalyzeMixin:
                 finally:
                     L.out = save_out
                 vals[p] = v.text
+                aggregate_ty = L._aggregate_phi_types.get(name)
+                if aggregate_ty is not None:
+                    size = L.il._sf_field_size(aggregate_ty, 0)
+                    typed = L._piece_value(v, 0, size, aggregate_ty)
+                    if typed is not None:
+                        vals[p] = typed.text
+                        self._var_types[name] = aggregate_ty
                 raw = getattr(v, '_bytes', None)
                 if raw is None:
                     sl = getattr(v, '_slice', None)

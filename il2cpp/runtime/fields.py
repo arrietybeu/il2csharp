@@ -355,16 +355,23 @@ class _FieldsMixin:
           AdjustmentRule.get_DaylightTransitionStart 0x180935e40, size 24
             -- buffer RCX, `this` RDX, `mov rax,rcx`.
 
-        A GENERICINST (0x15) return is deliberately NOT sret here: its
-        size lives in the instantiation, not in this table, and the
-        callers that care already stand down on that shape (fix 54).
+        A GENERICINST (0x15) return uses the hidden buffer exactly when
+        its closed layout proves a non-trivial size (S6: the 72-byte
+        closed Enumerator); anything unproven keeps the old stand-down
+        (fix 54), as do by-value sizes and byref returns.
         """
         if rty is None:
             return False
         bits = rty[1]
         if (bits >> 29) & 1:
             return False               # byref: a pointer, comes back in RAX
-        if ((bits >> 16) & 0xFF) != 0x11:
+        te = (bits >> 16) & 0xFF
+        if te == 0x15:
+            sz = self._sf_field_size(rty, 0)
+            if sz is None:
+                return False
+            return sz not in (1, 2, 4, 8)
+        if te != 0x11:
             return False
         sz = self.value_type_size(rty[0])
         if sz is None:
@@ -493,6 +500,14 @@ class _FieldsMixin:
         if te == 0x1c:
             return self._system_object_td()
         if te == 0x15:
+            synth = self.__dict__.get('_synthetic_insts', {}).get(data)
+            if synth is not None:
+                base_tup = synth[0]
+                if base_tup:
+                    te2 = self._type_enum(base_tup)
+                    if te2 in (0x11, 0x12) and base_tup[0] < len(self.meta.typedefs):
+                        return base_tup[0]
+                return None
             o = self.bin.va2off(data)
             if o is None:
                 return None
@@ -678,6 +693,9 @@ class _FieldsMixin:
         so the static-blob walk can substitute open-generic fields)."""
         if ty is None or self._type_enum(ty) != 0x15:
             return None
+        synth = self.__dict__.get('_synthetic_insts', {}).get(ty[0])
+        if synth is not None:
+            return tuple(synth[1])
         o = self.bin.va2off(ty[0])
         if o is None:
             return None
@@ -840,6 +858,15 @@ class _FieldsMixin:
             if ty is None:
                 bad = True
                 break
+            if self._type_enum(ty) == 0x15 and self._closed_type_key(ty) is None:
+                # a nested open instantiation (a KVP field inside an
+                # Enumerator chain): close it through the enclosing args
+                # so deeper descents see concrete field types. Fields can
+                # never mention method params, so MVAR declines honestly.
+                ty = self._subst_closed(ty, args, None)
+                if ty is None:
+                    bad = True
+                    break
             sa = self._sf_ty_size_align(ty, args, depth + 1)
             if sa is None:
                 bad = True

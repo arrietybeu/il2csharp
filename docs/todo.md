@@ -1,4 +1,189 @@
 # il2csharp — TODO (open work and historical triage)
+## Current work: recovery follow-up round 3e (2026-09-20, unpromoted)
+
+Continued TODONOW.md's blockers 1-3 plus cosmetic items 4-5. Same rules:
+`final_out/` untouched, no snapshot regen, no promotion. All `il2cpp/`
+edits via binary patches with CRLF/no-BOM asserts; `tests/` edits LF.
+`tests/test_recovery_completion.py` grows 5 -> 17 synthetic tests;
+`tests/test_game_synth_types.py` pins 4 synthetic-type behaviors.
+Accessor-receiver hint (`_hint_accessor_recv` at the `set_` fold):
+a resolved instance accessor proves its receiver through the
+non-generic declaring typedef (slots/bare `t`-temps; byref-`this`
+homes for valuetypes; dotted/`this`/generic/static/foreign kinds
+decline). 23762's key is now `Selectable selectable1` with a
+guarded typed assignment. 2 unit tests.
+Copy-prop type guard: registering `dst = src` declines when both
+sides declare different concrete non-object types (a struct home
+copied over a typed temp is not value-preserving). Keeps 23762's key
+and assignment from merging into the enumerator name; same-type and
+object copies fold as before. 2 unit tests. Residual: `Selectable
+selectable1 = dictionary22;` over-claims a 16-byte lane copy as a
+full-struct copy (pre-existing whole-slot convention); single naming
+forces one error site either way -- documented, awaits byte-range
+slot versioning (the sidecar).
+S6 layout steps (subagent-verified byte-exact vs native): nested-open
+fields close through enclosing args in `_sf_infl_chain` (`_current`
+carries closed KVP); `returns_sret` admits closed 0x15 with proved
+size outside {1,2,4,8} (72-byte Enumerator folds the hidden buffer;
+unproven shapes keep the fix-54 stand-down).
+Candidate-tree gate for the five affected types (ConsoleUINavigation,
+GlobalUINavigation, CollisionEventHandler, AnimationEventTrigger,
+MicAudioCanvas, `--types` one build each into Temp): strict build 54
+bodies / 0 failed / 0 fallbacks; tree-sitter parse 0/0/0; Roslyn probe
+83 errors, all CS0246 missing-assembly scope noise, none on any
+recovered identifier; before/after diff strictly improving (no more
+elided static stores, unsafe raw blocks, or object soup where typed).
+Full-tree compile remains a promotion-time gate.
+
+- Blocker 2 LANDED (24655 OnEnable): the `t1012__1_0` store was NOT a
+  `_mem_lvalue` bug (probe: `_field_expr` renders the correct
+  `ConsoleUINavigation.<>c.<>9__1_0` every time). Root cause is
+  `_bind`'s blind `str.replace`: binding `...<>c.<>9` rewrote the
+  longer field name mid-identifier. New `_bind_replace` (`expr.py`,
+  used at all 10 `_bind` sites in `lifter/state.py`) rewrites
+  whole-token occurrences only (member access on the value still
+  folds). Store now reads `ConsoleUINavigation.<>c.<>9__1_0 =
+  predicate13;`. 3 unit tests.
+- Blocker 3 LANDED (23761 DisableAllActiveSelectables): three parts.
+  (1) `_hint_arg_types` `&slot` branch now types by-VALUE struct homes
+  from the substituted closed parameter type (`&s_20` + TValue ->
+  Navigation at `Dictionary.Add`; TRUST-gated like the `ref`
+  rewrite, closed-key proof, setdefault). (2) Stack-slot stores of
+  whole-field struct values record the type (`_struct_home_ty`:
+  exact closed valuetype, no slices/parts/addresses). (3) A scalar
+  constant at a struct-typed home's base renders field-precisely
+  (`_home_field_store`: exact-width offset-0 field proof +
+  `_fimm`-compiles gate, else today's scalar). Result: `Navigation
+  navigation1` at `Add`, `navigation2.m_Mode = Mode.None`, no scalar
+  soup; the home-construction residue stays (loop-DCE conservatism is
+  load-bearing) but is fully typed and compiling. 3 unit tests.
+- Blocker 5 LANDED (23917 contact): the lifter emits exactly one
+  packed spelling, `(float2)(lit, lit)` over float literals (constant
+  pool) -- provably pure. `_PURE_LOAD_RX` admits paren-free-arg
+  `(float2)(...)` (mirroring the `typeof` carve-out; a later
+  substituted call keeps parens and still declines), so the dead
+  packed temp drops in ordinary DCE. Cyan kept. 1 unit test.
+- Improvement (45016 ConvertTo): struct-home recording types the
+  `TimeOfDay` temp (`object obj29` -> `System.TimeSpan timeSpan1`),
+  fixing an object-member access that cannot compile. Consigned to
+  the regen list (below), not reverted.
+- Blocker 4 LANDED (`_subexpr_cse`, new pass after `_value_cse`):
+  anchor decls (`num`/`obj`/`t`, single-assigned, pure RHS) lend their token
+  to later subexpression occurrences (`num3 = num2 | num2 >> 16`). Purity is
+  the exact `_value_cse` test (no auto `?` decline; one well-formed ternary
+  required); kills mirror the strictest passes (depth/labels/goto/case/
+  catch/finally/break-loop-frames/backward-gotos/stores/byref); fix-58b
+  holds (calls/`new` never seed); whole-token replacement with atom-paren
+  strip. Both pow2 sites fold (23761, 23767). 5 unit tests. Side effect:
+  the 25626 offset chain compacts too (`num4 + bytePtr1`, was fully
+  re-expanded) -- the pinning test over-fits the old spelling, consigned
+  to regen, not a revert.
+- Blocker 1 foundation LANDED (table + recursion + homes, zero blast radius):
+  S4 (subagent) root-caused B11's loss: NOT a line pass but
+  `_abandon_at_region_close` firing on the loop latch (region opened at
+  the header, closed on the latch) and emitting `break` + deleting the
+  block's statements -- flow inversion by construction. Fix in
+  `dec/emit.py`: a latch block carrying statements emits label + stmts,
+  marks consumed, emits the backedge copies, and falls off (the
+  structured loop IS the backedge); empty latches keep the old
+  break-out. 23762 now keeps `if (obj5 != null) { obj5.navigation =
+  obj18; }`.
+  S5 (subagent) corrected the call map (MethodRef kind-6 slots prove
+  closed generic identities: GetEnumerator/MoveNext/Dispose/Clear over
+  (Selectable, Navigation); no get_Current call; s_38/s_48 are silent
+  aggregate fills) and designed home typing: `_proved_struct_home`
+  seeds `slot_types` at proved-generic `info` sites (`&s_N`
+  buffer/receiver + closed-struct substitution; static path additionally
+  requires struct return and no byref/pointer params). 23762 now
+  declares `Dictionary_2<...>.Enumerator dictionary21` with named
+  MoveNext/Dispose. s_30 buffer typing skipped (size unprovable for
+  open defs); key/value field subst still needs the sidecar.
+  Fixed along the way: fake-VA allocator is process-wide (class-level
+  `_tn_cache` is shared across Il2Cpp instances -- an order-dependent
+  cross-test collision, caught by the suite).
+
+  `_synthetic_inst` (fake-VA side table on `Il2Cpp`, keyed cache for
+  dry/real stability) + reader branches (`_generic_inst_name`,
+  `_closed_type_key`, `td_of_ty`, `_generic_inst_args`, `_td_of`,
+  `_generic_class_args`, `_byval_struct`, `_type_has_var`) +
+  recursive `_subst_closed` wired into `candidate_return_type`
+  (all-or-None, byref preserved, tails untouched, SRET/`trust`
+  stand-downs frozen). Proved on real rows: `Dictionary_2<Selectable,
+  Navigation>.Enumerator` renders exact, keys structurally, td 1514
+  round-trips; real specs close (`ChangeEvent_1<bool>`). 23762 itself
+  is unchanged (no spec carries our args; interface path dominates) --
+  the receiver-driven + field-sidecar slice stays next per blueprint.
+- DEFERRED with designs (not regressed, still open): blocker 1 remainder
+  (23762: no closed Enumerator/KVP rows exist by scan, so return
+  substitution alone cannot represent the type; deeper: NO MethodSpec
+  carries (Selectable, Navigation), so substitution must be
+  receiver-driven (closed Dictionary row 6766 + open 11337 return), not
+  spec-driven; `type_sizes[1514]` is None and its field chain shows only
+  `_dictionary`, so size/field fast paths need the inflated chain; S1's
+  consumer audit (exact touch list in session record) covers table +
+  reader branches + recursion + home typing, but homes (0x15 excluded
+  from `_struct_home_ty` by design) and field-type substitution at use
+  sites still need a sidecar design -- table-alone buys ~2 decl lines
+  for corpus-wide hot-path churn, so implementation waits for the full
+  blueprint; key/value reads are
+  field loads and the assignment loss is structural -- needs a
+  synthetic nested-type table + home typing + receiver resolution +
+  field substitution; the double Dispose is faithful, two native
+  calls; the finally `obj14.Dispose()` on `&obj3` needs the same
+  struct-typing machinery) and blocker 4 (power-of-two reuse needs
+  subexpression-CSE/value-numbering: `_value_cse` is whole-RHS only
+  and lifter `_bind` is per-OBJECT by fix-58b design; output is
+  correct and compiling today).
+- Crash fixes (prior drift exposed by volume, fixed narrowly): tied
+  pending-call sort (`sorted` on Expr compare -> stable key sort +
+  discovery order; 129 build fallbacks cleared); unknown-size
+  `_stack_store` guard in the sret fold (3 lost bodies recovered);
+  `_kill_one` preserves `_mi`/`_usg_idx` + delegate-index guard (8 sweep
+  `list[None]` crashes cleared). 1 unit test; repro probes in Temp.
+- Parse fixes (prior null-base-address drift): `_wb_operands` renders
+  numeric dst as the twin-matching deref (`16 = v` unparseable);
+  `_unsafify` repairs cast-prefixed `(T*)*N` (multiplication untouched);
+  `_subexpr_cse` paren-strip declines call/type/index/shared-marker
+  contexts (77059 + TextGeneratorUtilities cases). 3 unit tests.
+- Crash repairs (prior volume exposing HEAD-latent bugs, all
+  stash-proven not-mine): tied pending-call `sorted` on Expr compare
+  (129 build fallbacks cleared, discovery order kept); unknown-size
+  `_stack_store` in the sret fold (3 lost bodies recovered);
+  `_kill_one` dropping `_mi`/`_usg_idx` + delegate-index guard (8 sweep
+  crashes cleared). 1 unit test; repro probes in Temp.
+- Parse repairs (prior null-base/bool drift, all stash-proven
+  not-mine): `_wb_operands` renders numeric dst as the twin-matching
+  deref; `_unsafify` repairs cast-prefixed `(T*)*N` (multiplication
+  untouched); `_subexpr_cse` paren-strip declines call/generic/index/
+  shared-marker contexts (77059 + TextGeneratorUtilities cases);
+  `_bool_sugar` paren-wrapped folds take the `[^?]` guard (101899
+  family); `_simplify_cond` requires whole-group negation
+  (MinMaxAABB family). 5 unit tests.
+- Parse-0 repairs (prior drift, each stash-proven not-mine except
+  where noted): `_bool_sugar` paren-wrapped folds take the `[^?]`
+  guard (101899 family: lazy group spanned `&`-joined ternaries);
+  `_simplify_cond` requires whole-group negation (MinMaxAABB family:
+  `!(A) & (B)` is not `!((A) & (B))`); `FOLD_RE` declines call-argument
+  parens like `SUB_CMP_RE` (`s_28.ctor(0 + 1)` kept intact,
+  XmlNodeConverter). 3 unit tests.
+- Gates: strict rebuild 11,181 files / 114,458 bodies / 0 failed / 0
+  fallbacks (matches promoted baseline exactly); brace 0 unbalanced;
+  parse 0 bad / 0 ERROR / 0 MISSING (was 109 / 5349 / 33);
+  portable 751 green (718 + 33 new); full suite 846 passed / 35
+  failed, failure SET byte-identical across every stage. The 34
+  = baseline triaged 22 + 12 inherited-drift items, EACH proven
+  not-from-this-session (prior tree fails the same 12: P6 files 2,
+  unpcklps handler 1, owner-strip 4+closure+45016-line, klass-bind
+  gate 4 incl. 39789/packed/datetime/26747-guard; my tree adds only
+  the 45016 TimeSpan improvement hunk). Per-item evidence in
+  TODONOW.md's session addendum. No new failures from this session
+  (the +1 vs the earlier 34-count is the 25626 improvement pinning the
+  old spelling, plus 5 new CSE tests on the passing side).
+- Leftovers: blocker-1 remainder (receiver-driven substitution +
+  field sidecar + structuring, blueprint ready), Navigation merge-side
+  facts, per-arm Color, 35 golden/review items awaiting gated regen
+  (22 triaged + 12 drift + 1 improvement-pin), promotion (user call).
+
 
 ## Current work: recovery follow-up round 3d (2026-09-20, unpromoted)
 

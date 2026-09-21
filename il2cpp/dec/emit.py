@@ -66,6 +66,24 @@ class _EmitMixin:
                 # body). Emitting the try's `}`/clause here would strand it
                 # before the loop's own `}`/while -- abandon to the caller
                 # and let the parent walk close the region after the loop.
+                # BUT when the latch block carries its own statements they
+                # belong to this iteration (23762: the navigation store on
+                # the non-null path): emit them with the backedge copies
+                # and fall off the end -- the structured loop itself is the
+                # backedge, so no break/exit may render here. Only an empty
+                # latch keeps the old break-out. (`_seh_close_overdue`
+                # cannot close this region: its close == cur is already in
+                # the reachable set it computes.)
+                ab = blocks[cur]
+                if ab.stmts:
+                    if ab.insns:
+                        out.append('%sL_%x:' % (LBL, ab.insns[0].ip))
+                    out.extend(ab.stmts)
+                    ab.consumed = True
+                    hdr = next(iter(stop), -1)
+                    if hdr >= 0:
+                        self._edge(cur, hdr, out)
+                    return
                 self._seh_close_overdue(blocks, out, depth, cur, stop)
                 out.append(self._leave_loop(blocks, cur))
                 return

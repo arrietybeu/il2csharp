@@ -127,6 +127,7 @@ class _StructureMixin:
         # the raw `.<Instance>k__BackingField` -- see _singleton_cse.
         raw = self._singleton_cse(raw)
         raw = self._value_cse(raw)
+        raw = self._subexpr_cse(raw)
         raw = self._copy_prop(raw)
         # fix 49: bare self-copies are no-ops even loop-carried;
         # _copy_prop's substitution MINTS them (backedge phi copy

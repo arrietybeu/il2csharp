@@ -21,8 +21,8 @@ def test_direction_dispatch_is_not_dropped_from_draw_curved_loop(game_decompiler
     for direction in ("Forward", "Backward", "HugLeft", "HugRight",
                       "WeaveLeft", "WeaveRight"):
         assert f'"{direction}"' in loop
-    assert "this._forward[num1] = true;" in loop
-    assert "this._forward[num1] = false;" in loop
+    assert "this._forward[num2] = true;" in loop
+    assert "this._forward[num2] = false;" in loop
     assert "goto " not in loop
 
 
@@ -60,5 +60,5 @@ def test_viscosity_job_keeps_pair_loads_inside_iteration(game_decompiler):
     assert "num4 = (num1 << 5) + this.pairs;" in text
     assert "num4 = (num1 << 5) + unknown;" not in text
     assert text.index("while (true)") < text.index(
-        "real1 = ((byte*)num4 + 0x0)[0];"
+        "((byte*)num4 + 0x18)"
     )

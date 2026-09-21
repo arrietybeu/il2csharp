@@ -75,6 +75,14 @@ class _AggregatesMixin:
     def _piece_value(self, origin, offset, width, expected, depth=0):
         if depth > 8:
             return None
+        sources = getattr(self, '_aggregate_phi_sources', {}).get(origin.text)
+        if expected is not None and sources and all(v is not None for v in sources):
+            values = [self._piece_value(v, offset, width, expected, depth + 1)
+                      for v in sources]
+            if offset == 0 and all(v is not None for v in values):
+                self._aggregate_phi_types[origin.text] = expected
+                self._type_hints[origin.text] = expected
+                return Expr(origin.text, expected, self._ty_kind(expected))
         sl = getattr(origin, '_slice', None)
         if sl is not None and sl[1] != 0:
             return self._piece_value(sl[0], sl[1] + offset, width, expected, depth + 1)
@@ -130,6 +138,46 @@ class _AggregatesMixin:
                 return self._piece_value(value, offset - start, width, expected, depth + 1)
         return None
 
+    def _scalar_parts(self, origin, offset, width, depth=0):
+        """Split a copied value at metadata field boundaries before CFG merging."""
+        if depth > 8:
+            return [(0, origin, offset, width)]
+        if offset == 0 and origin.ty is not None \
+                and self.il._sf_field_size(origin.ty, 0) == width \
+                and self.il._type_enum(origin.ty) not in (0x11, 0x15):
+            return [(0, origin, 0, width)]
+        sl = getattr(origin, '_slice', None)
+        if sl is not None:
+            return self._scalar_parts(sl[0], sl[1] + offset, min(width, sl[2]), depth + 1)
+        parts = getattr(origin, '_parts', None)
+        if parts is not None:
+            result = []
+            for lo, po, off, size in parts:
+                begin, end = max(offset, lo), min(offset + width, lo + size)
+                if begin < end:
+                    for sub, val, voff, count in self._scalar_parts(
+                            po, off + begin - lo, end - begin, depth + 1):
+                        result.append((begin - offset + sub, val, voff, count))
+            return result
+        td = self._td_of(origin.ty) if origin.ty is not None else None
+        if td is None or not self.meta.typedefs[td].is_valuetype:
+            return [(0, origin, offset, width)]
+        result = []
+        chain = getattr(self.il, 'instance_field_chain', lambda _: {})(td) or {}
+        for off, (name, ti) in chain.items():
+            ft = self.il.types[ti]
+            size = self.il._sf_field_size(ft, 0)
+            lo = off - 0x10
+            if size is None or lo < 0:
+                continue
+            begin, end = max(offset, lo), min(offset + width, lo + size)
+            if begin < end:
+                field = Expr(origin.text + '.' + name, ft, self._ty_kind(ft))
+                for sub, val, voff, count in self._scalar_parts(
+                        field, begin - lo, end - begin, depth + 1):
+                    result.append((begin - offset + sub, val, voff, count))
+        return result or [(0, origin, offset, width)]
+
     def _stack_store(self, start, width, value):
         # Memory facts live with register facts, so CFG merges cannot reuse
         # another path's packed bytes. Overlapping stores retain only the
@@ -157,9 +205,10 @@ class _AggregatesMixin:
                 part = (value, 0, width)
             take = part[2] if part[2] < width else width
             if take > 0:
-                self.regs[f'!mem:{start}:{take}'] = self._fragment(value, 0, take)
+                for delta, origin, offset, count in self._scalar_parts(value, 0, take):
+                    self.regs[f'!mem:{start+delta}:{count}'] = self._fragment(origin, offset, count)
 
-    def _stack_piece(self, start, width, expected=None):
+    def _stack_piece(self, start, width, expected=None, allow_gaps=False):
         for key, value in self.regs.items():
             if not key.startswith('!mem:'):
                 continue
@@ -184,16 +233,22 @@ class _AggregatesMixin:
         tiles.sort(key=lambda t: t[0])
         cur, acc = start, []
         for lo, origin, off, n in tiles:
+            if allow_gaps:
+                begin, end = max(start, lo), min(start + width, lo + n)
+                if begin < end:
+                    acc.append((begin - start, origin, off + begin - lo,
+                                end - begin))
+                continue
             if lo + n <= cur:
                 continue
             if lo != cur:
                 break
             take = min(n, start + width - cur)
-            acc.append((cur - start, origin, off + (cur - lo), take))
+            acc.append((cur - start, origin, off + cur - lo, take))
             cur += take
             if cur >= start + width:
                 break
-        if not acc or acc[0][0] != 0:
+        if not acc or (not allow_gaps and acc[0][0] != 0):
             return None
         result = Expr('', None, 'bits')
         result._parts = acc
@@ -273,20 +328,47 @@ class _AggregatesMixin:
             return None
         address = self._stack_address(ins)
         if address is not None:
-            frag = self._stack_piece(address, width)
+            frag = self._stack_piece(address, width, allow_gaps=width >= 16)
             if frag is not None and not frag.text:
                 slot = self.slot_var(ins.memory_displacement)
                 frag.text = slot
                 sty = self.slot_types.get(slot)
                 if sty is not None and frag.ty is None:
                     frag.ty = sty
+            if frag is not None and frag.text:
+                # side-effect-free slot lookup: slot_var CREATES a
+                # stack_map entry, so it must not run eagerly here.
+                # No entry -> decline, today's spelling.
+                slot = getattr(self, 'stack_map', {}).get(
+                    ins.memory_displacement + getattr(self, 'rsp_delta', 0))
+                if slot is not None and frag.text != slot:
+                    # a whole-struct reload of a ctor-constructed home
+                    # is the home itself, not a stale scalar or
+                    # first-field slice: `mov eax,[rsp+48h]` moves all
+                    # 4 bytes of FourCC (34279 `return s_48.m_Code`
+                    # changed the return type), and a default-init tile
+                    # survives under the ctor writes (18054 `return 0`
+                    # dropped the constructed value). Gated on the
+                    # _ctor_slots proof plus a proved struct size equal
+                    # to the load width; anything else keeps today's
+                    # spelling.
+                    sty = self.slot_types.get(slot)
+                    try:
+                        size = self.il._sf_field_size(sty, 0) if isinstance(sty, tuple) else None
+                    except Exception:
+                        size = None
+                    if size == width and size:
+                        td = self._td_of(sty)
+                        if td is not None and self.meta.typedefs[td].is_valuetype:
+                            if slot in getattr(self, '_ctor_slots', set()):
+                                return Expr(slot, sty, 'obj')
             return frag
         if ins.memory_base == IReg.RIP or ins.memory_index != IReg.NONE:
             return None
         base = dict.get(self.regs, reg_name(ins.memory_base))
         if base is None:
             return None
-        if base.kind == 'sfblob':
+        if base.kind in ('sfblob', 'klass', 'usage'):
             return None
         td = self._td_of(base.ty)
         if td is None:
