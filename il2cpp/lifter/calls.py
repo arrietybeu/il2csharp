@@ -732,6 +732,24 @@ class _CallsMixin:
             chain.discard(object_td)
         return chain
 
+    def _array_receiver_td(self, ty):
+        """System.Array typedef for an SZARRAY/ARRAY receiver type.
+
+        `_td_of` maps only CLASS/VALUETYPE/OBJECT/GENERICINST, so an
+        array-typed receiver (e.g. a `byte[]` field home) never reaches
+        the chain filter. Arrays have no subclasses and Array owns
+        their instance dispatch, so the Array typedef roots the chain;
+        rank and element openness cannot change which Clone/CopyTo body
+        runs. Byref markers, non-array types, and a missing/ambiguous
+        Array row decline to None.
+        """
+        if ty is None or (ty[1] >> 29) & 1:
+            return None
+        if self.il._type_enum(ty) not in (0x1d, 0x14):
+            return None
+        find = getattr(self.il, '_system_array_td', None)
+        return find() if find is not None else None
+
     def _shared_parameterless_ctor_target(self, cands, recv):
         """Resolve a folded zero-argument constructor from exact identity.
 
@@ -1366,6 +1384,10 @@ class _CallsMixin:
         cands = self.il.addr_candidates.get(target) if target else None
         if cands and len(cands) > 1:
             recv_td = self._td_of(recv.ty) if recv is not None else None
+            if recv_td is None and recv is not None:
+                # array-typed receivers (mi 275/326/4047): _td_of maps
+                # no array type; Array owns their instance dispatch.
+                recv_td = self._array_receiver_td(recv.ty)
             chain = self._legacy_shared_receiver_chain(recv_td)
             hits = [c for c in cands if c[0] == 'method'
                     and self.meta.methods[c[1]].declaring in chain]

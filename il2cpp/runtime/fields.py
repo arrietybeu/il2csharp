@@ -478,6 +478,15 @@ class _FieldsMixin:
         self._system_object_td_index = hits[0] if len(hits) == 1 else None
         return self._system_object_td_index
 
+    def _system_array_td(self) -> Optional[int]:
+        """The unique System.Array TypeDef, or None on malformed metadata."""
+        if hasattr(self, '_system_array_td_index'):
+            return self._system_array_td_index
+        hits = [i for i, td in enumerate(self.meta.typedefs)
+                if td.namespace == 'System' and td.name == 'Array']
+        self._system_array_td_index = hits[0] if len(hits) == 1 else None
+        return self._system_array_td_index
+
     def base_chain_tds(self, td_index) -> Tuple[int, ...]:
         """(td_index, its parent, its parent's parent, ...) up to object.
 

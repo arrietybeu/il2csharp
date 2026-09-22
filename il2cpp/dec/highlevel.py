@@ -1196,15 +1196,44 @@ class _HighLevelMixin:
             return fv == 0.0 and short not in self._FLOAT_DECLS
         return False
 
-    def _rename_locals(self, lines: List[str]) -> List[str]:
+    def _rename_locals(self, lines: List[str], method=None) -> List[str]:
         import re as _re
         tokens = []
         for st in lines:
             tokens.extend(_re.findall(r'(?<![\w.])(?:v\d+|t\d+|s_[0-9a-fA-F]+)(?![\w])', st))
         seen = set()
-        ordered = [t for t in tokens if not (t in seen or seen.add(t))]
+        # Parameters already declare their names in the signature
+        # (mi 113041: body params v0/v1 renamed to obj5/obj6 while
+        # the emitter kept v0/v1, disconnecting every use). Never
+        # rename a token matching a metadata parameter name; a lifter
+        # temp sharing the spelling keeps its honest lift-stage name.
+        param_names = set()
+        if method is not None:
+            try:
+                param_names = set(safe_ident(p.name)
+                                  for p in self.L.meta.method_params(method))
+            except Exception:
+                pass
+        ordered = [t for t in tokens
+                   if t not in param_names
+                   and not (t in seen or seen.add(t))]
         if not ordered:
             return lines
+        # Minted obj/num/flag/real names must not capture identifiers
+        # the body already uses -- least of all metadata parameter
+        # names (mi 124140: s_8/v4 became obj1/obj2, shadowing the
+        # params, and _copy_prop then merged the dropped argument).
+        # Mirror _semantic_local_names' barrier: every family token in
+        # the lines (member tails excluded) plus every parameter name.
+        reserved = set(_re.findall(
+            r'(?<![\w.])(?:obj\d+|num\d+|flag\d+|real\d+)(?![\w])',
+            '\n'.join(lines)))
+        if method is not None:
+            try:
+                reserved.update(safe_ident(p.name)
+                                for p in self.L.meta.method_params(method))
+            except Exception:
+                pass
         cnt = {'int': 0, 'bool': 0, 'float': 0, 'other': 0}
         names = {}
 
@@ -1230,7 +1259,11 @@ class _HighLevelMixin:
         for tok in ordered:
             k = type_of(tok)
             cnt[k] += 1
-            names[tok] = '%s%d' % (self.PREFIX[k], cnt[k])
+            candidate = '%s%d' % (self.PREFIX[k], cnt[k])
+            while candidate in reserved:
+                cnt[k] += 1
+                candidate = '%s%d' % (self.PREFIX[k], cnt[k])
+            names[tok] = candidate
         rx = _re.compile(r'(?<![\w.])(' + '|'.join(_re.escape(t) for t in names) + r')(?![\w])')
         lines = [rx.sub(lambda mm: names[mm.group(1)], st) for st in lines]
         # explicit declaration types: no `var` in the output, each local is

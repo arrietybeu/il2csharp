@@ -565,11 +565,14 @@ Ordered by how much they cost readability:
    shape and the `is`-pattern landed.
 4. **Stack-frame model.** Spill slots render as `s_N` and get passed by address
    (`&s_N` appears in ~450 call-argument lines tree-wide); typed-slot member
-   derefs already resolve (ported with the klass branches).
+   derefs already resolve (ported with the klass branches). A `mov r64,rsp`
+   frame copy keeps the frame offset, so `[copy+N]` traffic names the same
+   slot as `[rsp+M]` (RBP frames keep their own disp keys, byte-identically).
 5. **Type inference, round three.** Stack params (5th+ integer) the Win64
-   reconstruction skips; the remaining ~1.9k `?addr` are untracked *base*
-   registers (the index is known, the pointer it scales isn't), a
-   register-tracking gap rather than a rendering one.
+   reconstruction skips; the `?addr` family (untracked *base* registers —
+   the index is known, the pointer it scales isn't) is down to 2 elided
+   stores in the promoted tree and renders none in fresh lifts, which also
+   cleared the copy-idiom `mem[]` spills around them.
 6. Attribute data blobs (`[Header]`, `[Tooltip]`, … — `[Serializable]` comes
    from the type flag and `[SerializeField]` from the field's real
    visibility, but the blob contents themselves — and so which specific

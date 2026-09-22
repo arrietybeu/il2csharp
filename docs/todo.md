@@ -1,4 +1,266 @@
 # il2csharp — TODO (open work and historical triage)
+## Current work: promotion round — regen + rebuild (2026-09-22)
+
+User-authorized regen/promotion. `tests/goldens_review84.json`
+surgically regened for mi 32837 (70→66 lines, dead spills out) and mi
+104428 (38→26, spills out, aggregates back) only -- 67525 keeps its
+ground-truth `clamp(x, 0f, 1.0f)` expectation (honest SIMD decline,
+never enshrine `unknown`). `source_sha256` refreshed to the current
+tree; the other 62 bodies byte-identical. Expected suite after regen:
+all green except 67525.
+
+## Current work: boxed-bool fold round (2026-09-22, unpromoted)
+
+Subagent-designed from the interface round's residual. Same rules:
+`final_out/` untouched, no snapshot regen, no promotion. `il2cpp/`
+edits via binary patches with CRLF/no-BOM asserts; `tests/` edits LF.
+
+- Fix LANDED: `object X = <bool dispatch>; if (X == null)` folded to
+  `bool X = ...; if (!X)` (and `!=` to bare). The bool proof exists
+  only after render-stage dispatch naming (at lift time the callee is
+  unknown, so the null test is honest): `_name_interface_dispatch`
+  records bool-returning resolutions, new `_boxed_bool_null_fold` runs
+  last after semantic names. Single exact `object X = <call>` decl,
+  all-uses-must-be-bool via `_bool_use_ok`, no reassign/address-take,
+  standalone heads only; no inlining (MoveNext is impure), no renames.
+- Evidence: 8 methods fold (25368, 24059, 25132, 25872, 26880, 27213,
+  97399, 105906; native `test al,al` verified on two); unbox/`&` uses
+  (25872 obj52, 97399 obj49) correctly decline, as do ref-null tests
+  and already-bool `!(objN)` uses.
+- Tests: +5 portable (fire, ne-shape, object-use/reassign/byref
+  declines, unrecorded/non-call declines) +1 game (25368 fold, 25872
+  fold + unbox decline).
+- Gates: compileall pass; portable 778 green (773 + 5); full suite 921
+  passed / 3 failed -- identical IDs (32837 improvement-pin, 67525
+  honest SIMD, 104428 stale); the fold moved zero goldens.
+
+## Current work: interface-dispatch round (2026-09-22, unpromoted)
+
+TODONOW #2 first slice, subagent-mined. Same rules: `final_out/`
+untouched, no snapshot regen, no promotion. `il2cpp/` edits via binary
+patches with CRLF/no-BOM asserts; `tests/` edits LF.
+
+- Fix LANDED (mi 25368 `GameManager.CheckAllReady`): three back-to-back
+  interfaceOffsets searches resolved to `GetEnumerator`/`MoveNext`/
+  `Current`, missing on three crisp gates: (1) slot lines carry decl
+  prefixes at render stage (`object obj19 = ...`) -- `_ITF_SLOT_RX`
+  admits an optional type prefix; (2) the typeof token is referenced at
+  the call, outside the old (typeof, slot] span -- search runs through
+  the call line (monotonic widening); (3) display spells arity `_N`
+  while metadata names use `` `N `` -- exact key first (genuine `Foo_2`
+  rows keep resolving), normalized fallback for generic displays only.
+  All existing declines preserved (unrelated typeof, unresolvable key,
+  out-of-range rel, unshaped receiver, non-16 K, missing slot).
+- Residual note: `object obj32 = obj5.MoveNext(); if (obj32 == null)`
+  boxes the bool (same shape as the old unknown call -- not a
+  regression); a bool-fold of null-tested proved bools is its own
+  future proof, not this round.
+- Tests: +3 portable (arity-key normalize/range, genuine-underscore
+  exactness, slot-prefix/bare shapes) +1 game
+  (`test_game_interface_dispatch.py`: all three lines, zero
+  `/*indirect*/` left in the method).
+- Gates: compileall pass; portable 773 green (770 + 3); full suite 915
+  passed / 3 failed -- identical IDs (32837 improvement-pin, 67525
+  honest SIMD, 104428 stale); the slice moved zero goldens.
+- Next #2 slices: vtable-slot occupants on abstract bases (needs
+  store-provenance sidecar -- disproved-adjacent, do not touch without
+  it), fnptr cells (fix-66 covers icalls; zero `fnptr_` hits tree-wide).
+
+## Current work: param-exclusion rename round (2026-09-22, unpromoted)
+
+Follows the unbound census (vN residuals were renamed *parameters*).
+Same rules: `final_out/` untouched, no snapshot regen, no promotion.
+`il2cpp/` edits via binary patches with CRLF/no-BOM asserts; `tests/`
+edits LF.
+
+- Fix LANDED: `_rename_locals` renamed body tokens matching metadata
+  parameter names (StreamBuffer.WriteBytes v0/v1 became obj5/obj6 while
+  the emitter kept v0/v1 -- every use disconnected, spine unbound).
+  Params already declare their names; rename targets now exclude every
+  metadata parameter spelling (a lifter temp sharing one keeps its
+  honest lift-stage name instead of a silent capture).
+- Evidence: mi 113041-113044 (2/3/4/8-arg overloads) render
+  `this.buf[numN] = vK;` throughout, fully bound.
+- Tests: +1 portable (param spellings kept, temp still renames) +4 game
+  (`test_game_param_names.py`, all overloads, no obj5/obj6).
+- Gates: compileall pass; portable 770 green (769 + 1); full suite 911
+  passed / 3 failed -- identical IDs (32837 improvement-pin, 67525
+  honest SIMD, 104428 stale); the exclusion moved zero goldens.
+- Census remainder now: tN temps, SIMD type-position FPs, vN true-temp
+  collisions (if any survive the exclusion -- re-run census at
+  promotion time).
+- Follow-up (same fix, no source change): every other census residual
+  checks out as a metadata parameter -- HashCode.Initialize
+  (ref uint v1-v4), MeshVoxelizer.GetTriangleBounds, JValue.ValuesEquals
+  and the rest all render bound in fresh lifts; the 5 SIMD hits are
+  type-position FPs of the checker. TODONOW §5's actionable set is
+  ~zero in fresh lifts: +2 game pins (1935, 79519).
+
+## Current work: rename-barrier + unbound-census round (2026-09-22, unpromoted)
+
+TODONOW §5 work order (classify before patching) plus one real fix it
+surfaced. Same rules: `final_out/` untouched, no snapshot regen, no
+promotion. `il2cpp/` edits via binary patches with CRLF/no-BOM asserts;
+`tests/` edits LF (one pre-existing CRLF game file kept as-is).
+
+- Census LANDED (temp `unbound_census2.py`, read-only over `final_out/`,
+  11,183 files): comment/string scrub, method-region split, textual
+  dominance (earlier line, depth <= use). Result: **55 distinct unbound
+  tokens in 21 files** (naive upper bound was ~8,700/~2,200) --
+  scope/multi-decl/DCE-residue/comment noise was 99%+. Remainder: vN
+  residuals (StreamBuffer v0-v7 et al.), tN oversize/bind temps
+  (DateTime/TimeSpan/JToken...), SIMD type-position FPs (v128/v64/v256
+  in Burst files), and exactly one obj-family case below.
+- Fix LANDED (the obj-family case, mi 124140
+  `AndroidJNI.IsSameObject`): native forwards `(obj1, obj2)` correctly
+  (rcx via rdi, rdx via rbx), but output printed `(obj2, obj2)`.
+  Traced end to end: `_seq` emits `(obj1, obj2)`; `_rename_locals`
+  minted `s_8`/`v4` as `obj1`/`obj2`, shadowing the params, declared
+  `object obj1 = obj2;`, and `_copy_prop` merged the dropped argument.
+  Fix mirrors `_semantic_local_names`' barrier: reserve every
+  obj/num/flag/real token in the lines plus every metadata parameter
+  name, bumping until free (`_rename_locals(lines, m)`; single caller).
+- Tests: +2 portable (body-identifier skip, unused-param skip via
+  metadata) +1 game (`test_game_rename_barrier.py`: exact return line,
+  no shadow decl).
+- Gates: compileall pass; portable 769 green (767 + 2); full suite 904
+  passed / 3 failed -- identical IDs (32837 improvement-pin, 67525
+  honest SIMD, 104428 stale); the barrier moved zero goldens.
+- Open from the census: vN/tN residual producers in the 21 files
+  (StreamBuffer first), still unclassified by native cause.
+
+## Current work: array-receiver shared-call round (2026-09-22, unpromoted)
+
+TODONOW #1 first slice, subagent-mined. Same rules: `final_out/`
+untouched, no snapshot regen, no promotion. `il2cpp/` edits via binary
+patches with CRLF/no-BOM asserts; `tests/` edits LF.
+
+- Fix LANDED: `_td_of` maps no array type, so array-typed receivers
+  never reached the chain filter. New `Il2Cpp._system_array_td`
+  (mirrors `_system_object_td`, per-instance cache) +
+  `Lifter._array_receiver_td` (SZARRAY/ARRAY only, byref declines) +
+  2-line fallback at all three chain-filter twins (`_call`, tail jmp,
+  analyze jmp). Arrays have no subclasses and Array owns Clone, so the
+  Array typedef roots the chain; sret-clear, ctor, generic, and
+  `len(hits)==1` gates run unchanged.
+- Evidence: mi 275/326 (`this.m_aValue`/`this.state`, byte[] homes) and
+  mi 4047 (`this.delegates`, Delegate[]) resolve the 9-candidate Clone
+  fold to `...Clone()` instance rendering (4047 even takes a typed
+  `Delegate[]` decl); mi 144 string twins (Equals/op_Equality, one
+  typedef) keep all 5 markers.
+- Tests: +2 portable (array mapping, non-array/byref/missing/ambiguous
+  declines) +4 game (`test_game_shared_twins.py`: 3 resolutions, 1
+  must-decline count pin).
+- Gates: compileall pass; portable 767 green; full suite 901 passed /
+  3 failed -- identical IDs to the RSP-copy round (32837
+  improvement-pin, 67525 honest SIMD decline, 104428 stale golden);
+  none of 275/326/4047/144 is in the golden set.
+- Next #1 slices: slot/hint-typed receivers (side-table corroboration),
+  then receiver-driven generic substitution (needs synthetic table).
+- DISPROVED with evidence (hinted receivers reverted, no residue):
+  `&raycastHit1`→`distance` and `&taskAwaiter1`→`GetResult`/`IsCompleted`
+  resolved cleanly, but resolving IsCompleted removed the
+  ambiguous-shape union-kill that used to clear s_50's tile; the
+  surviving tile was field-split by `_scalar_parts` (TaskAwaiter-typed
+  RAX) and the whole-struct reload projected `.m_task` into the
+  TaskAwaiter home (`<>u__1 = task1.GetAwaiter().m_task`, ill-typed,
+  gate-invisible). Until whole-struct reloads prefer whole tiles
+  (byte-range sidecar round), hint-driven resolution stays out -- same
+  SHUFPS/80548 precedent. Repro analysis preserved in Temp
+  (`probe_*`/`trace_*`/`diag_*` scripts); 25687/24238 revert lifts are
+  byte-identical to pre-hint baselines.
+
+## Current work: RSP-copy home round (2026-09-22, unpromoted)
+
+Subagent-proposed, human-implemented. Same rules: `final_out/`
+untouched, no snapshot regen, no promotion. `il2cpp/` edits via binary
+patches with CRLF/no-BOM asserts; `tests/` edits LF.
+
+- Fix LANDED (mi 117615 NetBitBuffer.WriteInt32AtOffset): `mov r64,rsp`
+  now carries the frame offset (`_stack_offset`, `?`-text) instead of
+  None, so [copy+N] keys slots by absolute address and aliases [rsp+M]
+  of the same home (`_read_mem`/`_mem_lvalue`/LEA copy branches; RSP-path
+  keys identical, `_aggregate_load` untouched after the quarantine below).
+  Body went from `mem[8] = this;`/`mem_8`/raw twins to `this._offsetBits
+  = offset;`/`this.WriteSlow(value, bits);`. Arithmetic/index/32-bit
+  uses decline to unknown-base shapes; `mov rbp,rsp` keeps the pinned
+  frame idiom (follow-up: RBP never takes a copy offset, one portable
+  regression caught and fixed).
+- Must-decline PINNED (mi 23900 ActorSpawner.Update): same-typedef
+  Transform twins (get_parent triple, set_parent pair) keep their
+  markers -- no receiver proof can split one declaring typedef.
+- Quarantine (stash-proven): first cut tracked `lea rbp,[rsp-C]`-style
+  frame offsets absolutely and split RBP-disp-keyed homes (80548
+  `int num2` -> `object obj1` + unbound `num2`). RBP stays on legacy
+  frame paths byte-identically (MOV/LEA/load/store/indexed all skip
+  RBP; `_aggregate_load` reverted untouched). 80548 back to golden.
+- Triage, all same improvement class (prologue spills through
+  `mov r64,rsp` copies resolve to slots; dead ones drop; RBP untouched):
+  32837 golden holds 4 raw `mem[]` stores, actual drops them
+  (renumber-only fallout, native `mov rax,rsp` + 3 spills proven) --
+  NEW red, consigned to regen; 108722 both native address-triples now
+  print (`&obj6,&obj5` / `&obj5,&obj6`, old site-1
+  `(default,default,default)` was copy blindness) -- review83 pin
+  evolved to the faithful spelling with native cites; 104428 diff grew
+  by the same mem-removal (its golden holds `mem[8]` too) -- same
+  already-red ID, still awaiting the gated-regen user call.
+- Tests: +4 portable (`test_recovery_completion.py`: slot roundtrip +
+  cross-delta alias, arithmetic/index/32-bit+RBP declines) +3 game
+  (`test_game_frame_copy.py`: 117615 improvement, 23900 markers, both
+  `?addr` extinctions).
+- `?addr` EXTINCT in fresh lifts: the promoted tree's only two hits
+  (104380 `LineCircleIntersectionFactor`, 82799 `RestBendingConstraint`,
+  both `store into untracked ?addr` in copy-heavy methods) render no
+  `?addr` and no `mem[]` (dead-spill removal, renumber-only fallout;
+  82799's 1-line `return real2` residue is pre-existing in its old body
+  too). Pinned by the third game test above.
+- Residual (honest, not regressed): 117615's replayed finally tail
+  keeps one undeclared `obj6` phantom (was three undeclared
+  mem[8]/mem_8/obj2); 67525 (SIMD UNPCK) unchanged.
+- Gates: compileall pass; portable 765 green; full suite 895 passed /
+  3 failed -- 67525 (honest SIMD decline) + 104428 (stale golden) were
+  already red; 32837 is new but proved improvement (its golden holds
+  the same 4 raw `mem[]` spills the fix removes; renumber-only
+  fallout). 80548 quarantine-restored; review83 evolved green; `?addr`
+  extinction pinned (3/3 game).
+
+## Current work: TODONOW guardrail round (2026-09-22, unpromoted)
+
+Subagent-assisted analysis of TODONOW.md 1-5 (4 analyses: census,
+shared+indirect design, unknown+raw design, unbound-temp analysis).
+Same rules: `final_out/` untouched, no snapshot regen, no promotion.
+No `il2cpp/` source change (broad receiver/provenance fixes need
+use→def machinery + synthetic nested-type sidecar; see deferrals).
+
+- Inventory (read-only, python regex over `final_out/**/*.cs`,
+  11183 files): shared 19013/2304, indirect 7091/975, unknown
+  16045/1382, mem[N] 13189/805, mem_hex 343/69, goto 8707/903.
+  Matches the TODONOW handoff figures up to scanner-definition deltas
+  (case/`\b` token vs diagnostic hits, broad vs load-twin memhex);
+  confirms the census note, not silently ignored files.
+- Guardrails LANDED (`tests/test_recovery_completion.py` +4, LF):
+  ambiguous shared keeps `/*shared body, N candidates*/`; consensus
+  never resolves identity; untracked-base load/store stays raw
+  (`mem_xx`/`mem[N]`); `unknown` never becomes zero/`default`.
+- Targeted lifts: 67525 (`clamp(x, unknown, unknown)` -- honest SIMD
+  UNPCK decline, const-pool+XMM lanes need stronger proof after 80548)
+  and 104428 (modern static-field spelling + recovered aggregates;
+  golden stale by design) unchanged by construction (test-only diff).
+- Gates: compileall pass; portable 761 green (757 + 4 new); full
+  suite 889 passed / 2 failed -- failure SET byte-identical to the
+  triaged baseline (67525 honest SIMD decline, 104428 stale golden).
+- DEFERRED with designs (not regressed, still open): broad
+  shared-body receiver resolution + indirect/interface dispatch
+  (proof-driven `_shared_receiver_target` + receiver-driven generic
+  substitution designs ready; needs closed-receiver + synthetic table
+  + field sidecar), unknown/raw provenance (tile/copy `_parts`
+  threading, SIMD spill/lane gating, call-result consensus typing,
+  base recovery -- all decline-by-default), unbound-temp re-census
+  only after upstream (count is upper-bound with scope/multi-decl/
+  DCE-residue/commentnoise false positives), per-arm Color (use→def
+  const rewrite; 1445-site churn for 8 cosmetic sites), Navigation
+  merge-side facts, 35 golden/review regens + promotion (user call).
+
 ## Current work: recovery follow-up round 3e (2026-09-20, unpromoted)
 
 Continued TODONOW.md's blockers 1-3 plus cosmetic items 4-5. Same rules:

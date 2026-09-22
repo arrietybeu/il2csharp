@@ -114,6 +114,52 @@ def test_bool_materialization_declines_int_use():
     assert dec._bool_materialization_pass(list(lines)) == lines
 
 
+def _boxfold(lines, tmps):
+    from il2cpp import Decompiler
+    dec = Decompiler.__new__(Decompiler)
+    dec._boxed_bool_tmps = set(tmps)
+    return dec._boxed_bool_null_fold(list(lines))
+
+
+def test_boxed_bool_null_fold_fires():
+    assert _boxfold(['object obj32 = obj5.MoveNext();',
+                     'if (obj32 == null)',
+                     '{',
+                     'break;',
+                     '}'], ['obj32']) == \
+        ['bool obj32 = obj5.MoveNext();', 'if (!obj32)', '{', 'break;',
+         '}']
+
+
+def test_boxed_bool_null_fold_ne_shape():
+    assert _boxfold(['object obj49 = obj5.MoveNext();',
+                     'if (obj49 != null)'], ['obj49']) == \
+        ['bool obj49 = obj5.MoveNext();', 'if (obj49)']
+
+
+def test_boxed_bool_declines_object_use():
+    lines = ['object obj52 = enumerator8.MoveNext();',
+             'object obj54 = unbox(obj52);']
+    assert _boxfold(lines, ['obj52']) == lines
+
+
+def test_boxed_bool_declines_reassign_and_byref():
+    assert _boxfold(['object o1 = e.MoveNext();', 'o1 = other;',
+                     'if (o1 == null)'], ['o1']) == \
+        ['object o1 = e.MoveNext();', 'o1 = other;', 'if (o1 == null)']
+    assert _boxfold(['object o2 = e.MoveNext();', 'f(&o2);',
+                     'if (o2 == null)'], ['o2']) == \
+        ['object o2 = e.MoveNext();', 'f(&o2);', 'if (o2 == null)']
+
+
+def test_boxed_bool_declines_unrecorded_and_noncall():
+    lines = ['object obj32 = obj5.MoveNext();', 'if (obj32 == null)']
+    assert _boxfold(lines, ['nope']) == lines
+    assert _boxfold(['object o3 = unknown;', 'if (o3 == null)'],
+                    ['o3']) == ['object o3 = unknown;',
+                                'if (o3 == null)']
+
+
 def test_sfblob_base_defers_to_static_path():
     lift = struct_lifter()
     base = Expr('typeof(V3).__static_fields', V3, 'sfblob')

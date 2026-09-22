@@ -26,6 +26,7 @@ class _StructureMixin:
         self.loop_of_hdr = self._loops(blocks, dom, reach)
         self._sw_depth = 0
         self._seh_regions = []
+        self._boxed_bool_tmps = set()
         self._bstack = []
         self._pclose = []
         if getattr(self, 'eh', None) and self.eh.get('pads'):
@@ -103,7 +104,7 @@ class _StructureMixin:
         # the foreach matcher sees the input it always did
         raw = self._forhead_call_fold(raw)
         raw = self._switch_to_if(raw)
-        raw = self._rename_locals(raw)
+        raw = self._rename_locals(raw, m)
         raw = self._phi_decl_hoist(raw)
         raw = self._bool_sugar(raw, m)
         raw = self._flag_inline(raw)
@@ -183,7 +184,8 @@ class _StructureMixin:
         # post-render shapes. Render preserves statement order, so dropping
         # a pure unread line cannot reorder or erase any side effect.
         rendered = self._drop_dead_locals(rendered)
-        return self._semantic_local_names(rendered, m)
+        return self._boxed_bool_null_fold(
+            self._semantic_local_names(rendered, m))
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------

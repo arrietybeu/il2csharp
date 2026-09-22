@@ -945,7 +945,10 @@ class _FlowMixin:
                     continue
                 tok, txt = tm.groups()
                 ref = re.compile(r'(?<![\w.])%s(?![\w])' % re.escape(tok))
-                if any(ref.search(out[k2]) for k2 in range(j + 1, slot_line + 1)):
+                # the typeof token is usually referenced at the call
+                # itself (mi 25368: obj17 appears only at the call),
+                # so search through the call line, not just the slot.
+                if any(ref.search(out[k2]) for k2 in range(j + 1, i + 1)):
                     iface_text = txt
                 break
             if iface_text is None:
@@ -954,6 +957,21 @@ class _FlowMixin:
             if mi is None or not (0 <= mi < len(meta.methods)):
                 continue
             method = meta.methods[mi]
+            try:
+                _brt = il.types[method.return_type] \
+                    if 0 <= method.return_type < len(il.types) else None
+            except Exception:
+                _brt = None
+            if _brt is not None and il._type_enum(_brt) == 0x02:
+                # bool-returning dispatch: a later `object X =
+                # <call>; if (X == null)` folds to bool form. Recorded,
+                # never rendered: at lift time the callee is unknown.
+                _lhs = re.search(r'(\w+)\s*=\s*$', raw[:cm.start()])
+                if _lhs is not None:
+                    try:
+                        self._boxed_bool_tmps.add(_lhs.group(1))
+                    except Exception:
+                        pass
             argl, _ = _split_args('(%s)' % args_txt, 0)
             if not argl or len(argl) < 2:
                 continue
@@ -968,6 +986,66 @@ class _FlowMixin:
             else:
                 call = '%s.%s(%s);' % (_recv_fold(recv_txt), mname, ', '.join(real_args))
             out[i] = raw[:cm.start()] + call + raw[cm.end():]
+        return out
+
+    def _boxed_bool_null_fold(self, lines: List[str]) -> List[str]:
+        """Fold `object X = <bool dispatch>; if (X == null)` to bool.
+
+        The bool proof exists only after textual interface naming at
+        render: at lift time the callee is unknown, so the null test
+        is the honest lift. `_name_interface_dispatch` records
+        bool-returning resolutions in `_boxed_bool_tmps`; every other
+        temp keeps its boxed shape rather than invent a bool. Runs
+        last, after semantic names, so no pass after it can see new
+        identifiers and no earlier vocabulary is disturbed.
+        """
+        tmps = getattr(self, '_boxed_bool_tmps', None) or set()
+        if not tmps:
+            return lines
+        out = list(lines)
+        for tok in sorted(tmps):
+            te = re.escape(tok)
+            didx = [i for i, st in enumerate(out)
+                    if re.match(r'^\s*object\s+%s\s*=\s*.+?;\s*(//.*)?$' % te, st)]
+            if len(didx) != 1:
+                continue
+            di = didx[0]
+            dm = re.match(r'^(\s*)object\s+%s\s*=\s*(.+?);\s*(//.*)?$' % te,
+                          out[di])
+            if dm is None or not dm.group(2).rstrip().endswith(')'):
+                continue
+            heads = []
+            ok = True
+            for j, ln in enumerate(out):
+                if j == di:
+                    continue
+                for _mm in re.finditer(r'(?<![\w.])%s(?![\w])' % te, ln):
+                    hm = re.fullmatch(
+                        r'\s*if\s*\(\s*%s\s*(==|!=)\s*null\s*\)\s*(\{)?\s*' % te, ln)
+                    if hm is not None:
+                        heads.append((j, hm.group(1), hm.group(2) or ''))
+                        continue
+                    if not self._bool_use_ok(ln, tok, out):
+                        ok = False
+                        break
+                if not ok:
+                    break
+                if re.search(r'(?<![\w.])%s\s*(?:[+\-*/%%&|^]|<<|>>)?=(?![=>])' % te, ln):
+                    ok = False
+                    break
+                if re.search(r'&\s*%s\b' % te, ln) or \
+                        re.search(r'\b(?:ref|out)\s+%s\b' % te, ln):
+                    ok = False
+                    break
+            if not ok or not heads:
+                continue
+            trail = (' ' + dm.group(3)) if dm.group(3) else ''
+            out[di] = '%sbool %s = %s;%s' % (dm.group(1), tok, dm.group(2), trail)
+            for j, op, brace in heads:
+                cond = '!' + tok if op == '==' else tok
+                out[j] = '%sif (%s)%s' % (
+                    re.match(r'^(\s*)', out[j]).group(1), cond,
+                    (' ' + brace) if brace else '')
         return out
 
     def _hoist_shared_tails(self, lines: List[str]) -> List[str]:

@@ -170,6 +170,41 @@ fix-123 in `validation_reports/review123_*`.
 - `_drop_dead_locals` re-runs on post-`_render` lines (fix 99): `_render`
   drops empty pure-cond `if`s and orphans their pure loads, so the second run
   is load-bearing. Never remove it as "redundant" with the pre-render run.
+- A `mov r64,rsp` frame copy carries the frame offset (`_stack_offset` on a
+  `?`-text ptr) instead of dropping to `None`, so `[copy+N]` keys slots by
+  absolute address and aliases `[rsp+M]` of the same home; arithmetic, indexed,
+  and 32-bit uses decline to the unknown-base shapes. RBP never takes a copy
+  offset (`mov rbp,rsp` keeps the unreadable frame idiom): the frame path owns
+  its disp keys, and absolute tracking there splits homes (stash-proven on
+  80548) — RBP behavior is byte-identical with or without copies live.
+- Same-typedef shared-body twins (e.g. Transform get_parent triple) keep the
+  honest marker: no receiver proof can split one declaring typedef, and
+  consensus typing never resolves identity.
+- Array-typed receivers resolve through the System.Array typedef
+  (`_system_array_td`, unique-or-decline like `_system_object_td`):
+  arrays have no subclasses and Array owns their instance dispatch, so
+  rank/element openness cannot change Clone/CopyTo identity. Byref
+  markers and missing/ambiguous Array rows decline; the sret-clear,
+  ctor, generic, and `len(hits)==1` gates run unchanged at all three
+  chain-filter twins.
+- `_rename_locals` never mints an obj/num/flag/real name already used in
+  the lines or declared as a metadata parameter (124140: s_8/v4 became
+  obj1/obj2, shadowing the params, and `_copy_prop` merged the dropped
+  argument). Reserve-then-bump, mirroring `_semantic_local_names`.
+- `_rename_locals` never renames a token matching a metadata parameter
+  name (113041: body params v0/v1 became unbound obj5/obj6 while the
+  emitter kept v0/v1). Parameters already declare their names; a lifter
+  temp sharing the spelling keeps its honest lift-stage name.
+- Textual interface dispatch names a call only when the slot-address
+  assignment, a span-referenced `typeof()` decl, an exact single
+  in-range metadata method, and a shaped receiver all agree
+  (25368: GetEnumerator/MoveNext/Current). `_N` display arity falls
+  back to `` `N `` metadata names only after the exact key misses.
+- A boxed bool from a proved-bool dispatch folds its null test
+  (`object X = call; if (X == null)` to `bool X; if (!X)`), recorded
+  at naming time and folded post-semantic-names with all-uses-bool,
+  single-decl, and standalone-head gates; anything else keeps the
+  boxed shape.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test

@@ -74,11 +74,16 @@ def test_shared_struct_return_uses_buffer_and_trims_stale_registers(game_decompi
     assert f'{call}(0, 0' not in text
 
 
-def test_unobserved_sret_buffer_stays_unknown_per_call(game_decompiler):
+def test_frame_copy_homes_observe_sret_buffers(game_decompiler):
     text = body(game_decompiler, 108722)
     call = 'sub_182539ee0/*shared body, 2 candidates*/'
-    assert f'object obj3 = {call}(default, default, default);' in text
-    # fix 97: declared, so the semantic namer types it v128 by its
-    # consensus struct return; the per-call unknown-buffer proof stands.
-    # fix 104: the v128 decl carries its caller-proven cast.
-    assert f'Unity.Burst.Intrinsics.v128 v1281 = (Unity.Burst.Intrinsics.v128){call}(&obj4, &obj6);' in text
+    # RSP-copy round: `mov rax,rsp` homes are observed slots now, so both
+    # native address triples render. Native site 1 passes
+    # [rax-28h]/[rax-38h]/[rax-48h] (0x182529283-297); the hidden buffer is
+    # consumed by the sret proof and the two value homes print. The old
+    # `(default, default, default)` spelling was untracked-copy blindness,
+    # not an unobserved buffer (the homes hold a/b.Byte0 provably). The
+    # unobserved stand-downs stay pinned portably (unknown receiver/size).
+    assert 'mem[8' not in text and 'mem_8' not in text
+    assert f'Unity.Burst.Intrinsics.v128 v1281 = (Unity.Burst.Intrinsics.v128){call}(&obj6, &obj5);' in text
+    assert f'Unity.Burst.Intrinsics.v128 v1282 = (Unity.Burst.Intrinsics.v128){call}(&obj5, &obj6);' in text

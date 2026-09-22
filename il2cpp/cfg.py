@@ -105,7 +105,9 @@ _ELSEIF_CMP_RX = re.compile(r'^(.+?)\s*(!=|==)\s*(.+)$')
 # absolute class-vtable slot where that interface's own method block
 # begins.
 _ITF_TYPEOF_RX = re.compile(r'^\S+ (\w+) = typeof\((.+)\);$')
-_ITF_SLOT_RX = re.compile(r'^(\w+) = \(.*<< 4\) \+ 0x138 \+ .+;$')
+# slot lines carry a declaration prefix at _render stage
+# (`object obj19 = ...`); the bare `tok = ...` form still matches.
+_ITF_SLOT_RX = re.compile(r'^(?:[A-Za-z_][\w<>,\[\]\.\s]*?\s+)?(\w+) = \(.*<< 4\) \+ 0x138 \+ .+;$')
 _ITF_CALL_RX = re.compile(
     r'\(\(byte\*\)(\w+) \+ (0x[0-9a-fA-F]+)\)\[0\]\(\) /\*indirect\*/\((.*)\);$')
 

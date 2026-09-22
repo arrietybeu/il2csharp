@@ -88,6 +88,8 @@ class _InsnMixin:
                         # same receiver-chain disambiguation as _call for
                         # non-constructor shared methods
                         recv_td = self._td_of(recv0.ty) if recv0 is not None else None
+                        if recv_td is None and recv0 is not None:
+                            recv_td = self._array_receiver_td(recv0.ty)
                         chain = self._legacy_shared_receiver_chain(recv_td)
                         hits = [c for c in cands if c[0] == 'method'
                                 and self.meta.methods[c[1]].declaring in chain]
@@ -286,11 +288,33 @@ class _InsnMixin:
             dst = reg_name(ins.op0_register)
             if A(0) == OpKind.REGISTER and A(1) in (OpKind.REGISTER,):
                 src = reg_name(ins.op1_register)
+                if mn == Mnemonic.MOV and src == 'RSP' and dst != 'RBP' \
+                        and _reg_size(ins.op0_register) == 8 \
+                        and _reg_size(ins.op1_register) == 8:
+                    # `mov r11,rsp` parks the frame base in a GPR so later
+                    # [copy+N] traffic names one home across `sub rsp`
+                    # shifts (NetBitBuffer mi 117615: mem[8]/mem_8/obj2
+                    # twins). Track the copy's stack offset instead of
+                    # dropping it to None; arithmetic/index uses decline
+                    # back to the unknown-base shapes below. Text stays
+                    # '?' so any unforeseen consumer renders what a None
+                    # register renders today.
+                    e = Expr('?', None, 'ptr')
+                    e._stack_offset = self.rsp_delta
+                    self.set_reg(dst, e)
+                    return
                 self._copying = True
                 try:
                     e = self.reg(src)
                 finally:
                     self._copying = False
+                if dst == 'RBP' and e is not None \
+                        and getattr(e, '_stack_offset', None) is not None:
+                    # a frame-copy artifact landing in RBP: today the
+                    # source was untracked, so RBP stayed unreadable and
+                    # _rbp_is_frame() held. Keep None, not a '?'-text
+                    # copy that would flip the frame predicate.
+                    e = None
                 if mn != Mnemonic.MOV:
                     # a sign/zero extension moves an integer (chars and
                     # bools included -- both are int-promoted anyway)
@@ -429,7 +453,34 @@ class _InsnMixin:
                     value._stack_offset = address
                     self.set_reg(dst, value)
                     return
+                _lb = self.reg(reg_name(ins.memory_base)) \
+                    if ins.memory_base not in (IReg.NONE, IReg.RIP) else None
+                if _lb is not None and getattr(_lb, '_stack_offset', None) is not None \
+                        and ins.memory_index == IReg.NONE and dst != 'RBP':
+                    # address of an RSP-copy home: the &slot shape of
+                    # the RSP path above, keyed by absolute address. RBP
+                    # stays legacy: the frame path owns its disp keys.
+                    _caddr = _lb._stack_offset + sdisp(ins.memory_displacement)
+                    _cname = self.stack_map.get(_caddr)
+                    if _cname is None:
+                        _cname = self.slot_var(_caddr - self.rsp_delta)
+                    _cval = Expr('&' + _cname, None, 'ptr')
+                    _cval._stack_offset = _caddr
+                    self.set_reg(dst, _cval)
+                    return
+                if dst == 'RBP' and _lb is not None \
+                        and getattr(_lb, '_stack_offset', None) is not None:
+                    # frame pointer from a copy: today's unknown-base
+                    # shape, so _rbp_is_frame() still holds.
+                    self.set_reg(dst, self._indexed_lea(ins, None))
+                    return
                 base = self.reg(reg_name(ins.memory_base))
+                if base is not None and getattr(base, '_stack_offset', None) is not None \
+                        and ins.memory_index != IReg.NONE and ins.memory_base != IReg.RBP:
+                    # index arithmetic on a frame copy: provenance
+                    # unproved, keep the unknown-base shape.
+                    self.set_reg(dst, self._indexed_lea(ins, None))
+                    return
                 disp = sdisp(ins.memory_displacement)
                 if base is not None and ins.memory_index == IReg.NONE:
                     _bte = self.il._type_enum(base.ty) if isinstance(base.ty, tuple) else 0
@@ -1318,9 +1369,16 @@ class _InsnMixin:
         idxr = reg_name(ins.memory_index) if ins.memory_index != IReg.NONE else None
         disp = ins.memory_displacement
         size = {1: 1, 2: 2, 4: 4, 8: 8}.get(ins.memory_size, 8)
-        if (base == 'RSP' or (base == 'RBP' and self._rbp_is_frame())
-                and idxr is None):
-            var = self.slot_var(disp)
+        _cbe = self.reg(base) if base and base != 'RBP' else None
+        _caddr = self._stack_address(ins) \
+            if _cbe is not None and getattr(_cbe, '_stack_offset', None) is not None \
+            and idxr is None else None
+        if ((base == 'RSP' or (base == 'RBP' and self._rbp_is_frame()))
+                and idxr is None) or _caddr is not None:
+            # loads through an RSP-copy register key the slot by absolute
+            # address so [copy+N] aliases [rsp+M] of the same home; the
+            # RSP-path key is identical to today's.
+            var = self.slot_var(disp) if _caddr is None else self.slot_var(_caddr - self.rsp_delta)
             # a recorded slot type restores the reload's kind the way
             # entry classification does (state._setup_entry): a stack
             # parameter reload keeps its declared type instead of
@@ -1346,6 +1404,11 @@ class _InsnMixin:
             ie = self.reg(idxr)
             return Expr('*(%s %s)' % (ie.text if ie else '?', disp_add(disp)), None, 'ptr')
         be = self.reg(base) if base else None
+        if be is not None and getattr(be, '_stack_offset', None) is not None and idxr is not None \
+                and base != 'RBP':
+            # index arithmetic on a frame copy: the honest unknown-base shape.
+            _cie = self.reg(idxr)
+            return Expr('*(%s %s)' % (_cie.text if _cie else '?', disp_add(disp)), None, 'ptr')
         if be is not None and idxr is not None:
             ie = self.reg(idxr)
             scale = ins.memory_index_scale
@@ -1407,11 +1470,21 @@ class _InsnMixin:
         idxr = reg_name(ins.memory_index) if ins.memory_index != IReg.NONE else None
         disp = ins.memory_displacement
         size = {1: 1, 2: 2, 4: 4, 8: 8}.get(ins.memory_size, 8)
-        if (base == 'RSP' or (base == 'RBP' and self._rbp_is_frame())
-                and idxr is None):
-            return self.slot_var(disp)
+        _cbe = self.reg(base) if base and base != 'RBP' else None
+        _caddr = self._stack_address(ins) \
+            if _cbe is not None and getattr(_cbe, '_stack_offset', None) is not None \
+            and idxr is None else None
+        if ((base == 'RSP' or (base == 'RBP' and self._rbp_is_frame()))
+                and idxr is None) or _caddr is not None:
+            # stores through an RSP-copy register key the slot by absolute
+            # address (same aliasing as the load path); RSP-key identical.
+            return self.slot_var(disp) if _caddr is None else self.slot_var(_caddr - self.rsp_delta)
         be = self.reg(base) if base else None
         if be is None:
+            return 'mem[%d]' % sdisp(disp)
+        if be is not None and getattr(be, '_stack_offset', None) is not None and idxr is not None \
+                and base != 'RBP':
+            # indexed store through a frame copy: unknown-base shape.
             return 'mem[%d]' % sdisp(disp)
         if be.kind == 'klass':
             return None                # static/klass bookkeeping

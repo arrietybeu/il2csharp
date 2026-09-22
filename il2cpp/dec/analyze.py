@@ -256,6 +256,8 @@ class _AnalyzeMixin:
                             info = L._shared_parameterless_ctor_target(cands, recv0)
                             if info is None:
                                 recv_td = L._td_of(recv0.ty) if recv0 is not None else None
+                                if recv_td is None and recv0 is not None:
+                                    recv_td = L._array_receiver_td(recv0.ty)
                                 chain = L._legacy_shared_receiver_chain(recv_td)
                                 hits = [c for c in cands if c[0] == 'method'
                                         and L.meta.methods[c[1]].declaring in chain]

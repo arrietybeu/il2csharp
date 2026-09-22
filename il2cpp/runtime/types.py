@@ -477,6 +477,13 @@ class _TypesMixin:
         else:
             key = base
         td_idx = idx.get(key)
+        if td_idx is None and rest:
+            # declaration spellings carry the arity as _N (fix
+            # 113/117: EqualityComparer_1<T>) while metadata names
+            # use `N -- try the exact key first so genuinely-named
+            # Foo_2 rows still resolve, then the normalized one.
+            norm = re.sub(r'_(\d+)$', r'`\1', base)
+            td_idx = idx.get(norm) if norm != base else None
         if td_idx is None:
             return None
         td = self.meta.typedefs[td_idx]

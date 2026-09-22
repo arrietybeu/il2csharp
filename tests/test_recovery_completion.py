@@ -435,3 +435,261 @@ def test_fold_consts_keeps_call_arguments():
     assert _T._fold_consts('s_28.ctor(0 + 1);') == 's_28.ctor(0 + 1);'
     assert _T._fold_consts('x = (0 + 1);') == 'x = 1;'
     assert _T._fold_consts('foo((0 + 1));') == 'foo(1);'
+
+
+def test_todonow_ambiguous_shared_keeps_marker():
+    # TODONOW 1: receiver-blind `_call_name` must stay honest when one
+    # native VA has several metadata owners; picking one invents identity.
+    from types import SimpleNamespace as NS
+    from il2cpp import Lifter
+    lift = Lifter.__new__(Lifter)
+    lift.il = NS(addr_candidates={0x1234: [('method', 0), ('method', 1)]},
+                 addr_to_method={}, bin=NS(exports={}))
+    lift.rt_names = {}
+    lift.rt_init_meta = None
+    lift._is_class_init_twin = lambda tgt: False
+    lift._thunk_final = lambda tgt: tgt
+    lift._info_name = lambda info: 'Should.Not.Resolve'
+    assert lift._call_name(0x1234) == \
+        'sub_1234/*shared body, 2 candidates*/'
+
+
+def test_todonow_consensus_does_not_resolve_identity():
+    # TODONOW 1 invariant: `shared_return_type` consensus types the call
+    # result only; the rendered name stays shared. Consensus agreeing
+    # must never become a method-identity proof.
+    from types import SimpleNamespace as NS
+    from il2cpp import Lifter
+    lift = Lifter.__new__(Lifter)
+    lift.il = NS(addr_candidates={0x1234: [('method', 0), ('method', 1)]},
+                 addr_to_method={}, bin=NS(exports={}))
+    lift.rt_names = {}
+    lift.rt_init_meta = None
+    lift._is_class_init_twin = lambda tgt: False
+    lift._thunk_final = lambda tgt: tgt
+    lift._info_name = lambda info: 'Should.Not.Resolve'
+    assert 'shared body' in lift._call_name(0x1234)
+
+
+def test_todonow_raw_mem_preserved_without_base():
+    # TODONOW 4: an untracked base has no proven owner/layout, so the
+    # load/store stays raw (`mem_xx` / `mem[N]`) instead of inventing a
+    # field from displacement alone.
+    lift = struct_lifter()
+    lift.regs = {}
+    execute(lift, '488b4110')  # mov rax,[rcx+0x10], RCX untracked
+    assert lift.regs['RAX'].text == 'mem_10'
+    from il2cpp import Expr
+    lift2 = struct_lifter()
+    lift2.regs = {}
+    lift2.regs['RAX'] = Expr('v', (0, 0x08 << 16), 'int')
+    execute(lift2, '48894110')  # mov [rcx+0x10],rax, RCX untracked
+    assert lift2.out and lift2.out[0][1] == 'mem[16] = v;'
+
+
+def test_todonow_unknown_never_becomes_default_or_zero():
+    # TODONOW 3/5: `unknown` is the honesty marker for a missing native
+    # value; text passes must never substitute zero/`default` for it.
+    from il2cpp.dec.textpass import _TextPassMixin as _T
+    t = _T()
+    assert t._unsafify('x = unknown;') == 'x = unknown;'
+    assert 'default' not in t._unsafify('x = unknown;')
+    assert t._fold_consts('x = unknown;') == 'x = unknown;'
+
+
+def test_rsp_copy_homes_share_one_slot():
+    # mi 117615: `mov r11,rsp` parks the frame base; [r11+8] and later
+    # [rsp+0x50] (after `sub rsp,0x48`) are one home, not mem[8]/mem_8.
+    lift = struct_lifter()
+    lift.regs = {}
+    lift.rsp_delta = 0
+    execute(lift, '4c8bdc')  # mov r11,rsp
+    assert getattr(lift.regs.get('R11'), '_stack_offset', None) == 0
+    from il2cpp import Expr
+    lift.regs['RAX'] = Expr('v', (0, 0x08 << 16), 'int')
+    execute(lift, '49894308')  # mov [r11+8],rax
+    assert lift.out and lift.out[-1][1].startswith('s_') \
+        and 'mem[' not in lift.out[-1][1]
+    execute(lift, '498b4308')  # mov rax,[r11+8]
+    assert lift.regs['RAX'].text == 'v'
+    execute(lift, '4883ec48')  # sub rsp,0x48
+    execute(lift, '488b442450')  # mov rax,[rsp+0x50]
+    assert lift.regs['RAX'].text == 'v'
+
+
+def test_rsp_copy_arithmetic_stays_raw():
+    # `add r11,8` voids the frame offset: later traffic must not invent
+    # a slot from the stale base.
+    lift = struct_lifter()
+    lift.regs = {}
+    lift.rsp_delta = 0
+    execute(lift, '4c8bdc')  # mov r11,rsp
+    execute(lift, '4983c308')  # add r11,8
+    from il2cpp import Expr
+    lift.regs['RAX'] = Expr('v', (0, 0x08 << 16), 'int')
+    execute(lift, '49894308')  # mov [r11+8],rax
+    assert lift.out and 's_' not in lift.out[-1][1]
+
+
+def test_rsp_copy_indexed_stays_raw():
+    # [copy+index] is unproved address math: the unknown-base shape,
+    # never a slot.
+    lift = struct_lifter()
+    lift.regs = {}
+    lift.rsp_delta = 0
+    execute(lift, '4c8bdc')  # mov r11,rsp
+    execute(lift, '498b040b')  # mov rax,[r11+rcx]
+    text = lift.regs['RAX'].text or ''
+    assert 's_' not in text and '?' in text
+
+
+def test_rsp_copy_32bit_and_rbp_stay_legacy():
+    # 32-bit `mov r11d,esp` truncates: no offset. `mov rbp,rsp` is the
+    # pinned frame idiom: RBP stays unreadable so _rbp_is_frame() holds.
+    lift = struct_lifter()
+    lift.regs = {}
+    lift.rsp_delta = 0
+    execute(lift, '448bdc')  # mov r11d,esp
+    assert getattr(lift.regs.get('R11'), '_stack_offset', None) is None
+    lift2 = struct_lifter()
+    lift2.regs = {}
+    lift2.rsp_delta = 0
+    execute(lift2, '4889e5')  # mov rbp,rsp
+    assert lift2.regs.get('RBP') is None
+    assert lift2._rbp_is_frame()
+
+
+def _array_lifter(typedefs, ty_enum=(0x1d, 0x14)):
+    from types import SimpleNamespace as NS
+    from il2cpp import Lifter
+    il = NS(
+        types=[],
+        _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+        meta=NS(typedefs=typedefs),
+    )
+    arr = next((i for i, td in enumerate(typedefs)
+                if td.namespace == 'System' and td.name == 'Array'), None)
+    il._system_array_td = lambda arr=arr: arr
+    lift = Lifter.__new__(Lifter)
+    lift.il = il
+    return lift
+
+
+def _td(ns, name):
+    from types import SimpleNamespace as NS
+    return NS(namespace=ns, name=name)
+
+
+def test_array_receiver_maps_to_system_array():
+    lift = _array_lifter([_td('System', 'Object'), _td('System', 'Array')])
+    assert lift._array_receiver_td((9, 0x1d << 16)) == 1
+    assert lift._array_receiver_td((9, 0x14 << 16)) == 1
+
+
+def test_array_receiver_declines_non_array_byref_and_missing():
+    lift = _array_lifter([_td('System', 'Object'), _td('System', 'Array')])
+    assert lift._array_receiver_td((0, 0x08 << 16)) is None
+    assert lift._array_receiver_td((0, 0x12 << 16)) is None
+    assert lift._array_receiver_td(None) is None
+    assert lift._array_receiver_td((9, (0x1d << 16) | (1 << 29))) is None
+    dup = _array_lifter([_td('System', 'Array'), _td('System', 'Array')])
+    dup.il._system_array_td = lambda: None  # ambiguous row declines
+    assert dup._array_receiver_td((9, 0x1d << 16)) is None
+    from il2cpp import Lifter
+    bare = Lifter.__new__(Lifter)
+    from types import SimpleNamespace as NS
+    bare.il = NS(_type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0)
+    assert bare._array_receiver_td((9, 0x1d << 16)) is None
+
+
+def _renamer():
+    from types import SimpleNamespace as NS
+    from il2cpp import Decompiler
+    dec = Decompiler.__new__(Decompiler)
+    dec.L = NS(slot_types={}, _var_types={}, _type_hints={})
+    dec._var_types = {}
+    return dec
+
+
+def test_rename_locals_skips_body_identifiers():
+    # mi 124140: s_8/v4 must not become obj1/obj2 when the body uses
+    # those names (params here) -- the shadow decl fed _copy_prop a
+    # bogus obj1 = obj2 and dropped an argument.
+    dec = _renamer()
+    out = dec._rename_locals(['s_8 = v4;',
+                              'return F(obj1, obj2);'])
+    assert out == ['object obj3 = obj4;',
+                   'return F(obj1, obj2);']
+
+
+def test_rename_locals_skips_unused_param_names():
+    # Unused params never appear in the body, so only metadata saves
+    # them from shadowing (CS0136): v9 skips obj1 via the method.
+    from types import SimpleNamespace as NS
+    dec = _renamer()
+    dec.L.meta = NS(method_params=lambda m: [NS(name='obj1')])
+    assert dec._rename_locals(['v9 = 1;', 'return F(v9);'],
+                              method=object()) == \
+        ['object obj2 = 1;', 'return F(obj2);']
+    assert _renamer()._rename_locals(['v9 = 1;', 'return F(v9);']) == \
+        ['object obj1 = 1;', 'return F(obj1);']
+
+
+def test_rename_locals_keeps_param_spellings():
+    # mi 113041: a body token matching a metadata parameter is the
+    # parameter, never a rename target -- renaming v0 disconnected
+    # every use (emitter keeps v0) and left objN unbound.
+    from types import SimpleNamespace as NS
+    dec = _renamer()
+    dec.L.meta = NS(method_params=lambda m: [NS(name='v0'),
+                                             NS(name='v1')])
+    m = object()
+    assert dec._rename_locals(['this.buf[num2] = v0;',
+                               'this.buf[num4] = v1;',
+                               't9 = v0;'], method=m) == \
+        ['this.buf[num2] = v0;',
+         'this.buf[num4] = v1;',
+         'object obj1 = v0;']
+
+
+def _iface_il(typedefs):
+    from types import SimpleNamespace as NS
+    from il2cpp import Il2Cpp
+    il = Il2Cpp.__new__(Il2Cpp)
+    il.meta = NS(typedefs=typedefs)
+    return il
+
+
+def _iface_td(namespace, name, start=0, count=0):
+    from types import SimpleNamespace as NS
+    return NS(namespace=namespace, name=name, method_start=start,
+              method_count=count)
+
+
+def test_interface_key_normalizes_arity_suffix():
+    # Display spells IEnumerable_1<T> (fix 113/117) while metadata
+    # names IEnumerable`1 -- mi 25368 stayed /*indirect*/ on the miss.
+    il = _iface_il([_iface_td('System.Collections.Generic',
+                              'IEnumerable`1', 100, 1)])
+    assert il.interface_method_by_offset(
+        'System.Collections.Generic.IEnumerable_1<Fusion.PlayerRef>',
+        0) == 100
+    assert il.interface_method_by_offset(
+        'System.Collections.Generic.IEnumerable_1<Fusion.PlayerRef>',
+        1) is None
+
+
+def test_interface_key_keeps_genuine_underscore_names():
+    # Exact key first: a real Foo_2 row still resolves, unknown stays None.
+    il = _iface_il([_iface_td('Game', 'Foo_2', 50, 2)])
+    assert il.interface_method_by_offset('Game.Foo_2', 0) == 50
+    assert il.interface_method_by_offset('Game.Nope', 0) is None
+
+
+def test_itf_slot_rx_matches_declared_and_bare():
+    from il2cpp.cfg import _ITF_SLOT_RX
+    m = _ITF_SLOT_RX.match('object obj19 = (x << 4) + 0x138 + y;')
+    assert m and m.group(1) == 'obj19'
+    m = _ITF_SLOT_RX.match('obj19 = (x << 4) + 0x138 + y;')
+    assert m and m.group(1) == 'obj19'
+    assert _ITF_SLOT_RX.match('object obj19 = x + y;') is None
