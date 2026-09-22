@@ -1075,6 +1075,15 @@ class _StateMixin:
             if sblk.switch_idx and old in sblk.switch_idx:
                 sblk.switch_idx = _bind_replace(sblk.switch_idx, old, v)
         e._sites = None
+        # Packed phi provenance is keyed by rendered token.  Binding renames
+        # that token, so keep the same proof reachable under the temp name;
+        # otherwise a later high-lane read silently loses every predecessor.
+        aps = getattr(self, '_aggregate_phi_sources', None)
+        if aps is not None and old in aps:
+            aps.setdefault(v, aps[old])
+        apt = getattr(self, '_aggregate_phi_types', None)
+        if apt is not None and old in apt:
+            apt.setdefault(v, apt[old])
         e.text = v
         e._prec = None   # the temp name is an atom
 

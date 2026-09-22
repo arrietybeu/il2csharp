@@ -336,6 +336,50 @@ class _FieldsMixin:
             return None
         return ts[td_index]
 
+    def op_collision_conv(self, td_idx, name, ptypes):
+        """'explicit'/'implicit' when static op_ twins sharing (td, name,
+        param types) have 2+ distinct returns (Decimal.op_Explicit x4),
+        else None. Same name+params cannot coexist as methods (CS0111);
+        C# spells the whole group as conversion operators. Byref groups
+        are included with the `ref` dropped: user operators cannot take
+        ref params, and the real sources take these views by value (a
+        pure view read; a mutating conversion would be pathological).
+        Cached per Il2Cpp lifetime; metadata never changes during a
+        build. ponytail: one shared proof for emitter decls and lifter
+        call recasts; singletons cost one dict hit."""
+        try:
+            key = tuple((self.type_name(t), bool((t[1] >> 29) & 1)) for t in ptypes)
+        except Exception:
+            return None
+        try:
+            cache = getattr(self, '_op_collision_cache', None)
+            if cache is None:
+                cache = self._op_collision_cache = {}
+            tbl = cache.get(td_idx)
+            if tbl is None:
+                tbl = {}
+                td = self.meta.typedefs[td_idx] \
+                    if 0 <= td_idx < len(self.meta.typedefs) else None
+                if td is not None:
+                    for mj in self.meta.type_methods(td):
+                        m3 = self.meta.methods[mj]
+                        if m3.name not in ('op_Explicit', 'op_Implicit') or not m3.is_static:
+                            continue
+                        try:
+                            p3 = self.meta.method_params(m3)
+                            k3 = tuple((self.type_name(self.types[p.type]), bool((self.types[p.type][1] >> 29) & 1)) for p in p3)
+                            r3 = self.type_name(self.types[m3.return_type])
+                        except Exception:
+                            continue
+                        tbl.setdefault((m3.name, k3), set()).add(r3)
+                cache[td_idx] = tbl
+            rets = tbl.get((name, key), set())
+            if len(rets) < 2:
+                return None
+            return 'explicit' if name == 'op_Explicit' else 'implicit'
+        except Exception:
+            return None
+
     def returns_sret(self, rty) -> bool:
         """Does a call returning `rty` spend an argument register on a
         hidden return buffer? Win64/MSVC returns a trivially copyable

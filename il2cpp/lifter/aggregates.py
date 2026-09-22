@@ -79,10 +79,18 @@ class _AggregatesMixin:
         if expected is not None and sources and all(v is not None for v in sources):
             values = [self._piece_value(v, offset, width, expected, depth + 1)
                       for v in sources]
-            if offset == 0 and all(v is not None for v in values):
-                self._aggregate_phi_types[origin.text] = expected
-                self._type_hints[origin.text] = expected
-                return Expr(origin.text, expected, self._ty_kind(expected))
+            if all(v is not None for v in values):
+                if offset == 0:
+                    self._aggregate_phi_types[origin.text] = expected
+                    self._type_hints[origin.text] = expected
+                    return Expr(origin.text, expected, self._ty_kind(expected))
+                # A scalar phi names lane zero only, but class-init and
+                # similar diamonds preserve the other XMM lanes verbatim.
+                # Recover an offset lane only when every predecessor proves
+                # the same typed value; disagreement remains unknown.
+                key = getattr(self.il, '_closed_type_key', lambda t: t)
+                if len({(v.text, key(v.ty)) for v in values}) == 1:
+                    return values[0]
         sl = getattr(origin, '_slice', None)
         if sl is not None and sl[1] != 0:
             return self._piece_value(sl[0], sl[1] + offset, width, expected, depth + 1)

@@ -245,6 +245,7 @@ class Emitter:
     def type_decl_line(self, td: TypeDef) -> List[str]:
         f = td.flags
         vis = TYPE_VIS.get((f >> 0) & 7, '')
+        ebase = ''  # `: uint` suffix for non-int enums (set below)
         if td.declaring < 0 and (f & 7) > 1:
             vis = 'internal '  # a nested form on a top-level row: unreadable
         if self._is_blob_container(td):
@@ -257,6 +258,20 @@ class Emitter:
             kw = vis + 'partial interface'
         elif td.is_enum:
             kw = vis + 'enum'
+            # a non-int underlying must spell (`enum E : uint`): int is
+            # the default and large members/defaults fail without it
+            # (DesiredAccess 2148532224, CS0221). ponytail: keyword table
+            # only; unprovable keeps bare `enum`.
+            try:
+                _et = self.il.types[td.element] \
+                    if 0 <= td.element < len(self.il.types) else None
+                _ukw = {0x04: 'sbyte', 0x05: 'byte', 0x06: 'short',
+                        0x07: 'ushort', 0x09: 'uint', 0x0a: 'long',
+                        0x0b: 'ulong'}.get(self.il._type_enum(_et) if _et is not None else 0x08)
+                if _ukw:
+                    ebase = ' : ' + _ukw
+            except Exception:
+                pass
         elif td.is_valuetype:
             kw = vis + 'partial struct'
         elif (f & 0x80) and (f & 0x100):
@@ -288,7 +303,7 @@ class Emitter:
                     base.append(self.il.type_name(t))
         if td.is_valuetype and not td.is_enum and not base:
             pass
-        hdr = '%s %s%s' % (kw, safe_ident(sanitize(name)), gparams)
+        hdr = '%s %s%s%s' % (kw, safe_ident(sanitize(name)), gparams, ebase if td.is_enum else '')
         if base:
             hdr += ' : ' + ', '.join(base)
         lines.append(hdr)
@@ -304,14 +319,89 @@ class Emitter:
             out.append('        %s = %s,' % (safe_ident(sanitize(f.name)), v if v is not None else '?'))
         return out
 
-    def default_value_of(self, field_row) -> Optional[str]:
+    def default_value_of(self, field_row, decl_ty=None) -> Optional[str]:
         dv = self.meta.field_default_values.get(field_row)
         if not dv:
             return None
         ti, di = dv
-        return self.parse_default(ti, di)
+        return self.parse_default(ti, di, decl_ty=decl_ty)
 
-    def parse_default(self, type_idx, data_idx, param=False) -> Optional[str]:
+    _UNDER_RANGE = {0x04: (-0x80, 0x7f), 0x05: (0, 0xff),
+                    0x06: (-0x8000, 0x7fff), 0x07: (0, 0xffff),
+                    0x08: (-0x80000000, 0x7fffffff), 0x09: (0, 0xffffffff),
+                    0x0a: (-0x8000000000000000, 0x7fffffffffffffff),
+                    0x0b: (0, 0xffffffffffffffff),
+                    0x18: (-0x80000000, 0x7fffffff), 0x19: (-0x80000000, 0x7fffffff)}
+
+    def _enum_default_cast(self, enum_ty, text, te=0):
+        """Cast a bare underlying literal to its proved enum type
+        (`(CompareFunction)4`, CS0266/CS1750 shapes A+C). Unprovable (no
+        enum_members table) keeps today's raw int. Negatives parenthesize
+        (CS0075: `(E)(-32)`); out-of-underlying-range constants wrap
+        `unchecked` (CS0221). ponytail: cast, never member names -- names
+        stay on the fold paths."""
+        if enum_ty is None:
+            return text
+        try:
+            v = int(text, 0)
+        except Exception:
+            return '(%s)%s' % (enum_ty, text)
+        inner = '(%d)' % v if v < 0 else str(v)
+        r = self._UNDER_RANGE.get(te)
+        if r is not None and not r[0] <= v <= r[1]:
+            return 'unchecked((%s)%s)' % (enum_ty, inner)
+        return '(%s)%s' % (enum_ty, inner)
+
+    def _proved_enum_name(self, ty):
+        """C# spelling of ty when it proves an enum (enum_members table
+        present), else None. The default blob records underlying types,
+        so the enum must come from the declaration site (param/field
+        type), never the blob. ponytail: proof-or-raw; genericinst (0x15)
+        declines until observed."""
+        try:
+            if not isinstance(ty, tuple):
+                return None
+            if (ty[1] >> 16) & 0xFF not in (0x55, 0x11, 0x12):
+                return None
+            if not 0 <= ty[0] < len(self.meta.typedefs):
+                return None
+            if self.il.enum_members(ty[0]) is None:
+                return None
+            return self.il.type_name(ty)
+        except Exception:
+            return None
+
+    def _param_default_suffix(self, m, k, p, pt, seen_opt):
+        """` = <default>` suffix for one signature parameter (CS1737).
+        A null-row (`data_idx == -1`) param after an earlier optional
+        renders `= default` (refs, nullables and structs zero-init;
+        `= null` would be illegal for structs). Byref never defaults;
+        undecodable stays bare. Returns (suffix, seen_opt). ponytail:
+        decline-by-default; the genuine-mid strip lives at the loop
+        (order+arity preserved, so call sites cannot tell)."""
+        key = m.parameter_start + k
+        row = self.meta.param_default_values.get(key)
+        byref = (pt[1] >> 29) & 1 if pt else 0
+        if row and not byref:
+            dv = self.parse_default(*row, param=True, decl_ty=pt)
+            if dv:
+                return ' = %s' % dv, True
+            if row[1] is not None and row[1] < 0 and seen_opt:
+                return ' = default', True
+        return '', seen_opt
+
+    def _strip_mid_defaults(self, ps, info):
+        """Drop rendered defaults before the first bare follower
+        (genuine-mid shape, 5 methods: a defaulted param ahead of a
+        row-less required one). Trailing defaults stay. Order and arity
+        never change, so positional call sites are unaffected."""
+        if any(info) and not all(info):
+            for i, v in enumerate(info):
+                if v and any(not w for w in info[i + 1:]):
+                    ps[i] = ps[i].rsplit(' = ', 1)[0]
+        return ps
+
+    def parse_default(self, type_idx, data_idx, param=False, decl_ty=None) -> Optional[str]:
         if data_idx is None or data_idx < 0:
             return None
         t = self.il.types[type_idx] if 0 <= type_idx < len(self.il.types) else None
@@ -323,17 +413,36 @@ class Emitter:
         # v29+ stores i4/u4/string (and enums over those underlyings) in the
         # WriteCompressedUInt32 format; everything else stays raw fixed-size.
         v29 = self.meta.version >= 29
+        enum_ty = None
+        rte = te  # range-check type: blob te unless an enum proves narrower
         try:
             if te in (0x55, 0x11):  # enum: encode via the underlying type
                 td = self.meta.typedefs[t[0]] if t[0] < len(self.meta.typedefs) else None
                 if not td or td.element < 0:
                     return None
+                enum_ty = self._proved_enum_name(t)
                 te = self.il._type_enum(self.il.types[td.element])
+            if enum_ty is None and decl_ty is not None:
+                # the blob records underlying types; the enum comes
+                # from the declaration site (param/field type). The range
+                # check also follows the enum (blob u4 vs enum i4:
+                # DesiredAccess 2148532224 needs unchecked).
+                enum_ty = self._proved_enum_name(decl_ty)
+                if enum_ty is not None:
+                    try:
+                        _dt = self.meta.typedefs[decl_ty[0]] \
+                            if 0 <= decl_ty[0] < len(self.meta.typedefs) else None
+                        _et = self.il.types[_dt.element] \
+                            if _dt is not None and 0 <= _dt.element < len(self.il.types) else None
+                        if _et is not None:
+                            rte = self.il._type_enum(_et)
+                    except Exception:
+                        pass
             if te == 0x02:
                 return 'true' if d[off] else 'false'
             if te in (0x04, 0x05):
                 v = d[off]
-                return str(v - 0x100 if te == 0x04 and v >= 0x80 else v)
+                return self._enum_default_cast(enum_ty, str(v - 0x100 if te == 0x04 and v >= 0x80 else v), rte)
             if te == 0x03:
                 c = chr(u16(d, off))
                 if c.isprintable():
@@ -341,17 +450,17 @@ class Emitter:
                 return "'\\u%04x'" % u16(d, off)
             if te in (0x06, 0x07):
                 v = u16(d, off)
-                return str(v - 0x10000 if te == 0x06 and v >= 0x8000 else v)
+                return self._enum_default_cast(enum_ty, str(v - 0x10000 if te == 0x06 and v >= 0x8000 else v), rte)
             if te == 0x08:
-                return str(compressed_int(d, off)[0] if v29 else i32(d, off))
+                return self._enum_default_cast(enum_ty, str(compressed_int(d, off)[0] if v29 else i32(d, off)), rte)
             if te == 0x09:
-                return str(read_compressed_uint(d, off)[0] if v29 else u32(d, off))
+                return self._enum_default_cast(enum_ty, str(read_compressed_uint(d, off)[0] if v29 else u32(d, off)), rte)
             if te == 0x0a:
-                return str(i64(d, off))
+                return self._enum_default_cast(enum_ty, str(i64(d, off)), rte)
             if te == 0x0b:
-                return str(u64(d, off))
+                return self._enum_default_cast(enum_ty, str(u64(d, off)), rte)
             if te in (0x18, 0x19):
-                return str(i32(d, off))
+                return self._enum_default_cast(enum_ty, str(i32(d, off)), rte)
             if te == 0x0c:
                 return repr_f32(struct.unpack_from('<f', d, off)[0])
             if te == 0x0d:
@@ -423,6 +532,18 @@ class Emitter:
 
     # -- members ------------------------------------------------------------
     def method_sig(self, m: MethodDef, td: TypeDef) -> str:
+        # CLI finalizers cannot spell `override void Finalize()`
+        # (CS0249 x61); C# wants a destructor. Guarded to the exact
+        # finalizer shape (instance, non-generic, parameterless, void)
+        # so FinalizeXxx lookalikes and overloads keep today's spelling.
+        # ponytail: reuses ctor_sig's class spelling (keeps _N arity,
+        # drops <T>; nested td yields the innermost name); bodies and
+        # RVA comments pass through untouched.
+        if m.name == 'Finalize' and not m.is_static and m.generic_container == -1:
+            if not self.meta.method_params(m):
+                rt = self.il.types[m.return_type] if 0 <= m.return_type < len(self.il.types) else None
+                if rt is not None and self.il.type_name(rt) == 'void':
+                    return '~%s()' % safe_ident(sanitize(td.name))
         f = m.flags
         vis = METH_VIS.get(f & 7, '')
         # CLI MethodAttributes: Final=0x20, Virtual=0x40,
@@ -476,15 +597,39 @@ class Emitter:
                     gplist.append(self.meta.generic_parameters[gi][1])
             gp = '<%s>' % ', '.join(gplist) if gplist else ''
         ps = []
+        info = []
+        seen_opt = False
         params = self.meta.method_params(m)
         for k, p in enumerate(params):
             pt = self.il.types[p.type] if 0 <= p.type < len(self.il.types) else None
             tn = self.il.type_name(pt) if pt else 'object'
             byref = (pt[1] >> 29) & 1 if pt else 0
             pmod = 'ref ' if byref else ''
-            dv = self.parse_default(*self.meta.param_default_values[m.parameter_start + k],
-                                    param=True) if (m.parameter_start + k) in self.meta.param_default_values else None
-            ps.append('%s%s %s%s' % (pmod, tn, safe_ident(p.name), (' = %s' % dv) if dv else ''))
+            suf, seen_opt = self._param_default_suffix(m, k, p, pt, seen_opt)
+            ps.append('%s%s %s%s' % (pmod, tn, safe_ident(p.name), suf))
+            info.append(bool(suf))
+        ps = self._strip_mid_defaults(ps, info)
+        if m.name in ('op_Explicit', 'op_Implicit') and m.is_static \
+                and '.' not in m.name and m.generic_container == -1 and len(params) == 1 \
+                and not any(' = ' in s for s in ps):
+            # conversion-operator twins (Decimal.op_Explicit x4...): the
+            # whole group renders `explicit/implicit operator`, since no
+            # two same-signature members may coexist (CS0111 x10).
+            # ponytail: group-scoped (singletons + non-colliding call
+            # sites untouched); byref params render by value (operators
+            # cannot take ref; the view read is pure); params with
+            # defaults decline (operator-illegal).
+            try:
+                _pts = tuple(self.il.types[p.type] for p in params)
+                _conv = self.il.op_collision_conv(m.declaring, m.name, _pts)
+            except Exception:
+                _conv = None
+            if _conv is not None:
+                _umods = mods
+                _ops = [s[4:] if s.startswith('ref ') else s for s in ps]
+                if '*' in rtname or any('*' in s for s in _ops):
+                    _umods += 'unsafe '
+                return '%s%s operator %s(%s)' % (_umods, _conv, rtname, ', '.join(_ops))
         if '*' in rtname or any('*' in s for s in ps):
             mods += 'unsafe '
         return '%s%s %s%s(%s)' % (mods, rtname, name, gp, ', '.join(ps))
@@ -659,7 +804,7 @@ class Emitter:
             # default value` -- RVA data blobs carry a dv row too, and 14
             # of them decoded to an int and printed as const.
             if fa & FA_LITERAL:
-                dv = self.default_value_of(fi)
+                dv = self.default_value_of(fi, ft)
                 if dv is not None:
                     out.append(pre + '    %sconst %s %s = %s;' % (
                         vis, ftname, fn, dv))
@@ -750,15 +895,18 @@ class Emitter:
 
     def render_params(self, m: MethodDef) -> str:
         ps = []
+        info = []
+        seen_opt = False
         params = self.meta.method_params(m)
         for k, p in enumerate(params):
             pt = self.il.types[p.type] if 0 <= p.type < len(self.il.types) else None
             tn = self.il.type_name(pt) if pt else 'object'
             byref = (pt[1] >> 29) & 1 if pt else 0
             pmod = 'ref ' if byref else ''
-            dv = self.parse_default(*self.meta.param_default_values[m.parameter_start + k],
-                                    param=True) if (m.parameter_start + k) in self.meta.param_default_values else None
-            ps.append('%s%s %s%s' % (pmod, tn, safe_ident(p.name), (' = %s' % dv) if dv else ''))
+            suf, seen_opt = self._param_default_suffix(m, k, p, pt, seen_opt)
+            ps.append('%s%s %s%s' % (pmod, tn, safe_ident(p.name), suf))
+            info.append(bool(suf))
+        ps = self._strip_mid_defaults(ps, info)
         return ', '.join(ps)
 
     def ctor_sig(self, m: MethodDef, td: TypeDef) -> str:

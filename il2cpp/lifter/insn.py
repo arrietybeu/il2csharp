@@ -717,15 +717,51 @@ class _InsnMixin:
             # SSE arithmetic is float by construction; SS operates on R4 and
             # SD on R8
             fty = _R4_TY if sfx == 'f' else _R8_TY
-            self._hint_tok(a, fty)
-            self._hint_tok(be, fty)
-            b_txt = be.text if be else '0' + sfx
+            aparts = getattr(a, '_parts', None)
+            if not aparts or not all(self.il._type_enum(v.ty) == 0x0c
+                                     for _, v, _, _ in aparts):
+                self._hint_tok(a, fty)
+                self._hint_tok(be, fty)
+                b_txt = be.text if be else '0' + sfx
+                if op == '+' and _int_lit(b_txt) is not None and _int_lit(b_txt) < 0:
+                    op, b_txt = '-', str(-_int_lit(b_txt))
+                fe = self._mk(_bin_txt(a.text if a else '0f',
+                                       (a._prec if a else None) or _ATOM_PREC,
+                                       op, b_txt,
+                                       (be._prec if be else None) or _ATOM_PREC),
+                              a.ty if (a is not None and isinstance(a.ty, tuple)) else fty,
+                              'float')
+                fe._prec = _BIN_PREC.get(op)
+                self.set_reg(dst, fe)
+                return
+            width = 4 if sfx == 'f' else 8
+            # Scalar SSE arithmetic changes only the low lane.  Keep the
+            # untouched high lanes as provenance for a later shuffle/unpack
+            # instead of replacing the whole symbolic XMM register.
+            a0 = self._piece_value(a, 0, width, fty) if a is not None else None
+            b0 = self._piece_value(be, 0, width, fty) if be is not None else None
+            a0 = a0 or a
+            b0 = b0 or be
+            self._hint_tok(a0, fty)
+            self._hint_tok(b0, fty)
+            b_txt = b0.text if b0 else '0' + sfx
             if op == '+' and _int_lit(b_txt) is not None and _int_lit(b_txt) < 0:
                 op, b_txt = '-', str(-_int_lit(b_txt))
-            fe = self._mk(_bin_txt(a.text if a else '0f', (a._prec if a else None) or _ATOM_PREC,
-                                   op, b_txt, (be._prec if be else None) or _ATOM_PREC),
-                          a.ty if (a is not None and isinstance(a.ty, tuple)) else fty, 'float')
-            fe._prec = _BIN_PREC.get(op)
+            low = self._mk(_bin_txt(a0.text if a0 else '0f',
+                                    (a0._prec if a0 else None) or _ATOM_PREC,
+                                    op, b_txt,
+                                    (b0._prec if b0 else None) or _ATOM_PREC),
+                           a0.ty if (a0 is not None and isinstance(a0.ty, tuple)) else fty,
+                           'float')
+            low._prec = _BIN_PREC.get(op)
+            fe = self._copy_expr(low)
+            parts = [(0, low, 0, width)]
+            for off in range(width, 16, width):
+                high = self._piece_value(a, off, width, fty) if a is not None else None
+                if high is not None:
+                    parts.append((off, high, 0, width))
+            if len(parts) > 1:
+                fe._parts = parts
             self.set_reg(dst, fe)
             return
         if mn == Mnemonic.UNPCKLPS:

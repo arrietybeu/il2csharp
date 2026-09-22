@@ -347,6 +347,25 @@ class _ValuesMixin:
             t._mi = e._mi
         if getattr(e, '_usg_idx', None) is not None:
             t._usg_idx = e._usg_idx
+        # Scalar SSE writes preserve upper lanes.  If kill-on-write freezes
+        # the low expression, retain only higher packed lanes that do not
+        # themselves read the overwritten lvalue; disputed lanes stay
+        # honestly absent.
+        parts = getattr(e, '_parts', None)
+        if parts:
+            frozen = Expr(v, e.ty, e.kind)
+            kept = []
+            for lo, value, off, count in parts:
+                if lo == 0 and off == 0 and value.text == e.text:
+                    kept.append((lo, frozen, off, count))
+                elif _mentions(value.text, lv):
+                    saved = self._kill_one(value, lv, seen)
+                    if saved is not value:
+                        kept.append((lo, saved, off, count))
+                else:
+                    kept.append((lo, value, off, count))
+            if kept:
+                t._parts = kept
         seen[e.text] = t
         return t
 

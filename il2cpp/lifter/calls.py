@@ -1679,6 +1679,11 @@ class _CallsMixin:
             short2 = None
             if mi is not None and 0 <= mi < len(self.meta.methods):
                 m2 = self.meta.methods[mi]
+                # This early-return path must rebuild Win64 positions too:
+                # parameters five and later live in the stack home area, not
+                # in the stale XMM tail of the raw argument list.
+                self._hint_arg_types(args, arg_exprs, mi, rty)
+                rest = self._positional_args(args, m2, rty)[1:]
                 want = m2.param_count + (0 if m2.is_static else 1)
                 if len(rest) > want:
                     rest = rest[:want]
@@ -1700,6 +1705,11 @@ class _CallsMixin:
                     pt2 = self._class_type_subst(pt2)
                     if pt2 is None:
                         break
+                    aggregate2 = self._copied_struct_arg(rest[ai2], pt2) \
+                        if hasattr(self.il, '_sf_field_size') else None
+                    if aggregate2 is not None:
+                        rest[ai2] = aggregate2
+                        continue
                     bits2 = pt2[1]
                     rep2 = _byref_arg_render(
                         rest[ai2],
@@ -1968,6 +1978,31 @@ class _CallsMixin:
                 args = args[:mx2]
             self.ind_slot = None
         call = short if short is not None else '%s(%s)' % (name, ', '.join(args))
+        # conversion-operator twins (Decimal.op_Explicit x4...): decls
+        # render as `explicit/implicit operator`, so a `T.op_X(a)` call
+        # names a member that no longer exists. Recast `(R)(a)` for the
+        # resolved single-arg collision only; a leading `ref `/`&` (byref
+        # group homes) strips to the value, matching the by-value
+        # operator decl. ponytail: mi + shape gated; non-colliding op_
+        # call spellings keep rendering.
+        _m2c = self.meta.methods[mi] \
+            if mi is not None and 0 <= mi < len(self.meta.methods) else None
+        if _m2c is not None and _m2c.name in ('op_Explicit', 'op_Implicit') \
+                and _m2c.is_static and '.' not in _m2c.name and _m2c.generic_container == -1 \
+                and len(args) == 1 and args[0] not in ('_', '?', '') and rty is not None:
+            try:
+                _pc = self.meta.method_params(_m2c)
+                _ptc = tuple(self.il.types[p.type] for p in _pc)
+                _cc = self.il.op_collision_conv(_m2c.declaring, _m2c.name, _ptc) \
+                    if len(_ptc) == 1 else None
+                _rtn = self.il.type_name(rty) if _cc is not None else None
+            except Exception:
+                _cc, _rtn = None, None
+            if _cc is not None and _rtn:
+                _av = args[0][4:] if args[0].startswith('ref ') else args[0]
+                if _av.startswith('&'):
+                    _av = _av[1:]
+                call = '(%s)(%s)' % (_rtn, _av)
         # --- unresolved vtable slot (receiver type unknown)
         if name == 'VIRT_CALL':
             recv0 = recv if recv is not None else getattr(self, 'vt_recv', None)

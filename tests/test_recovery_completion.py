@@ -31,6 +31,76 @@ def test_unpack_low_float_lanes_preserves_both_components():
     assert lift._piece_value(packed, 8, 4, F32) is None
 
 
+def _packed_floats(*names):
+    packed = Expr(names[0], F32, 'bits')
+    packed._parts = [(i * 4, Expr(name, F32, 'float'), 0, 4)
+                     for i, name in enumerate(names)]
+    return packed
+
+
+def test_scalar_sse_arithmetic_preserves_high_lanes():
+    lift = struct_lifter()
+    lift.regs.update(XMM0=_packed_floats('x', 'y'),
+                     XMM1=Expr('dx', F32, 'float'))
+    execute(lift, 'f30f5cc1')  # subss xmm0,xmm1
+    result = lift.regs['XMM0']
+    assert lift._piece_value(result, 0, 4, F32).text == 'x - dx'
+    assert lift._piece_value(result, 4, 4, F32).text == 'y'
+
+
+def test_phi_preserves_unanimous_high_lane():
+    lift = struct_lifter()
+    phi = Expr('v99', F32, 'float')
+    lift._aggregate_phi_sources = {
+        'v99': [_packed_floats('left', 'same'),
+                _packed_floats('right', 'same')],
+    }
+    lift._aggregate_phi_types = {}
+    high = lift._piece_value(phi, 4, 4, F32)
+    assert high.text == 'same'
+
+
+def test_phi_declines_disputed_high_lane():
+    lift = struct_lifter()
+    phi = Expr('v99', F32, 'float')
+    lift._aggregate_phi_sources = {
+        'v99': [_packed_floats('left', 'a'),
+                _packed_floats('right', 'b')],
+    }
+    lift._aggregate_phi_types = {}
+    assert lift._piece_value(phi, 4, 4, F32) is None
+
+
+def test_binding_keeps_packed_phi_provenance():
+    lift = struct_lifter()
+    phi = Expr('v99', F32, 'float')
+    sources = [_packed_floats('left', 'same'),
+               _packed_floats('right', 'same')]
+    lift._aggregate_phi_sources = {'v99': sources}
+    lift._aggregate_phi_types = {}
+    lift._gp_blocked = set()
+    lift._bind(phi)
+    assert lift._aggregate_phi_sources[phi.text] is sources
+    assert lift._piece_value(phi, 4, 4, F32).text == 'same'
+
+
+def test_kill_on_write_keeps_safe_high_lane():
+    lift = struct_lifter()
+    packed = _packed_floats('old - dx', 'safe')
+    frozen = lift._kill_one(packed, 'old', {})
+    assert lift._piece_value(frozen, 0, 4, F32).text == frozen.text
+    assert lift._piece_value(frozen, 4, 4, F32).text == 'safe'
+
+
+def test_kill_on_write_freezes_stale_high_lane():
+    lift = struct_lifter()
+    packed = _packed_floats('old - dx', 'old.y')
+    frozen = lift._kill_one(packed, 'old', {})
+    high = lift._piece_value(frozen, 4, 4, F32)
+    assert high.text.startswith('t')
+    assert any('= old.y;' in line[1] for line in lift.out)
+
+
 def test_boolean_xor_one_is_logical_negation():
     lift = lifter({'RAX': Expr('enabled', (0, 0x02 << 16), 'int')})
     execute(lift, '83f001')

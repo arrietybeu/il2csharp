@@ -1,381 +1,312 @@
-# Decompiler recovery follow-up — current handoff
+# TODO NOW — exact remaining output failures and source ownership
 
-## Current state
+Generated 2026-09-22 from the current promoted tree. This is a handoff for
+the next agent. The generated C# tree is `final_out/`; do not edit it by hand.
+The source of truth is the decompiler under `il2cpp/`. Fixture inputs are
+`testgame/ShiftAtMidnight_Data/il2cpp_data/Metadata/global-metadata.dat` and
+`testgame/GameAssembly.dll`.
 
-The work remains source-level; `final_out/` was not hand-edited or promoted.
-The private fixture is available at:
+## Baseline gates (known good; do not disturb)
 
-- metadata: `testgame/ShiftAtMidnight_Data/il2cpp_data/Metadata/global-metadata.dat`
-- binary: `testgame/GameAssembly.dll`
+- Strict rebuild: 114,458 bodies, 0 failures, 0 fallbacks.
+- Brace audit: 0 unbalanced files.
+- Full suite: 879 passed, 2 failures only: MethodDefs 67525 and 104428.
+- `final_out/` is promoted output and must remain read-only.
+- The fixture is private/licensed; never redistribute it.
 
-Fresh targeted lifts are in `work/recovery_continue.json` and the intermediate
-`work/recovery_step*.json` files.
+## Exact fresh census of `final_out/`
 
-## Proven fixes now in the working tree
+All paths below are relative to `C:\Users\crax\Downloads\il2csharp`.
+The count is occurrences/lines first and distinct `.cs` files second.
 
-- `MicAudioCanvas.Start` assigns `null` on the null connection path and a
-  `Recorder` on the non-null path; duplicate raw stores are gone.
-- `MicAudioCanvas.Update` reads `CurrentAvgAmp`, preserves `InputMode`, compares
-  against `InputMode.OpenMic`, and keeps the branch-produced PTT Boolean in
-  scope.
-- `MicAudioCanvas.OnVoiceConnectionReady` emits typed assignments without the
-  duplicate unsafe write.
-- `AnimationEventTrigger.TeleportPlayer` passes all `Vector3` and `Quaternion`
-  components.
-- `CollisionEventHandler.OnDrawGizmos` recovers native-list `.Count`, typed
-  `Oni.Contact`, red/green/cyan colors, complete `pointB`, and complete
-  `normal * distance` vectors. The missing vector components were caused by
-  ignored `UNPCKLPS`; aggregate phi provenance now also preserves conditional
-  16-byte colors.
-- `ConsoleUINavigation.OnEnable` retains `RemoveAll`, uses `.Count`, recovers
-  the `RemoveOnConsole` predicate body, and reconstructs explicit Navigation
-  with preserved endpoint links and previous/next neighbors.
-- `GlobalUINavigation.DisableNavigation` now emits the lock-count increment,
-  restoring nested disable/enable semantics.
-- Power-of-two sizing retains the conditional expression as one operand, so
-  subtraction and shifts no longer bind into the wrong ternary arm.
-- Struct calls recover complete by-value arguments instead of scalar members
-  or addresses of local temporaries in the covered paths.
+| category | current scan | supplied handoff figure | exact output root |
+|---|---:|---:|---|
+| shared-body marker `/*shared body, N candidates*/` | 18,995 / 2,304 | 19,013 / 2,304 | `final_out/**/*.cs` |
+| `/*indirect*/` | 7,091 / 975 | 7,091 / 975 | `final_out/**/*.cs` |
+| literal `unknown` | 12,084 / 1,383 | 16,044 / 1,382 | `final_out/**/*.cs` |
+| raw `mem[N]` | 13,189 / 805 | ~13,189 / 805 | `final_out/**/*.cs` |
+| `mem_<hex>` load twins | 324 / 70 | 234 / 69 | `final_out/**/*.cs` |
+| `goto` | 8,707 / 903 | 8,705 / 901 | `final_out/**/*.cs` |
+| `/* nothing */` | 63 / 1 | 63 / — | `final_out/**/*.cs` |
+| `?addr` | 2 / 2 | 22 / 6 | `final_out/**/*.cs` |
 
-Portable regression coverage was added in
-`tests/test_recovery_completion.py` for conditional precedence, metadata
-storage exclusion, `UNPCKLPS` lanes, Boolean XOR, and Boolean returns.
+The differences are scanner-definition differences, not silently ignored
+files: use the commands in the Census reproducibility section. In particular,
+`unknown` can be counted as tokens, lines, or diagnostic hits; `?addr` can be
+counted in historical reports rather than the promoted tree; and the shared
+body/goto totals have changed by small formatting/regen deltas.
 
-## Remaining blockers before promotion
+## 1. Runtime-broken — shared-body calls
 
-1. `GlobalUINavigation.RestoreSelectableNavigation` is still not recovered.
-   Its `Dictionary<Selectable, Navigation>.Enumerator` return is an open
-   nested `GENERICINST`. `candidate_return_type()` substitutes only a direct
-   `VAR`/`MVAR`, so the hidden sret buffer, `MoveNext`, `Current`, key/value,
-   navigation assignment, and disposal remain anonymous. Fix this generically
-   by recursively substituting class arguments inside a generic-instance
-   return; do not special-case this class or RVA.
-2. Delegate construction is substantially recovered (`new Predicate<Selectable>(
-   <>c.<>9.<OnEnable>b__1_0)`), but the cached-field store currently renders
-   as an invalid `tNNNN__1_0 = predicate;`. `_mem_lvalue` proves the correct
-   target is `ConsoleUINavigation.<>c.<>9__1_0`; compiler-generated static
-   field identifiers need the same storage-name sanitation as declarations.
-3. `DisableAllActiveSelectables` still types the saved `Navigation` value as
-   `object` at `Dictionary.Add`. The full struct is present in native state;
-   propagate the closed value parameter type into that argument and remove
-   the obsolete scalar `obj` temporaries.
-4. Some power-of-two expressions still re-expand their original conditional
-   source instead of using the preceding local. Their precedence is now
-   correct, but use binding should preserve the compact `num |= num >> N`
-   form.
-5. Fresh contact output contains a dead packed-color temporary before setting
-   cyan. It is defined and harmless, but should be removed by ordinary dead
-   value cleanup.
-6. Do not promote generated output until the three semantic blockers above
-   are fixed and the affected files pass the C# compiler probe.
+### Exact files
 
-## Validation status
+Every affected file is under `final_out/` and matches the shared-body marker.
+There are 2,304 distinct files. The exact complete inventory is reproducible
+with the first command below; do not use a hand-curated sample as the scope.
 
-Last clean focused run before this handoff:
+### Source ownership
+
+- Primary renderer: `il2cpp/lifter/calls.py:925` — emits
+  `sub_%x/*shared body, %d candidates*/` when the native VA has multiple
+  metadata owners.
+- Shared-call pipeline and candidate/ABI logic: `il2cpp/lifter/calls.py`
+  (especially the shared-call sections around lines 84, 1345, 1600, and
+  1964–2051).
+- Receiver/type lookup and shared target metadata: `il2cpp/runtime/core.py`,
+  `il2cpp/runtime/registration.py`, `il2cpp/runtime/types.py`.
+- Call-site analysis/indirect-tail handoff: `il2cpp/dec/analyze.py:180–205`.
+
+### Why it is broken
+
+The output names a native shared body but cannot select the concrete managed
+MethodDef at the call site. It is therefore not a callable C# declaration;
+the unresolved target throws at runtime. The honest spelling must remain for
+ambiguous cases until receiver type, generic instantiation, ABI, and owner
+proof all agree.
+
+### Required fix direction
+
+Implement receiver-type resolution at the call site, not a global VA rename.
+Preserve all-candidate consensus rules, open-generic rejection, shared sret
+rules, and the 15 conservative constructor leftovers documented in
+`CLAUDE.md`. Add negative tests for ambiguous receivers and shared addresses.
+
+## 2. Runtime-broken — indirect calls
+
+### Exact files
+
+975 files under `final_out/` contain 7,091 `/*indirect*/` occurrences.
+Generate the complete path list with the second census command below.
+
+### Source ownership
+
+- Indirect call rendering: `il2cpp/lifter/calls.py:1139–1141` and
+  `il2cpp/lifter/calls.py:1521`.
+- Virtual/interface unresolved dispatch: `il2cpp/lifter/calls.py:1964–2051`.
+- Indirect memory/control-flow classification: `il2cpp/lifter/insn.py:1231–1234`.
+- CFG safety/unknown indirect control flow: `il2cpp/dec/build.py:25–44` and
+  `il2cpp/dec/analyze.py:180–205`.
+- Higher-level dispatch folding (must decline when proof is absent):
+  `il2cpp/dec/flow.py:917–920` and `il2cpp/dec/sugar.py:328`.
+
+### Required fix direction
+
+Same fix family as shared bodies: infer the receiver/interface slot and exact
+closed MethodDef from metadata plus native evidence. Do not resolve by helper
+VA, class name, or majority candidate. Preserve `/*indirect*/` when proof is
+missing.
+
+## 3. Compile-broken — unknown values
+
+### Exact files
+
+Fresh token scan: 12,084 `unknown` tokens in 1,383 files under
+`final_out/`. The historical handoff reports 16,044 hits/1,382 files because
+its hit definition includes additional unknown-value diagnostics. Treat the
+union of both scans as the investigation scope.
+
+### Source ownership and producer families
+
+- Unknown minting: `il2cpp/lifter/state.py:1131–1132` (`_fresh_unknowns`).
+- Register/value propagation: `il2cpp/lifter/state.py`,
+  `il2cpp/lifter/values.py`, `il2cpp/lifter/aggregates.py`.
+- Unknown call results and ABI fallback: `il2cpp/lifter/calls.py:1185–1262`.
+- Unknown memory operands: `il2cpp/lifter/insn.py:1675–1695`.
+- Unknown cleanup/rendering: `il2cpp/dec/textpass.py:458–529` and
+  `il2cpp/dec/textpass.py:599`.
+
+### Known remainder classes
+
+1. stale stack tiles surviving copies/merges;
+2. SIMD/vector lanes not carried through spills, `UNPCK*`, or calls;
+3. unknown results from unresolved shared/indirect calls;
+4. genuine unknown branch conditions and pointer bases.
+
+Fix producers and provenance; never replace `unknown` textually with zero,
+`default`, or a guessed type.
+
+## 4. Compile-broken — raw `mem[N]` stores and `mem_xx` loads
+
+### Exact files
+
+- `mem[N]`: 13,189 occurrences in 805 files under `final_out/`.
+- `mem_<hex>`: 324 occurrences in 70 files by the current broad scan; the
+  handoff's narrower load-twin census is 234/69.
+
+### Exact source
+
+- `il2cpp/lifter/insn.py:1345`: load fallback returns `Expr('mem_%x' % disp,
+  None, 'ptr')` when the base register is untracked.
+- `il2cpp/lifter/insn.py:1349`: `_mem_lvalue` begins raw-store generation.
+- `il2cpp/lifter/insn.py:1379`: `if be is None: return 'mem[%d]' % sdisp(disp)`.
+- Store consumers: `il2cpp/lifter/insn.py:1695–1787`.
+- Raw-width/type tests and intended conservative behavior:
+  `tests/test_review102_raw_store_widths.py:251–359`.
+
+### Required fix direction
+
+Recover the base register/aggregate provenance and declared pointee width
+before emitting a named field or typed pointer. A raw store is currently an
+undeclared C# identifier and therefore a compile error. Do not make up fields
+from displacement alone; preserve raw output when ownership/layout is not
+proved.
+
+## 5. Compile-broken — unbound temps
+
+### Exact files
+
+Upper bound: up to 8,700 tokens across as many as 2,200 output files. This is
+not a clean compiler count: it includes false positives such as multi-
+declarations and identifiers introduced in a branch whose declaration is
+outside the textual region. The exact candidate path inventory is produced by
+the unbound-temp command below.
+
+### Source ownership
+
+- Register/stack seed and copy state: `il2cpp/lifter/state.py`,
+  `il2cpp/lifter/values.py`, `il2cpp/lifter/aggregates.py`.
+- Phi/merge materialization and copies: `il2cpp/dec/analyze.py:448–510`.
+- Declaration/use binding and dead-local cleanup:
+  `il2cpp/dec/dataflow.py`, `il2cpp/dec/emit.py`, `il2cpp/dec/textpass.py`.
+- Final semantic names (must not invent type evidence):
+  `il2cpp/dec/emit.py` / `_semantic_local_names` and the invariants in
+  `CLAUDE.md`.
+
+### Required fix direction
+
+Trace each candidate to its native definition, stack home, phi edge, or call
+result. Fix the producer/provenance and scope merge. Do not globally declare
+all `objN` names or substitute `default`; that would hide missing native
+values and create runtime corruption.
+
+## 6–11. Resolved or harness artifacts — do not re-investigate
+
+- Duplicate members: genuine intra-assembly duplicates were fixed by
+  conversion-operator emission. Remaining CS0101/CS0111/CS0102 spikes are
+  cross-assembly BCL twins caused by the single-assembly harness. See
+  `il2cpp/emitter.py` and the Roslyn ledger in `nowtodo.md` Addenda 14–15.
+- Enum/int edges: fixed by enum-aware `(E)v` casts, underlying declarations,
+  parentheses, and `unchecked`; verify with Roslyn only. Do not reopen.
+- Finalizers: fixed in `il2cpp/headers.py`/signature emission; exact `~X()`
+  output is already covered. Do not reopen.
+- Optional parameter order: fixed in parameter emission (`= default` for
+  dropped trailing null rows; genuine mid-default rows stripped). Do not
+  reorder parameters.
+- CS0115 bad overrides: harness artifact; adding Mono.Security to the check
+  scope reduces the reported 14 to zero.
+- `_1<T>` qualifier remainder: harness artifact; declarations live in
+  uncompiled Fusion directories.
+
+## 12–15. Cosmetic/by-design — do not spend fix effort
+
+- `goto`: current scan 8,707/903; compiles and represents unresolved
+  unstructured control flow. Emitter/structured pipeline is under
+  `il2cpp/dec/structure.py`, `flow.py`, and `emit.py`.
+- `/* nothing */`: 63 occurrences in one file; intentional empty bodies.
+- `__SharedBodyStubs`: throwing stubs are intentional behavior for unresolved
+  runtime targets; see `il2cpp/emitter.py` stub generation.
+- `?addr`: current promoted tree has only 2 occurrences in 2 files; nearly
+  extinct and not a priority.
+
+## Census reproducibility (PowerShell, from repository root)
 
 ```powershell
-python -m pytest -q tests/test_recovery_completion.py tests/test_recovery_followup.py --disable-warnings
-# 54 passed
+$out = 'final_out'
+rg -n --glob '*.cs' 'sub_[0-9A-Fa-fx]+/\*shared body, [0-9]+ candidates\*/' $out
+rg -n --glob '*.cs' '/\*indirect\*/' $out
+rg -n --glob '*.cs' '\bunknown\b' $out
+rg -n --glob '*.cs' '\bmem\[[^]]+\]' $out
+rg -n --glob '*.cs' '\bmem_[A-Za-z0-9_]+' $out
+rg -n --glob '*.cs' '\bgoto\b' $out
+rg -n --glob '*.cs' '/\* nothing \*/' $out
+rg -n --glob '*.cs' '\?addr' $out
 ```
 
-The portable suite was previously clean at 718 passed before the latest small
-delegate/aggregate changes; rerun it after this handoff. The licensed full
-suite has the known unreviewed golden drift documented in `docs/todo.md`; a
-run with `--maxfail=10` stopped at 10 snapshot differences, rather than a new
-portable failure. Goldens must be reviewed against native instructions, not
-blindly updated.
-
-## Resume commands
+To obtain exact distinct paths for any category, pipe a command's output
+through this PowerShell expression (it preserves the `file:line:text` output
+for follow-up inspection):
 
 ```powershell
-$env:PYTHONHASHSEED = '0'
-$env:IL2CSHARP_METADATA = (Resolve-Path 'testgame/ShiftAtMidnight_Data/il2cpp_data/Metadata/global-metadata.dat').Path
-$env:IL2CSHARP_BINARY = (Resolve-Path 'testgame/GameAssembly.dll').Path
-
-python -m pytest -q -m "not game" --disable-warnings
-python tools/inspect_methods.py `
-  --metadata $env:IL2CSHARP_METADATA `
-  --binary $env:IL2CSHARP_BINARY `
-  --mi 23757 23761 23762 23767 23917 24224 24655 24659 26311 26312 26313 `
-  --save work/recovery_resume.json
+$hits = rg -n --glob '*.cs' '/\*indirect\*/' final_out
+$hits | ForEach-Object { ($_ -split ':',3)[0] } | Sort-Object -Unique
 ```
 
-After the blockers are fixed, generate the five affected types into a separate
-candidate directory, run `tools/validate_corpus.py` and
-`tools/compile_corpus.py`, inspect the diff, then ## Addendum 2026-09-20 (round 3e session)
+Replace the pattern with the other marker. For source ownership, use
+`rg -n` against the exact files listed above; line numbers are current source
+line anchors and must be rechecked after edits.
 
-Landed in the working tree (all `il2cpp/` edits binary-patched,
-CRLF/no-BOM asserted; `tests/test_recovery_completion.py` LF, 12 tests):
+## Work order for the fixing agent
 
-- Blocker 2 DONE: `t1012__1_0` was `_bind`'s blind `str.replace`
-  cutting `...<>c.<>9` inside `...<>c.<>9__1_0` (`_field_expr` was
-  innocent -- probe trace). `_bind_replace` (`il2cpp/expr.py`, all 10
-  `_bind` sites) rewrites whole-token occurrences only. 24655 now
-  emits `ConsoleUINavigation.<>c.<>9__1_0 = predicate13;`. The handoff
-  suspected `_mem_lvalue`/sanitation; evidence says the store path
-  was already right.
-- Blocker 3 DONE: 23761 now emits `Navigation navigation1` at
-  `dictionary22.Add(...)`, `navigation2.m_Mode = Mode.None` (dword-0
-  at the home base, proved against the field chain + `_fimm`), and
-  `Navigation navigation1 = navigation2`. Machinery: byval-struct
-  `&slot` call hints (TRUST-gated, closed-key, setdefault),
-  `_struct_home_ty` recording on whole-field stores, `_home_field_store`
-  for base constants (declines to scalar when unprovable). Residual
-  home-construction lines stay (loop-DCE conservatism) but compile.
-- Blocker 5 DONE: 23917's dead `(float2)(0.0f, 1.0f)` drops in
-  ordinary DCE (`_PURE_LOAD_RX` admits paren-free `(float2)(...)`;
-  the only packed spelling emitted, over literals). Cyan kept.
-- Bonus improvement: 45016 `TimeOfDay` temp is now `System.TimeSpan`
-  (was `object`, uncompilable member access) via home recording.
-- Deferred with designs: blocker 1 (no closed Enumerator/KVP rows by
-  scan; return-subst insufficient -- field loads + structural loss;
-  needs synthetic nested-type table et al.; double-Dispose is
-  faithful), blocker 4 (needs subexpression-CSE; output correct).
-- Gates: portable 730/730; full suite 822 passed / 34 failed. The 12
-  beyond the triaged 22 are INHERITED drift, each attributed:
-  review80-direction + review83-unobserved (prior P6 files);
-  mi-67525 (prior UNPCKLPS handler -- honest `?/bits` vs golden's
-  stale-value luck, proven by branch-skip restore);
-  mi-21027/47817/112379 + mi-26747-strip-line + closure +
-  mi-45016 `string.Empty` line (prior owner-strip in
-  `lifter/values.py` -- `X.F` compiles, `typeof(X).F` does not);
-  mi-39789 + packed + datetime + mi-26747-guard + mi-45016
-  type1/guards/renumber (prior klass/sfblob `_note_use` gate --
-  proven by revert-restore, twice for packed/datetime).
-  My tree contributes ZERO new failures; 45016 additionally carries
-  the TimeSpan improvement hunk (regen-list, not a revert).
-  Per-item configs, diffs, and native evidence recorded in the
-  session transcript; probe/patch scripts live outside the repo
-  (`%TEMP%/opencode`, never committed).
-- Leftovers: 34 golden/review items await gated regen (22 triaged +
-  12 drift incl. 1 improvement); promotion still gated on a user call
-  plus the compiler probe over the five affected types.
+1. Build a machine-readable per-file/per-method inventory from the commands
+   above, then select representative native methods for each producer class.
+2. Fix shared-body receiver resolution and indirect/interface dispatch as one
+   proof-driven feature; run targeted lifts before any corpus rebuild.
+3. Fix unknown values and raw memory through register/stack/aggregate
+   provenance; add negative tests for ambiguous layouts and stale tiles.
+4. Classify unbound temps only after the upstream fixes; otherwise the count
+   is inflated by unknown producers.
+5. Run compile/parse gates and the full suite. Preserve the exact two known
+   failures (67525, 104428) unless native evidence proves a separate fix.
+6. Never regenerate or promote `final_out/` without an explicit user call.
 
-(End of file - session addendum 2026-09-20)
+## Stop record — 2026-09-22, SIMD/stack provenance follow-up
 
-## Addendum 2026-09-20, turn 2 (subagents + CSE + candidate gate)
+The decompiler changes are in the primary repository package under
+`il2cpp/`; the scripts under
+`C:\Users\crax\AppData\Local\Temp\opencode` were tracing/patch helpers only
+and are not imported by the project. `final_out/` was not edited, rebuilt, or
+promoted.
 
-- Three analysis subagents (read-only, Temp scratch): S1 audited every
-  GENERICINST consumer (exact touch list: table-first suffices for
-  `type_name`/`td_of_ty`/`_td_of`; own branches needed for
-  `_closed_type_key`, `_type_has_var`, `_generic_inst_args`,
-  `_byval_struct`; SRET/`trust` stand-downs frozen) with Q1-Q5 answers;
-  S2 censused the pow2 idiom (2 sites: 23761 + twin 23767) and wrote
-  the complete `_subexpr_cse` rule design incl. 5 unit-test sketches;
-  S3 independently re-verified all 12 drift attributions (10 VERIFIED
-  as prior, 45016-TimeSpan VERIFIED as session improvement).
-- Candidate-tree gate (Temp `candidate_out`, `--types` per type):
-  54 bodies / 0 failed / 0 fallbacks strict; parse 0/0/0; Roslyn 83
-  errors all CS0246 missing-assembly scope noise, zero on recovered
-  identifiers; five-file diff strictly improving. Full-tree compile
-  stays promotion-time.
-- Blocker 4 LANDED per S2's design (`_subexpr_cse` in `dec/dataflow.py`,
-  hooked after `_value_cse`): 23761 + 23767 fold to the compact
-  `num |= num >> N` cascade; 25626's offset chain compacts as a
-  designed side effect (pinning test consigned to regen). 5 unit
-  tests. Portable 735 green; full suite 826/35 (+1 improvement-pin,
-  +5 new tests passing; zero regressions).
-- Blocker 1 NOT started beyond blueprint: S1 + Q-answers prove the
-  handoff's mechanism insufficient (receiver-driven, not spec-driven;
-  `type_sizes[1514]` None; field chain shows only `_dictionary`;
-  homes/fields need an undesigned sidecar; table-alone ~= 2 decl
-  lines for hot-path churn). Full blueprint + Q-decisions recorded
-  in `docs/todo.md` round 3e; implementation is the next rock.
+### Source changes
 
-(End of file - turn 2, 2026-09-20)
+- `il2cpp/lifter/insn.py`: scalar SSE arithmetic preserves untouched upper
+  lanes when the input already carries proved packed provenance. General
+  `SHUFPS` recovery was attempted, but reverted after MethodDef 80548 proved
+  the same local shape can be integer/index bookkeeping; it remains a
+  conservative no-op until stronger use-site proof exists.
+- `il2cpp/lifter/aggregates.py`: an offset lane crosses a CFG phi only when
+  every predecessor reconstructs the same typed value.
+- `il2cpp/lifter/state.py`: use-binding keeps packed-phi provenance reachable
+  after a `vN` expression is renamed to a `tN` temp.
+- `il2cpp/lifter/values.py`: kill-on-write freezes packed lanes that read an
+  overwritten location instead of discarding their provenance.
+- `il2cpp/lifter/calls.py`: the early sret-return path now uses the existing
+  Win64 positional-argument reconstruction and reconstructs by-value structs
+  from stack homes, matching the ordinary resolved-call path.
+- `tests/test_recovery_completion.py`: six portable regressions cover
+  scalar-lane preservation, unanimous/disputed phi lanes, bind-time
+  provenance, and safe/stale kill-on-write lanes.
 
-## Addendum turn 3: blocker-1 foundation + CSE (2026-09-20)
+### MethodDef 104428 (`GraphUpdateShape.GetBounds`)
 
-- _subexpr_cse landed (blocker 4): both pow2 sites fold; 5 unit tests.
-- Synthetic nested-type table + _subst_closed + candidate_return_type
-  recursion landed with 4 game tests; full-suite failure set identical
-  (830/35). Receiver-driven + field-sidecar slice stays next.
-- Candidate-tree gate for the five types: strict 54/0/0, parse 0/0/0,
-  Roslyn 83xCS0246 scope-noise only, diff strictly improving.
+The two emitted `unknown` arguments are gone. The final native call now has
+all six declared parameters present and typed; its first two difference
+vectors are reconstructed from the packed XMM/stack tiles, and the 5th+
+Win64 arguments are read from the stack home area rather than a stale XMM
+tail. The fresh body still differs from the frozen golden (including modern
+static-field spelling and the newly recovered aggregate expressions), so
+`tests/test_game_goldens.py` remains red for 104428 until that body is
+reviewed and an explicit golden-regeneration call is made. Do not blindly
+regenerate it.
 
-(End of file - turn 3, 2026-09-20)
+### Validation at stop
 
-## Addendum turn 4: B11 rescue + home typing (2026-09-20)
+- `python -m compileall -q il2cpp il2csharp.py`: pass.
+- Source-format assertions for every touched `il2cpp/lifter/*.py`: CRLF,
+  no BOM, pass.
+- `git diff --check`: pass.
+- Final portable suite: **757 passed, 130 deselected**.
+- Focused new tests after that revert: **7 passed**; the only selected failure was the expected
+  stale 104428 golden.
+- Final full licensed suite: **885 passed / 2 failed**. The only failures are
+  the documented stale snapshots for MethodDef 67525 and 104428; no new
+  failures were introduced.
 
-- S4: B11's loss was _abandon_at_region_close on the loop latch
-  (break-out + statement deletion). Fixed in dec/emit.py: latch
-  blocks with statements emit + edge-copy + fall off; empty latches
-  keep the old break. 23762 keeps the guarded navigation assignment.
-- S5: MethodRef slots prove the closed generic identities; designed
-  _proved_struct_home (seeded at proved-generic info sites).
-  23762 declares the closed Enumerator with named MoveNext/Dispose.
-  s_30 buffer typing skipped (size unprovable); key/value fields need
-  the sidecar (instance_field_chain(1514) has only _dictionary).
-- Fixed: process-wide fake-VA allocator (class-level _tn_cache
-  shared across instances caused an order-dependent suite failure).
-- Gates: portable 738, full 833/35 identical sets. No commit.
+### Resume point
 
-(End of file - turn 4, 2026-09-20)
-
-## Addendum turn 5: accessor-receiver key typing (2026-09-20)
-
-- The `set_` fold never hinted its receiver, so 23762's key stayed
-  `object`. `_hint_accessor_recv` types it from the non-generic
-  declaring typedef (slots/bare `t`; byref homes for valuetypes).
-  Key is now `Selectable selectable1`; assignment guarded and typed.
-- Gates: portable 740, full 835/35 identical sets. Value chain
-  (untyped piece homes) still needs the sidecar. No commit.
-
-(End of file - turn 5, 2026-09-20)
-
-## Addendum turn 6: copy-guard + layout steps (2026-09-20)
-
-- `_copy_prop` declines merges when both sides declare different
-  concrete types (struct home over typed temp). 23762 keeps its
-  guarded typed assignment; residual over-claim line documented.
-- `_sf_infl_chain` closes nested-open fields; `returns_sret` admits
-  proved-size closed 0x15 (72B Enumerator folds sret + facts).
-- Gates: portable 742, full 837/35 identical sets. No commit.
-
-(End of file - turn 6, 2026-09-20)
-
-## Addendum turn 7: crash + parse gates (2026-09-20)
-
-- 129 fallbacks = tied-pending `sorted` crash (HEAD-latent, prior
-  volume); fixed with stable key sort. 3 failed = unknown-size sret
-  facts crash; guarded. 8 sweep fails = `_kill_one` dropping `_mi`;
-  preserved + delegate guard.
-- Parse 109 -> 6 bad, all 6 proven prior drift (5 bool-materialization
-  + 1 ctor-leftover, per-item stash evidence). Numeric-address class
-  fixed at three narrow points (wb dst, cast-nconst, CSE paren-strip).
-- Gates: rebuild 114458/0/0, brace 0, parse 6/11/8, portable 747,
-  full 837+/35 identical. No commit.
-
-(End of file - turn 7, 2026-09-20)
-
-## Addendum turn 8: gate repairs (2026-09-20)
-
-- Crash class fixes (all prior-exposed, stash-proven): tied-sort,
-  sret-facts guard, `_mi` preservation + delegate guard. Rebuild:
-  114458/0/0. Parse 109 -> 6 bad (numeric-address trio + bool duo
-  fixed narrowly with 5 unit tests); all 6 residuals stash-proven
-  prior drift. Gates: portable 749, full 845/35 identical. No commit.
-
-(End of file - turn 8, 2026-09-20)
-
-## Addendum turn 9: parse-0 (2026-09-20)
-
-- Residual bool family fixed narrowly: `_bool_sugar [^?]` guard,
-  `_simplify_cond` whole-group check. Fold-call guard for
-  `FOLD_RE`. 3 unit tests. All prior drift (stash-proven each).
-- Gates: rebuild 114458/0/0, brace 0, parse 0/0/0 (was 109/5349/33),
-  portable 751, full 846/35 identical. Promotion-ready pending call.
-
-(End of file - turn 9, 2026-09-20)
-
-## Addendum turn 10: regen review + ctor-home fix (2026-09-21)
-
-- S7/S8 read-only subagent review: 20 golden REGEN + 7 review-test
-  REGEN (all native-proven) applied and passing; 4 golden + 3 review
-  FIX verdicts with fix specs (below). 67525 saturate deferred:
-  honest `unknown`s vs stale-luck `0f/1.0f` pin (XMM lanes provable
-  at `_piece_value`, but struct-param tails render GPR text; splat
-  rendering unsound; scalar-lane extension tried then reverted).
-- 18054/34279 FIXED (one root cause): whole-struct reload of a
-  ctor-constructed home rendered a stale scalar (`return 0`) or the
-  first field (`return fourCc1.m_Code`, changed return type).
-  Fix: `_ctor_slots` proof (state init + calls record incl. `&`-stripped
-  member-fold receivers and sizing-independent record for open-generic
-  ctors) + whole-slot render in `_aggregate_load` gated on proved
-  struct size == load width (side-effect-free stack_map lookup;
-  eager slot_var creation flipped 108722 `= t1` to `= s_0`).
-  Both pins regen'd to native-proven bodies. Zero regressions.
-- Pre-existing (dirty-tree, stash-proven, NOT this session):
-  `test_source_format` CRLF failure (bulk 19:36 LF checkout churn);
-  108722/32174/25687 review failures (fail on clean-stash too).
-  108722 root-caused: churn `_scalar_parts` tiles make the result
-  store read stale `s_0` instead of live `t1`, orphaning the second
-  call into dec DCE (`_drop_dead_temps`/`_locals` both guard impure
-  calls, so the drop is downstream -- TBD via stage tracing).
-- Remaining FIX (diagnosed, not yet attempted): 32832 (Change/Schedule
-  + governing branches DCE'd), 104428 (vector31-38 lane temps
-  abandoned before sibling GetBounds), 32174 (both struct calls gone
-  + unbound obj19), 25687 (unbound obj18, [rbp-30h] Ray tile missing).
-- Gates: goldens 61/3 (32832, 104428, 67525-deferred), full 872/9
-  (those 3 + 5 review FIX + source_format-env). Portable 750 + 1 env.
-  No commit (60+ pre-existing dirty files) -- commit needs user call.
-
-(End of file - turn 10, 2026-09-21)
-
-## Addendum turn 11: impure-DCE + sret-share fixes, re-promote (2026-09-21)
-
-- 108722 FIXED: `_drop_dead_temps` dropped the orphaned 2nd shared
-  call because the `/*shared body*/` comment between callee and `(`
-  defeats `_IMPURE`. New `_impure` helper (comment-strip before test)
-  at the 6 DCE guard sites in `dec/dataflow.py` (copies/temps/locals/
-  lastdef). Unresolved/shared calls are impure by definition.
-- 32174 FIXED: one native sret buffer shared by both calls, but the
-  lifter minted a fresh temp per call. New `_sret_home_buf` map
-  (state + calls sret fold): same stack home + same rty reuses the
-  buffer temp, so the 2nd result is a reassignment
-  (`primitiveValue1 = ...(1)`). Reassignment is exactly faithful --
-  the callee overwrites the buffer. Residual: 16B-wide consumer
-  stores still read stale slot (obj20 unbound, unpinned, pre-existing
-  class).
-- 32833/32837 regens (effect retention): the same `_impure` fix keeps
-  one real native call each (0x1804FD690 x1, 0x180ECEC60 x1, both
-  disasm-proven executed once) plus the correct live cascade; pins
-  updated (+1/+2 lines).
-- 25687 deferred: 2nd `.point` needs shared-Vector3-getter resolution
-  (0x180895B20 shared by 8+ getters incl. RaycastHit.get_point;
-  receiver-type disambiguation = new feature). 32832/104428 deferred:
-  need retention research (Change/Schedule DCE, lane-temp
-  over-collapse). CRLF contract restored (17 files, bulk-checkout
-  damage; test_source_format green again).
-- Gates: portable 751 (all green), full 877/4 (32832, 67525-deferred,
-  104428, 25687 -- the diagnosed set, zero regressions), rebuild
-  r3g_out1 114458/0/0 brace 0, re-promoted to final_out
-  (byte-identical; +2 stub assemblies from retained calls).
-  Pushed per user call (commit `1cf3e1c` was turn 10; this turn's
-  files uncommitted).
-
-(End of file - turn 11, 2026-09-21)
-
-## Addendum turn 12: subagent analyses + 32832 fix, ponytail full (2026-09-21)
-
-- Spawned 3 read-only analysis subagents (25687/32832/104428). All
-  three paid off; two corrections to prior beliefs inside.
-- 32832 FIXED: `_IMPURE` missed `>(`, so generic `Schedule<T>` /
-  `Change<T>` calls classified pure and DCE'd with their blocks.
-  Global regex broke CSE pins (rpc unfolded) -> scoped `>(` +
-  comment-blindness to DCE-only `_impure()` helper; `_IMPURE` itself
-  unchanged. Blocks restored (43 -> 70 lines, native-proven); pin
-  regen'd. Residual: `Schedule<Obi...>` attributions (naming, separate).
-- 25687 FIXED AS SIDE EFFECT: A1 proved the shared-getter fold
-  already resolves 0x180895B20 -> RaycastHit.get_point at both sites;
-  the sret-home sharing (turn 11) unifies them into 2x `.point`.
-  No new feature needed. Residual: obj18 Format/LookRotation aliasing.
-- 104428: my sret map briefly suspected, EXONERATED by experiment
-  (fresh temps also drop snapshots; pin itself reuses vector32).
-  Root: `movsd`-spills of XMMs clobbered by MPM calls (value-flow
-  sidecar, not narrow) -> deferred with spec. Map stays: pin's reuse
-  shape requires it; reverted-experiment residue verified absent.
-- 67525: declined again (splat-vector render unsound; honest unknowns
-  stand; stale-luck pin stays red by decision).
-- Gates: portable 751, full 879/2 (104428 + 67525 only), rebuild
-  NOT re-run this turn (code deltas since r3g: dataflow guards only;
-  promotion carries turn-11 tree). Uncommitted: dataflow.py,
-  goldens_review84.json.
-
-(End of file - turn 12, 2026-09-21)
-
-## Addendum turn 13: re-promote round-3h tree (2026-09-21)
-
-- Rebuilt `r3h_out1` (114458/0/0, brace 0; 567 files differ from the
-  turn-11 tree, all retained-effect lines from the `_impure` fix) and
-  promoted to `final_out` (byte-identical copy verified, brace 0).
-  Promoted tree now matches committed source through round 3g work.
-
-(End of file - turn 13, 2026-09-21)
-
-
-
-
-
-
-
+Review the fresh 104428 call arguments against the native stores at
+`0x18072e410`–`0x18072e456`, then run a direct corpus sweep before considering
+a golden update. MethodDef 67525 remains the
+documented honest SIMD decline. The broad shared-body, indirect-call,
+unknown/raw-memory, and unbound-temp inventories above remain open; this
+follow-up fixes one producer family, not the whole census.
