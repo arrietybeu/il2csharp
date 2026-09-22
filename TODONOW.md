@@ -336,6 +336,43 @@ CRLF/no-BOM asserted; `tests/test_recovery_completion.py` LF, 12 tests):
 
 (End of file - turn 11, 2026-09-21)
 
+## Addendum turn 12: subagent analyses + 32832 fix, ponytail full (2026-09-21)
+
+- Spawned 3 read-only analysis subagents (25687/32832/104428). All
+  three paid off; two corrections to prior beliefs inside.
+- 32832 FIXED: `_IMPURE` missed `>(`, so generic `Schedule<T>` /
+  `Change<T>` calls classified pure and DCE'd with their blocks.
+  Global regex broke CSE pins (rpc unfolded) -> scoped `>(` +
+  comment-blindness to DCE-only `_impure()` helper; `_IMPURE` itself
+  unchanged. Blocks restored (43 -> 70 lines, native-proven); pin
+  regen'd. Residual: `Schedule<Obi...>` attributions (naming, separate).
+- 25687 FIXED AS SIDE EFFECT: A1 proved the shared-getter fold
+  already resolves 0x180895B20 -> RaycastHit.get_point at both sites;
+  the sret-home sharing (turn 11) unifies them into 2x `.point`.
+  No new feature needed. Residual: obj18 Format/LookRotation aliasing.
+- 104428: my sret map briefly suspected, EXONERATED by experiment
+  (fresh temps also drop snapshots; pin itself reuses vector32).
+  Root: `movsd`-spills of XMMs clobbered by MPM calls (value-flow
+  sidecar, not narrow) -> deferred with spec. Map stays: pin's reuse
+  shape requires it; reverted-experiment residue verified absent.
+- 67525: declined again (splat-vector render unsound; honest unknowns
+  stand; stale-luck pin stays red by decision).
+- Gates: portable 751, full 879/2 (104428 + 67525 only), rebuild
+  NOT re-run this turn (code deltas since r3g: dataflow guards only;
+  promotion carries turn-11 tree). Uncommitted: dataflow.py,
+  goldens_review84.json.
+
+(End of file - turn 12, 2026-09-21)
+
+## Addendum turn 13: re-promote round-3h tree (2026-09-21)
+
+- Rebuilt `r3h_out1` (114458/0/0, brace 0; 567 files differ from the
+  turn-11 tree, all retained-effect lines from the `_impure` fix) and
+  promoted to `final_out` (byte-identical copy verified, brace 0).
+  Promoted tree now matches committed source through round 3g work.
+
+(End of file - turn 13, 2026-09-21)
+
 
 
 

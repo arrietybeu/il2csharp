@@ -96,14 +96,19 @@ class _DataflowMixin:
     _TDEF_RX = re.compile(r'^(?:var )?(t\d+) = (.*);$')
     _CMT_RX = re.compile(r'/\*.*?\*/')
 
+    _IMPURE_GTX = re.compile(r'[\w\]\)]\s*\(|>\(')
+
     def _impure(self, rhs: str) -> bool:
-        """Impurity test blind to interposed block comments: a shared-body
-        call renders `sub_VA/*shared body, N candidates*/(...)`, and the
-        comment between callee and paren defeats the bare _IMPURE shape
-        (108722's orphaned second call dropped as pure). An unresolved
-        or shared call is impure by definition, so strip comments before
-        testing; pure-load carve-outs still apply at the call sites."""
-        return bool(self._IMPURE.search(self._CMT_RX.sub('', rhs)))
+        """Impurity test for DCE guards only (CSE purity keeps the bare
+        _IMPURE: the rpc pin depends on folding `CopyFromArray<int>`).
+        Blind to interposed block comments (`sub_VA/*shared body*/(...)`
+        defeated the bare shape; 108722's orphaned call dropped as pure)
+        and to generic-instantiation brackets (`Schedule<T>(...)` missed
+        `>` before `(`; 32832's blocks vanished). `>(` with no space keeps
+        `x > (y)` / `a >> (b)` pure. ponytail: DCE-only scope; CSE keeps
+        folding generic calls (pinned behavior) until a golden demands
+        otherwise."""
+        return bool(self._IMPURE_GTX.search(self._CMT_RX.sub('', rhs)))
 
     def _drop_dead_temps(self, lines: List[str]) -> List[str]:
         """Drop `var tN = ...;` materializations nothing reads. Kill-on-write
