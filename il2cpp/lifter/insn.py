@@ -309,7 +309,8 @@ class _InsnMixin:
                 finally:
                     self._copying = False
                 if dst == 'RBP' and e is not None \
-                        and getattr(e, '_stack_offset', None) is not None:
+                        and getattr(e, '_stack_offset', None) is not None \
+                        and (e.text or '') == '?':
                     # a frame-copy artifact landing in RBP: today the
                     # source was untracked, so RBP stayed unreadable and
                     # _rbp_is_frame() held. Keep None, not a '?'-text
@@ -469,14 +470,16 @@ class _InsnMixin:
                     self.set_reg(dst, _cval)
                     return
                 if dst == 'RBP' and _lb is not None \
-                        and getattr(_lb, '_stack_offset', None) is not None:
+                        and getattr(_lb, '_stack_offset', None) is not None \
+                        and (_lb.text or '') == '?':
                     # frame pointer from a copy: today's unknown-base
                     # shape, so _rbp_is_frame() still holds.
                     self.set_reg(dst, self._indexed_lea(ins, None))
                     return
                 base = self.reg(reg_name(ins.memory_base))
                 if base is not None and getattr(base, '_stack_offset', None) is not None \
-                        and ins.memory_index != IReg.NONE and ins.memory_base != IReg.RBP:
+                        and ins.memory_index != IReg.NONE and ins.memory_base != IReg.RBP \
+                        and (base.text or '') == '?':
                     # index arithmetic on a frame copy: provenance
                     # unproved, keep the unknown-base shape.
                     self.set_reg(dst, self._indexed_lea(ins, None))
@@ -1405,7 +1408,7 @@ class _InsnMixin:
             return Expr('*(%s %s)' % (ie.text if ie else '?', disp_add(disp)), None, 'ptr')
         be = self.reg(base) if base else None
         if be is not None and getattr(be, '_stack_offset', None) is not None and idxr is not None \
-                and base != 'RBP':
+                and base != 'RBP' and (be.text or '') == '?':
             # index arithmetic on a frame copy: the honest unknown-base shape.
             _cie = self.reg(idxr)
             return Expr('*(%s %s)' % (_cie.text if _cie else '?', disp_add(disp)), None, 'ptr')
@@ -1483,7 +1486,7 @@ class _InsnMixin:
         if be is None:
             return 'mem[%d]' % sdisp(disp)
         if be is not None and getattr(be, '_stack_offset', None) is not None and idxr is not None \
-                and base != 'RBP':
+                and base != 'RBP' and (be.text or '') == '?':
             # indexed store through a frame copy: unknown-base shape.
             return 'mem[%d]' % sdisp(disp)
         if be.kind == 'klass':

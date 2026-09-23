@@ -1,4 +1,26 @@
 # il2csharp — TODO (open work and historical triage)
+## Current work: ?addr extinction round (2026-09-22, unpromoted)
+
+Follows the promoted census (last `?addr`: ReflectionProbeManager).
+Same rules: `final_out/` untouched, no snapshot regen, no promotion.
+`il2cpp/` edits via binary patches with CRLF/no-BOM asserts; `tests/`
+edits LF.
+
+- Root cause was our own quarantine over-firing: the indexed-copy
+  declines caught NAMED `&s_xx` homes (mi 65244 `lea rcx,[rcx+r12*4]`
+  over `&s_1d0`), not just anonymous `mov r64,rsp` copies. Tightened
+  all 5 decline sites (MOV-RBP, LEA-RBP-dst, LEA/load/store indexed)
+  to text-`?` bases; named homes keep legacy honest composites.
+- Verified the rescued store is correct, not just present: it uses the
+  home's address (`&s_1d0` slot identity), so stale home values on
+  disjoint arms don't alias it.
+- `?addr` count is now 0 in fresh lifts (was 1); the promoted tree
+  still shows its 1 until the next rebuild.
+- Tests: +2 portable (named home keeps home, anonymous stays unknown)
+  +1 game (65244: no ?addr/elided, exact store line).
+- Gates: compileall pass; portable 782 green; full suite 926 passed /
+  1 failed (67525 honest SIMD decline only); zero golden movement.
+
 ## Current work: generic-slice closure (2026-09-22, unpromoted, no source change)
 
 Subagent-designed, empirically closed without a patch. Same rules:

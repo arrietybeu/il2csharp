@@ -48,3 +48,15 @@ def test_last_qaddr_sites_are_extinct(game_decompiler):
                      '0x181e79af0')
     assert '?addr' not in rest
     assert 'mem[' not in rest
+
+
+def test_indexed_home_store_keeps_home(game_decompiler):
+    # The final `?addr` (mi 65244): `lea rcx,[rcx+r12*4]` over named
+    # home &s_1d0 keeps the home (honest composite) instead of ?addr;
+    # only anonymous copies decline. The store uses the home's
+    # address, so stale home values elsewhere don't alias it.
+    text = lift_text(game_decompiler, 65244, 'UpdateGpuData',
+                     '0x1829f2810')
+    assert '?addr' not in text
+    assert 'elided' not in text
+    assert '((byte*)obj44 + num55 * 4)[0] = 4294967295;' in text
