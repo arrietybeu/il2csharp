@@ -416,6 +416,21 @@ resolution stays out until whole-struct reloads prefer whole tiles
 behavior. Repro/diagnostic probes kept in Temp; post-revert lifts of
 25687/24238 are byte-identical to the pre-hint baselines.
 
+## Addendum — 2026-09-22, SIMD consumer-side recovery (unpromoted)
+
+67525's constants died at: scalar-pool loads dropping bytes (vs the
+PACKED128 `_bytes` attach) and `unpcklps` lane reads failing untyped,
+then tail args reading `.text` only. Fix, tails-only: byte provenance
+on scalar const loads + typed GPR-slot materialization at closed
+all-float vector slots (house `(float2)(l0,l1)` for
+Unity.Mathematics.float2; width-4 literal). 80548 stays intact
+(PSRLDQ-popped/integer-tainted values carry no parts -- the guard).
+Fresh: `clamp(x, (float2)(0.0f, 0.0f), (float2)(1.0f, 1.0f))`,
+signature-exact where the golden scalars needed unprovable implicit
+conversions -- golden regened (surgical, SHAs verified). Suite 930/0,
+first fully green run. Open: direct-call materialization, Color,
+general packed tracking.
+
 ## Addendum — 2026-09-22, unbound census + rename barrier (unpromoted)
 
 Work-order §4 (classify before patching), done as a read-only text

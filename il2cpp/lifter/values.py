@@ -311,7 +311,105 @@ class _ValuesMixin:
                 self._xmm_pending.append((k, e))
                 prepared.append(e.text)
         self._hint_arg_types(prepared, arg_exprs, mi, rty)
-        return self._positional_args(prepared, m2, rty)
+        out = self._positional_args(prepared, m2, rty)
+        # float-lane tail args (67525 saturate): a GPR slot holding
+        # an unknown rendering over byte-proven float lanes
+        # materializes the composite at a closed all-float vector
+        # slot. Tails-first staging: direct calls keep today's
+        # spelling; every other shape declines below.
+        base = 0 if m2.is_static else 1
+        try:
+            params = self.meta.method_params(m2)
+        except Exception:
+            return out
+        for pi, p in enumerate(params):
+            pos = base + pi
+            if pos > 3 or pos >= len(out) or pos >= len(arg_exprs):
+                continue
+            if (out[pos] or '').strip() not in ('?', '_', 'unknown'):
+                continue
+            pty = self.il.types[p.type] \
+                if 0 <= p.type < len(self.il.types) else None
+            if pty is None or ((pty[1] >> 29) & 1):
+                continue
+            te = self.il._type_enum(pty)
+            width = None
+            tname = None
+            if te == 0x0c:
+                width = 4
+            elif te == 0x11:
+                td = self._td_of(pty)
+                chain = self.il.instance_field_chain(td) \
+                    if td is not None else None
+                if not chain:
+                    continue
+                offs = sorted(chain)
+                try:
+                    width = self.il._sf_field_size(pty, 0)
+                except Exception:
+                    width = None
+                if width == 4 and offs != [0x10]:
+                    continue
+                if width == 8 and offs != [0x10, 0x14]:
+                    continue
+                if width not in (4, 8):
+                    continue
+                fts = []
+                for _off in offs:
+                    _ti = chain[_off][1]
+                    _ft = self.il.types[_ti] \
+                        if 0 <= _ti < len(self.il.types) else None
+                    fts.append(self.il._type_enum(_ft)
+                               if _ft is not None else None)
+                if any(_f != 0x0c for _f in fts):
+                    continue
+                if width == 8:
+                    _ttd = self.meta.typedefs[td] \
+                        if 0 <= td < len(self.meta.typedefs) else None
+                    if _ttd is None or _ttd.namespace != 'Unity.Mathematics' \
+                            or _ttd.name != 'float2':
+                        continue
+                    tname = 'float2'
+            else:
+                continue
+            e = arg_exprs[pos]
+            if e is None or getattr(e, '_unk', False):
+                continue
+            if (e.text or '') != out[pos]:
+                continue
+            lanes = self._float_lane_texts(e, width)
+            if lanes is None:
+                continue
+            out[pos] = lanes[0] if width == 4 \
+                else '(%s)(%s, %s)' % (tname, lanes[0], lanes[1])
+        return out
+
+    def _float_lane_texts(self, e, width):
+        """Float-suffixed lane texts covering [0, width), else None.
+
+        Consumer-side SIMD recovery: lanes must come from byte-proven
+        parts; integer-tainted values (80548: PSRLDQ-popped sources,
+        GPR-binop rebuilds that drop parts) carry none and decline.
+        """
+        if e is None or getattr(e, '_unk', False):
+            return None
+        if width == 4:
+            spans = [(0, 4)]
+        elif width == 8:
+            spans = [(0, 4), (4, 4)]
+        else:
+            return None
+        f32 = (0, 0x0c << 16)
+        out = []
+        for off, sz in spans:
+            try:
+                v = self._piece_value(e, off, sz, f32)
+            except Exception:
+                return None
+            if v is None or not (v.text or '').endswith(('f', 'F')):
+                return None
+            out.append(v.text)
+        return out
 
     def _kill_one(self, e, lv, seen):
         """Materialize one expression to a temp when its text reads `lv`.

@@ -207,6 +207,10 @@ fix-123 in `validation_reports/review123_*`.
   at naming time and folded post-semantic-names with all-uses-bool,
   single-decl, and standalone-head gates; anything else keeps the
   boxed shape.
+- Scalar const-pool loads carry their bytes for float-lane readers;
+  GPR `?` tail args materialize composites at closed all-float vector
+  slots (house `(float2)(l0,l1)`; 80548's part-less integer carries
+  decline by construction).
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test

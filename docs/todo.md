@@ -1,4 +1,32 @@
 # il2csharp — TODO (open work and historical triage)
+## Current work: SIMD consumer-side round (2026-09-22, unpromoted)
+
+Subagent-traced (both constants' death sites + 80548 guard shape).
+Same rules: `final_out/` untouched, no promotion (tree rebuild is a
+separate user call). `il2cpp/` edits via binary patches with
+CRLF/no-BOM asserts; `tests/` edits LF.
+
+- Fix LANDED, tails-only staging: (A) scalar const-pool loads attach
+  bytes (mirrors PACKED128; only adds float-expected lane reads);
+  (B) `_tail_method_args` materializes GPR `?` args at closed
+  all-float vector slots from byte-proven float-suffixed lanes --
+  width-4 renders the literal, width-8 renders house `(float2)(l0,l1)`
+  for Unity.Mathematics.float2 only. Instance/sret/stack/byref/
+  double/open/unresolved/uncovered/part-less/text-mismatched all
+  decline; direct calls keep today's spelling.
+- Evidence: 67525 renders `clamp(x, (float2)(0.0f, 0.0f),
+  (float2)(1.0f, 1.0f))` (signature-exact float2x3, mi 67517; parses;
+  the old scalars relied on implicit conversion no overload proves).
+  80548 guard holds (`int num2`, `(unknown >> 32)`, golden-pinned).
+- Golden REGENED for 67525 only (surgical script, fixture SHAs verified,
+  source_sha256 refreshed, CRLF kept, 63 other bodies identical).
+  Suite is 930/0 -- first fully green run.
+- Tests: +3 portable (lane readability + decline, lane-texts,
+  integer-carry decline).
+- Gates: compileall pass; portable 781 green; goldens 64/64.
+- Open SIMD remainder: direct-call materialization (same gates),
+  per-arm Color (use→def), general packed tracking (still declined).
+
 ## Current work: sidecar grounding turn (2026-09-22, unpromoted, no source change)
 
 Traced mi 23762's three defects to their exact producers (semantic-input

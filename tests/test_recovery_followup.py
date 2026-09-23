@@ -160,6 +160,57 @@ def test_boxed_bool_declines_unrecorded_and_noncall():
                                 'if (o3 == null)']
 
 
+def _packed_lit(*names):
+    packed = Expr(names[0], F32, 'bits')
+    packed._parts = [(i * 4, Expr(name, F32, 'float'), 0, 4)
+                     for i, name in enumerate(names)]
+    return packed
+
+
+def test_unpcklps_recovers_byte_proven_lanes():
+    # Part A: a scalar const-pool load carries its bytes, so the
+    # unpcklps lane reader recovers '1.0f' lanes; without bytes the
+    # same shape stays honestly empty.
+    lift = struct_lifter()
+    proven = Expr('1.0f', None, 'float')
+    proven._bytes = bytes(struct.pack('<f', 1.0))
+    assert lift._piece_value(proven, 0, 4, F32).text == '1.0f'
+    assert lift._piece_value(proven, 4, 4, F32) is None
+    assert lift._piece_value(Expr('1.0f', None, 'float'), 0, 4,
+                             F32) is None
+    lift.regs.update(XMM0=proven, XMM1=proven)
+    execute(lift, '0f14c1')  # unpcklps xmm0,xmm1
+    parts = lift.regs['XMM0']._parts
+    assert [p[0] for p in parts] == [0, 4]
+    assert all(p[1].text == '1.0f' for p in parts)
+    bare = struct_lifter()
+    raw = Expr('1.0f', None, 'float')
+    bare.regs.update(XMM0=raw, XMM1=raw)
+    execute(bare, '0f14c1')  # unpcklps xmm0,xmm1
+    assert not getattr(bare.regs['XMM0'], '_parts', None)
+
+
+def test_float_lane_texts_decline_without_parts():
+    lift = struct_lifter()
+    assert lift._float_lane_texts(_packed_lit('1.0f', '1.0f'), 8) == \
+        ['1.0f', '1.0f']
+    assert lift._float_lane_texts(Expr('?', None, '?'), 8) is None
+    assert lift._float_lane_texts(None, 8) is None
+    assert lift._float_lane_texts(_packed_lit('x', 'y'), 8) is None
+    assert lift._float_lane_texts(_packed_lit('1.0f', '1.0f'), 16) is None
+
+
+def test_integer_carry_has_no_lanes():
+    # 80548 shape: PSRLDQ pops the dest, so the movq GPR has no parts
+    # and no float-slot materialization may fire on it.
+    lift = struct_lifter()
+    lift.regs.update(XMM0=_packed_lit('x', 'y'))
+    execute(lift, '660f73d008')  # psrldq xmm0,8
+    execute(lift, 'f3490f7ec0')  # movq r8,xmm0
+    assert lift.regs.get('R8') is None
+    assert lift._float_lane_texts(lift.regs.get('R8'), 8) is None
+
+
 def test_sfblob_base_defers_to_static_path():
     lift = struct_lifter()
     base = Expr('typeof(V3).__static_fields', V3, 'sfblob')

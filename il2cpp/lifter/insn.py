@@ -1353,7 +1353,14 @@ class _InsnMixin:
                 if o is not None:
                     if msz == 29:
                         fv = struct.unpack_from('<f', self.bin.d, o)[0]
-                        return Expr(repr_f32(fv), None, 'float')
+                        scalar = Expr(repr_f32(fv), None, 'float')
+                        # byte provenance for float-lane readers
+                        # (67525): mirrors the PACKED128 _bytes
+                        # attach below; integer consumers never
+                        # call _piece_value, and expected=None
+                        # still returns None there.
+                        scalar._bytes = bytes(self.bin.d[o:o + 4])
+                        return scalar
                     if msz == 74:
                         f1, f2 = struct.unpack_from('<2f', self.bin.d, o)
                         value = Expr('(float2)(%s, %s)' % (repr_f32(f1), repr_f32(f2)),
@@ -1366,7 +1373,9 @@ class _InsnMixin:
                     if msz == 5 and (q == 0 or not self.bin.valid_va(q)):
                         return Expr('%#x' % q, None, 'int')
                     dv = struct.unpack_from('<d', self.bin.d, o)[0]
-                    return Expr(repr_f64(dv), None, 'float')
+                    dscalar = Expr(repr_f64(dv), None, 'float')
+                    dscalar._bytes = bytes(self.bin.d[o:o + 8])
+                    return dscalar
             return Expr('data_%x' % slot, None, 'ptr')
         base = reg_name(ins.memory_base) if ins.memory_base != IReg.NONE else None
         idxr = reg_name(ins.memory_index) if ins.memory_index != IReg.NONE else None
