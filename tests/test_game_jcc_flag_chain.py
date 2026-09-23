@@ -20,4 +20,7 @@ def test_audio_volume_parity_then_not_equal(game_decompiler, mi, name, label):
     assert 'if (float.IsNaN(volume))' in body
     assert 'else if (volume != 0f)' in body
     assert 'unknown != unknown' not in body
+    assert 'float real1;' in body
+    assert 'float real1 =' not in body
+    assert 'real1 = -80.0f;' in body
     assert 'this.audioMixer.SetFloat("' + label + '", real1)' in body

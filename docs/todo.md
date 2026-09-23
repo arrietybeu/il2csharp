@@ -1,5 +1,27 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: complete branch-chain declarations (2026-09-23, fixed in source)
+
+`AudioVolumeSliders.SetMusicVolumeInternal` and
+`SetSFXVolumeInternal` (23548/23549) assigned `float real1` in all
+three `if / else if / else` arms, then read it at `SetFloat` after
+the join. A late `_phi_chain_decl_hoist` now places one concrete typed
+declaration before a complete chain and leaves each arm's assignment
+in place. It requires matching tail declarations, a final `else`, no
+flow exits or earlier use, no address escape, and a later read.
+Unknown `object`/`dynamic` value markers decline: an initial wider
+pass changed frozen MethodDef 39789's unresolved 0/1 aliases, so that
+case remains golden-exact until its type is proved.
+
+Portable tests pin the three-arm fold and missing-else, early-return,
+and unresolved-type declines; game tests pin both audio bodies.
+Full suite: 937 passed. Strict `Assembly-CSharp` scratch build: 490
+files / 6,622 bodies, 0 failed, 0 fallbacks, 0 type emission failures;
+brace 0/490; parse 0 bad / 0 ERROR / 0 MISSING. Against the prior
+scratch build, 44 files differ; sampled changes hoist branch-complete
+declarations in AudioVolumeSliders, InventoryManager, FPSController,
+and FIMSpace. `final_out/` and goldens remain untouched.
+
 ## Current work: paired float Jcc flags (2026-09-23, fixed in source)
 
 MethodDefs 23548/23549 (`AudioVolumeSliders.SetMusicVolumeInternal` /
@@ -10,8 +32,9 @@ comparison operands before the fallthrough `JNE`, producing
 shape with one predecessor at the second jump, the CFG executor now
 carries the operands and setter across the first jump. The second
 condition renders `volume != 0f` in both methods. Unregistered
-`sub_1804cdb00` result typing and the later `real1` declaration are
-separate open defects; this change does not claim the bodies compile.
+`sub_1804cdb00` result typing remains open. The later `real1`
+declaration is now hoisted by the follow-up above; these bodies still
+contain other unresolved values and are not claimed to compile.
 
 The broader Jcc carry changed MethodDef 45016's frozen double body,
 so it was narrowed to this proved single-precision shape; 45016 is

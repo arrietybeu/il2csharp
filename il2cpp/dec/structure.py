@@ -151,6 +151,7 @@ class _StructureMixin:
         # heads still never match (exact if-head shapes only).
         raw = self._flag_inline(raw)
         raw = self._elseif_flatten(raw)
+        raw = self._phi_chain_decl_hoist(raw)
         # fix 72e: the flat chains the flattener just produced are
         # the switch-synthesis input; nothing after this point
         # restructures them
@@ -388,6 +389,104 @@ class _StructureMixin:
             out.extend(lines[a2 + 1:ec + 1])
             i = ec + 1
         return self._phi_decl_hoist(out, _round + 1) if _round < 15 else out
+
+    def _phi_chain_decl_hoist(self, lines):
+        """Hoist one temp assigned at the tail of every if/else-if/else arm.
+
+        Each arm must reach the join, assign the same concrete declaration
+        exactly once, and leave no earlier use. A later read proves the
+        declaration is needed outside the arms. Without a final else the
+        value is not defined on every path, so that shape always declines.
+        """
+        matches = []
+        n = len(lines)
+        for i, line in enumerate(lines):
+            if not (line.strip().startswith('if (') and line.strip().endswith(')')):
+                continue
+            arms, heads = [], []
+            head = i
+            while head + 1 < n and lines[head + 1].strip() == '{':
+                close = self._phi_match_brace(lines, head + 1)
+                if close is None:
+                    break
+                arms.append((head + 2, close))
+                heads.append(head)
+                nxt = close + 1
+                if nxt + 1 >= n:
+                    break
+                s = lines[nxt].strip()
+                if s.startswith('else if (') and s.endswith(')'):
+                    head = nxt
+                    continue
+                if s == 'else' and lines[nxt + 1].strip() == '{':
+                    ec = self._phi_match_brace(lines, nxt + 1)
+                    if ec is not None:
+                        arms.append((nxt + 2, ec))
+                    break
+                break
+            if len(arms) < 3 or len(heads) != len(arms) - 1:
+                continue
+            tails = []
+            for start, end in arms:
+                live = [k for k in range(start, end) if lines[k].strip()]
+                if not live:
+                    break
+                hit = self._phi_tail_decl(lines[live[-1]])
+                if hit is None:
+                    break
+                tails.append((live[-1], hit, len(live)))
+            if len(tails) != len(arms) or all(t[2] == 1 for t in tails):
+                continue
+            typ, tok = tails[0][1][:2]
+            # `object` is the unresolved-value marker; hoisting its
+            # path-local 0/1 aliases would claim a join type we cannot prove.
+            if typ in ('object', 'dynamic'):
+                continue
+            if any(t[1][:2] != (typ, tok) for t in tails):
+                continue
+            rx = re.compile(r'(?<![\w.])%s(?!\w)' % re.escape(tok))
+            if any(rx.search(lines[k]) for h in heads[1:] for k in (h,)):
+                continue
+            if any(rx.search(lines[k]) for (start, _), (tail, _, _) in zip(arms, tails)
+                   for k in range(start, tail)):
+                continue
+            if any(rx.search(t[1][2]) for t in tails):
+                continue
+            flow = re.compile(r'^(?:return|goto|throw|break|continue)\b')
+            if any(flow.match(lines[k].strip()) for start, end in arms
+                   for k in range(start, end)):
+                continue
+            addr = re.compile(r'(?<!&)&(?!&)\s*%s\b|\b(?:ref|out|in)\s+%s\b'
+                              % (re.escape(tok), re.escape(tok)))
+            if any(addr.search(s) for s in lines):
+                continue
+            prior = re.compile(r'(?<![\w.])%s(?!\w)\s*(?:=(?!=)|;)' % re.escape(tok))
+            if any(prior.search(s) for s in lines[:i]):
+                continue
+            end = arms[-1][1]
+            if not any(rx.search(s) for s in lines[end + 1:]):
+                continue
+            later_decl = re.compile(
+                r'[A-Za-z_@][\w@.<>,\[\]*?]*\s+%s(?!\w)(?=\s*(?:=(?!=)|;))'
+                % re.escape(tok))
+            if any(later_decl.search(s) for s in lines[end + 1:]):
+                continue
+            matches.append((i, end, typ, tok, tails))
+        chosen = []
+        for hit in matches:
+            if chosen and hit[0] <= chosen[-1][1]:
+                continue
+            if sum(x[3] == hit[3] for x in matches) != 1:
+                continue
+            chosen.append(hit)
+        out = list(lines)
+        for i, _, typ, tok, tails in reversed(chosen):
+            for k, decl, _ in tails:
+                indent = out[k][:len(out[k]) - len(out[k].lstrip())]
+                out[k] = '%s%s = %s;' % (indent, tok, decl[2])
+            indent = out[i][:len(out[i]) - len(out[i].lstrip())]
+            out.insert(i, '%s%s %s;' % (indent, typ, tok))
+        return out
 
     def _ensure_eh_helper_set(self):
         """Prove the program's throw helpers once, from the whole binary.

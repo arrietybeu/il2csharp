@@ -796,6 +796,29 @@ def test_phi_decl_hoist_two_values_with_non_tail_declarations():
         "}", "image1.sprite = sprite1;",
     ]
 
+
+def test_phi_chain_hoists_only_complete_three_arm_assignments():
+    dec = Decompiler.__new__(Decompiler)
+    lines = [
+        "if (nan)", "{", "Call();", "float real1 = a;", "}",
+        "else if (nonzero)", "{", "Call();", "float real1 = b;", "}",
+        "else", "{", "float real1 = c;", "}",
+        "Use(real1);",
+    ]
+    assert dec._phi_chain_decl_hoist(lines) == [
+        "float real1;", "if (nan)", "{", "Call();", "real1 = a;", "}",
+        "else if (nonzero)", "{", "Call();", "real1 = b;", "}",
+        "else", "{", "real1 = c;", "}", "Use(real1);",
+    ]
+    no_else = lines[:10] + ["Use(real1);"]
+    assert dec._phi_chain_decl_hoist(no_else) == no_else
+    with_exit = lines.copy()
+    with_exit.insert(8, "return;")
+    assert dec._phi_chain_decl_hoist(with_exit) == with_exit
+    unresolved = [line.replace("float real1", "object obj1")
+                  .replace("real1", "obj1") for line in lines]
+    assert dec._phi_chain_decl_hoist(unresolved) == unresolved
+
 def phi_color_lifter():
     chain = {0x10: ('r', 1), 0x14: ('g', 1), 0x18: ('b', 1), 0x1C: ('a', 1)}
     il = NS(
