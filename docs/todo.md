@@ -13,7 +13,9 @@ byte-identical copy (aggregate `e7f406db…bdabf`); evidence in
 strict, goto unchanged, `?addr` down to its last site
 (ReflectionProbeManager:434, funclet home). The memhex remainder is
 honest (be-None path byte-identical in diff; sampled sites are
-exception/funclet homes). Post-promotion suite + cleanup below.
+exception/funclet homes). Post-promotion suite: 923 passed / 1 failed
+(67525 honest SIMD decline only). Scratch tree + build logs removed;
+tree committed and pushed.
 
 ## Current work: promotion round — regen + rebuild (2026-09-22)
 
