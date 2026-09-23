@@ -13,7 +13,8 @@ byte-identical copy (aggregate `c0ee1b78…1236`); evidence in
 `validation_reports/promotion_r4c.json`. New census: shared
 18,884/2,278, indirect 6,262/884, unknown 15,655/1,365, mem[N]
 398/127, mem_hex 359 strict, goto unchanged, `?addr` 1 (honest
-elision). Post-promotion suite + cleanup below.
+elision). Post-promotion suite: 932 passed / 0 failed (fully green).
+Scratch tree + build logs removed; tree committed and pushed.
 
 ## Current work: ?addr-tightening DISPROVED (2026-09-22, reverted clean)
 
