@@ -80,40 +80,99 @@ class _CallsMixin:
         return res
 
     def _fp32_scalar_next(self, ins):
-        """True when the instruction after `ins` consumes XMM0 as a scalar.
+        """True when XMM0 is consumed as a scalar shortly after `ins`.
 
-        A `mulss/addss/subss/divss xmm0, ...` (or a `movss` spill/copy
-        from XMM0) proves the caller expects the call's scalar float
-        result in XMM0 -- the consumer-side half of the FP32-unary proof
-        (the callee-side half is `_is_fp32_unary_leaf`). Anything else --
-        integer use, no use, an unknown next instruction -- declines, and
-        the call keeps today's honest spelling.
+        Walks forward from the next instruction (at most 16) to a scalar
+        FP consume of XMM0 (`mulss/addss/subss/divss xmm0, ...`, or a
+        `movss` spill/copy from XMM0): the caller expects the call's float
+        result there. Skipped instructions must not touch the value
+        channel -- no XMM0/YMM0 mention (reg_name folds YMM into XMM),
+        no calls (volatile clobber), no returns, unconditional jumps,
+        indirect flow, or kernel transitions; flag tests, conditional
+        branches, NOPs, constant loads, and unrelated moves all skip
+        (memory effects between call and consume do not disturb XMM0,
+        and the bind stays pinned at the call). A conditional branch
+        whose target lands between the call and the consume declines
+        (the consume would read a merge, not the call's value), as does
+        any revisit (loops), decode failure, or running past the cap.
+        Anything else declines and the call keeps today's spelling.
         """
         if not HAVE_ICED:
             return False
         try:
-            nx_ip = ins.next_ip
-            code = self.bin.read(nx_ip, 16)
-            if not code:
+            call_ip = ins.ip
+            ip = ins.next_ip
+        except Exception:
+            return False
+        targets = []
+        seen = set()
+        for _ in range(16):
+            if ip in seen:
                 return False
-            dec = Decoder(64, code, DecoderOptions.NONE)
-            dec.ip = nx_ip
-            nx = next(iter(dec))
-        except Exception:
-            return False
-        try:
-            if nx.mnemonic in (Mnemonic.MULSS, Mnemonic.ADDSS,
-                               Mnemonic.SUBSS, Mnemonic.DIVSS) \
-                    and nx.op0_kind == OpKind.REGISTER \
-                    and reg_name(nx.op0_register) == 'XMM0':
+            seen.add(ip)
+            try:
+                code = self.bin.read(ip, 16)
+                if not code:
+                    return False
+                dec = Decoder(64, code, DecoderOptions.NONE)
+                dec.ip = ip
+                nx = next(iter(dec))
+            except Exception:
+                return False
+            try:
+                m = nx.mnemonic
+                if m in (Mnemonic.MULSS, Mnemonic.ADDSS,
+                         Mnemonic.SUBSS, Mnemonic.DIVSS) \
+                        and nx.op0_kind == OpKind.REGISTER \
+                        and reg_name(nx.op0_register) == 'XMM0':
+                    fire = True
+                elif m == Mnemonic.MOVSS and nx.op_count == 2 \
+                        and nx.op1_kind == OpKind.REGISTER \
+                        and reg_name(nx.op1_register) == 'XMM0':
+                    fire = True
+                else:
+                    fire = False
+            except Exception:
+                return False
+            if fire:
+                for t in targets:
+                    if call_ip < t <= ip:
+                        return False
                 return True
-            if nx.mnemonic == Mnemonic.MOVSS and nx.op_count == 2 \
-                    and nx.op1_kind == OpKind.REGISTER \
-                    and reg_name(nx.op1_register) == 'XMM0':
-                return True
-        except Exception:
-            return False
+            if not self._fp32_skip_next(nx):
+                return False
+            if nx.flow_control == FlowControl.CONDITIONAL_BRANCH:
+                try:
+                    targets.append(nx.near_branch_target)
+                except Exception:
+                    return False
+            ip = nx.next_ip
         return False
+
+    @staticmethod
+    def _fp32_skip_next(nx):
+        """True when walking past `nx` cannot disturb an XMM0 value."""
+        try:
+            m = nx.mnemonic
+            if m == Mnemonic.CALL or m == Mnemonic.RET:
+                return False
+            if m in (Mnemonic.SYSCALL, Mnemonic.SYSENTER, Mnemonic.INT,
+                      Mnemonic.HLT) or nx.has_lock_prefix:
+                return False
+            if m == Mnemonic.CPUID:
+                return False
+            if nx.flow_control == FlowControl.INDIRECT_BRANCH:
+                return False
+            if nx.flow_control == FlowControl.UNCONDITIONAL_BRANCH:
+                return False
+            for i in range(nx.op_count):
+                if getattr(nx, 'op%d_kind' % i) != OpKind.REGISTER:
+                    continue
+                if reg_name(getattr(nx, 'op%d_register' % i)) == 'XMM0':
+                    return False
+            return True
+        except Exception:
+            return False
 
     def _dead_shared_forwarder(self, target, ins):
         """True when a pending bare-statement must be declined: the caller

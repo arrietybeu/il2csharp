@@ -27,3 +27,22 @@ def test_audio_log10_leaf(game_decompiler, mi, name, label):
     assert 'real2 = 0f * 20.0f' not in body
     assert 'obj14 = sub_1804cdb00(' not in body
     assert '(float)sub_1804cdb00' not in body
+
+
+@pytest.mark.parametrize('mi,name,count', [
+    (26741, 'FixedUpdate', 2),
+    (27765, 'Spawned', 1),
+])
+def test_audio_log10_conditional_consume(game_decompiler, mi, name, count):
+    # The float result flows through a flag test + conditional branch
+    # before the scalar consume (call; test; je; ...; mulss xmm0).
+    il, dec = game_decompiler
+    m = il.meta.methods[mi]
+    assert m.name == name
+    body = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
+    assert body.count(
+        'sub_1804cdb00(UnityEngine.PlayerPrefs.GetFloat(') == count
+    assert '0f * 20.0f' not in body
+    assert 'obj44 = sub_1804cdb00(' not in body
+    assert 'obj29 = sub_1804cdb00(' not in body
+    assert '(float)sub_1804cdb00' not in body

@@ -36,6 +36,16 @@ class _FakeState(_StateMixin):
     pass
 
 
+class _FakeCalls(_CallsMixin):
+    pass
+
+
+def _call_self(bin):
+    self = _FakeCalls.__new__(_FakeCalls)
+    self.bin = bin
+    return self
+
+
 def _fake(code, registered=False):
     il = SimpleNamespace(
         addr_candidates={BASE: [('method', 0)]} if registered else {},
@@ -90,18 +100,65 @@ def test_declines_missing_xmm0():
 
 def test_scalar_next_gate():
     bin = SimpleNamespace(read=lambda va, n: MULSS_NEXT)
-    ins = SimpleNamespace(next_ip=0x2000)
+    ins = SimpleNamespace(ip=0x1000, next_ip=0x2000)
     assert _CallsMixin._fp32_scalar_next(
-        SimpleNamespace(bin=bin), ins) is True
+        _call_self(bin), ins) is True
     bin2 = SimpleNamespace(read=lambda va, n: b'\xC3')
     assert _CallsMixin._fp32_scalar_next(
-        SimpleNamespace(bin=bin2), ins) is False
+        _call_self(bin2), ins) is False
     bin3 = SimpleNamespace(read=lambda va, n: None)
     assert _CallsMixin._fp32_scalar_next(
-        SimpleNamespace(bin=bin3), ins) is False
+        _call_self(bin3), ins) is False
 
 
 def test_stub_cast_skip_declines_without_machinery():
     dec = SimpleNamespace(L=None)
     assert _HighLevelMixin._stub_call_is_fp32(dec, '1804cdb00') is False
     assert _HighLevelMixin._stub_call_is_fp32(dec, 'zzzz') is False
+
+
+# test rbx,rbx / je past-the-consume / movss xmm12,[rip] / mulss xmm0,xmm12
+WALK_FIRE = bytes([
+    0x48, 0x85, 0xDB,
+    0x74, 0x0E,
+    0xF3, 0x44, 0x0F, 0x10, 0x25, 0x00, 0x00, 0x00, 0x00,
+    0xF3, 0x41, 0x0F, 0x59, 0xC4,
+])
+# same stream with the je landing exactly on the mulss (merge, not clean)
+WALK_REJOIN = bytes([
+    0x48, 0x85, 0xDB,
+    0x74, 0x09,
+    0xF3, 0x44, 0x0F, 0x10, 0x25, 0x00, 0x00, 0x00, 0x00,
+    0xF3, 0x41, 0x0F, 0x59, 0xC4,
+])
+# movaps xmm0,xmm1 (XMM0 clobber) then the mulss
+WALK_CLOBBER = bytes([0x0F, 0x28, 0xC1]) + bytes([
+    0xF3, 0x41, 0x0F, 0x59, 0xC4,
+])
+# a second call before the mulss (volatile clobber)
+WALK_CALL = bytes([0xE8, 0x00, 0x00, 0x00, 0x00]) + bytes([
+    0xF3, 0x41, 0x0F, 0x59, 0xC4,
+])
+# 17 nops push the mulss past the 16-instruction cap
+WALK_FAR = bytes([0x90] * 17) + bytes([0xF3, 0x0F, 0x59, 0x05,
+                                       0x00, 0x00, 0x00, 0x00])
+
+
+def _walk(stream):
+    base = 0x2000
+    bin = SimpleNamespace(
+        read=lambda va, n: stream[va - base:va - base + n]
+        if 0 <= va - base < len(stream) else None)
+    ins = SimpleNamespace(ip=0x1000, next_ip=base)
+    return _CallsMixin._fp32_scalar_next(_call_self(bin), ins)
+
+
+def test_walk_fires_past_flags_and_branch():
+    assert _walk(WALK_FIRE) is True
+
+
+def test_walk_declines_rejoin_clobber_call_distance():
+    assert _walk(WALK_REJOIN) is False
+    assert _walk(WALK_CLOBBER) is False
+    assert _walk(WALK_CALL) is False
+    assert _walk(WALK_FAR) is False

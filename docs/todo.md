@@ -1,5 +1,30 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: FP32-unary conditional consume (2026-09-24, LANDED)
+
+`_fp32_scalar_next` now walks up to 16 instructions forward to the
+scalar XMM0 consume instead of requiring it immediately after the call.
+Skipped instructions must not touch the value channel (no XMM0/YMM0
+mention, no calls, no returns/jumps/indirect flow, no kernel
+transitions); flag tests, conditional branches, NOPs, constant loads,
+and unrelated moves all skip. A branch target landing between call and
+consume declines (merge, not the call's value), as do revisits, decode
+failures, and running past the cap. Fire shapes unchanged (SS arith +
+`movss` from XMM0); VEX/`movaps`-copy/double-width consumes decline.
+
+Evidence: PlayerManager `FixedUpdate` (26741, `call; test; je; ...;
+mulss xmm0`) renders `float real15 =
+sub_1804cdb00(PlayerPrefs.GetFloat("SFXVolume"));` into `SetFloat(
+"DeathAudio", real15 * 20.0f)` at both sites; StoreManager `Spawned`
+(27765) and three more KeybindsManager volume restores gain the same
+improvement class. Slider `SliderLerpUnclamped` (15267) correctly
+declines twice (double-width `cvtss2sd` consume; `movaps`-copy consume).
+Corpus-isolated diff vs stashed baseline: exactly 3 files, all
+improvements plus renumber cascades. Tests: +4 portable (walk fire +
+rejoin/clobber/call/cap declines) +2 game; focused 15 passed; full
+suite 951 passed / 0 failed. Strict scratch builds (490/6,622 +
+802/8,997, all zero), brace 0, parse 0/0/0. No goldens changed.
+
 ## Current work: unregistered FP32-unary leaves (2026-09-24, LANDED)
 
 `sub_1804cdb00(volume)` (CRT log10f, 0x1804cdb00) is proved, never
