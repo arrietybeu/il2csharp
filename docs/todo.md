@@ -1,5 +1,21 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: promotion r5 (2026-09-24, PROMOTED)
+
+User-authorized (standing permission for regen/promotion whenever
+needed). Strict rebuild `r5_out1` from clean HEAD `37811e9`: 11,183
+files / 114,458 bodies / 0 failed / 0 fallbacks / 0 type-emission
+failures; brace 0 unbalanced; parse 0/0/0; file set identical to r4d
+(11,276 paths, 456 files differ). Triage: scalar prologue-copy typing
+corpus-wide plus FP32/R8 unary-leaf recovery (log10f + double leaf,
+immediate/conditional/conversion/copy consumes); net −79 unknown (−1
+file), shared/indirect/memN/goto/`?addr` flat, zero per-file marker
+increases; no regressions. No golden regen was needed (green suite
+proves currency: 957 passed / 0 failed). Promoted by mirror copy
+(aggregate `5a31b119…0d79`); evidence in
+`validation_reports/promotion_r5.json`. Scratch tree removed; tree
+committed and pushed.
+
 ## Current work: R8 double-unary leaves (2026-09-24, LANDED)
 
 The FP proof extends to double callees, proved on 0x1804CD9D0 (CRT
