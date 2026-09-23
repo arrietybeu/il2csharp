@@ -1,5 +1,25 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: paired float Jcc flags (2026-09-23, fixed in source)
+
+MethodDefs 23548/23549 (`AudioVolumeSliders.SetMusicVolumeInternal` /
+`SetSFXVolumeInternal`) use native `ucomiss xmm1, 0; jp X; jne X`.
+The `JP` correctly rendered `float.IsNaN(volume)`, then cleared the
+comparison operands before the fallthrough `JNE`, producing
+`else if (unknown != unknown)`. For the exact `UCOMISS; JP X; JNE X`
+shape with one predecessor at the second jump, the CFG executor now
+carries the operands and setter across the first jump. The second
+condition renders `volume != 0f` in both methods. Unregistered
+`sub_1804cdb00` result typing and the later `real1` declaration are
+separate open defects; this change does not claim the bodies compile.
+
+The broader Jcc carry changed MethodDef 45016's frozen double body,
+so it was narrowed to this proved single-precision shape; 45016 is
+golden-exact again. Two game tests pin the audio conditions. Full suite:
+936 passed. Strict AudioVolumeSliders scratch build: 8 bodies, 0 failed,
+0 fallbacks, 0 type emission failures; brace 0/2; parse 0/0/0.
+`final_out/` and goldens were not regenerated or promoted.
+
 ## Current work: InventoryManager join loss (2026-09-23, fixed in source)
 
 `UpdateInventorySlotsUI` (MethodDef 25624, VA `0x18070b620`) has an

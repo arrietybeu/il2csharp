@@ -71,9 +71,17 @@ class _AnalyzeMixin:
                     if value is not None and value.text == name:
                         L.regs[reg] = Expr('0', None, 'int')
 
+        # JP does not consume UCOMISS flags. In the exact
+        # `ucomiss; jp X; jne X` diamond, the sole-predecessor
+        # fallthrough JNE reads the same comparison operands.
+        jcc_fallthrough_flags = {}
+
         def exec_block(b, dry):
             L.out = _Sink(b)
             L.dry = dry
+            carried = jcc_fallthrough_flags.get(b.bid)
+            if carried is not None:
+                L.flags, L._flags_mn = carried
             for ins in b.insns:
                 # the branch/return/jmp handlers below render at THIS
                 # instruction's ip but run here, not through L._insn;
@@ -115,6 +123,16 @@ class _AnalyzeMixin:
                     lhs, rhs = (L.flags or (Expr('?', None, '?'), Expr('?', None, '?')))
                     L._note_use(lhs)
                     L._note_use(rhs)
+                    next_bid = bmap.get(ins.next_ip)
+                    if next_bid is not None and next_bid != b.bid \
+                            and mn == Mnemonic.JP \
+                            and getattr(L, '_flags_mn', None) == Mnemonic.UCOMISS:
+                        nb = blocks[next_bid]
+                        if nb.preds == [b.bid] and nb.insns and \
+                                nb.insns[0].mnemonic == Mnemonic.JNE \
+                                and nb.insns[0].near_branch_target == ins.near_branch_target:
+                            jcc_fallthrough_flags[next_bid] = \
+                                ((lhs, rhs), getattr(L, '_flags_mn', None))
                     lt = lhs.text if lhs else '?'
                     rt = rhs.text if rhs else '?'
                     op = L.CMP_OPS.get(mn)
@@ -458,6 +476,7 @@ class _AnalyzeMixin:
             b.stmts = []
 
         # ---- pass 2 (real): emit with stable phi vars
+        jcc_fallthrough_flags.clear()
         L.rsp_delta = 0
         L.stack_map = {}
         L.slot_types = {}
