@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from iced_x86 import Mnemonic
 
 from il2cpp.dec.highlevel import _HighLevelMixin
-from il2cpp.lifter.calls import _CallsMixin
+from il2cpp.lifter.calls import _CallsMixin, _fp32_arg_ok
 from il2cpp.lifter.state import _StateMixin
 
 
@@ -162,3 +162,24 @@ def test_walk_declines_rejoin_clobber_call_distance():
     assert _walk(WALK_CLOBBER) is False
     assert _walk(WALK_CALL) is False
     assert _walk(WALK_FAR) is False
+
+
+# cvtss2sd xmm1,xmm0 / cvttss2si eax,xmm0 / movaps xmm6,xmm0
+CONV_FIRE = bytes([0xF3, 0x0F, 0x5A, 0xC8])
+TRUNC_FIRE = bytes([0xF3, 0x0F, 0x2C, 0xC0])
+COPY_FIRE = bytes([0x0F, 0x28, 0xF0])
+
+
+def test_walk_fires_conversions_and_copy():
+    assert _walk(CONV_FIRE) is True
+    assert _walk(TRUNC_FIRE) is True
+    assert _walk(COPY_FIRE) is True
+
+
+def test_arg_ok_spellability():
+    assert _fp32_arg_ok('volume') is True
+    assert _fp32_arg_ok('t2 & float.NaN') is True
+    assert _fp32_arg_ok('a?.b') is True
+    assert _fp32_arg_ok('a ?? b') is True
+    assert _fp32_arg_ok('t2 & float.NaN & (double)(?)') is False
+    assert _fp32_arg_ok('?') is False

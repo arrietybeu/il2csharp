@@ -46,3 +46,18 @@ def test_audio_log10_conditional_consume(game_decompiler, mi, name, count):
     assert 'obj44 = sub_1804cdb00(' not in body
     assert 'obj29 = sub_1804cdb00(' not in body
     assert '(float)sub_1804cdb00' not in body
+
+
+def test_slider_log10_conversion_and_copy(game_decompiler):
+    # Site 1 fires through cvtss2sd into double/int chains; site 3
+    # fires; site 2 honestly declines (its argument carries a bare `?`
+    # the output could never spell, so the call keeps today's shape).
+    il, dec = game_decompiler
+    m = il.meta.methods[15267]
+    assert m.name == 'SliderLerpUnclamped'
+    body = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
+    assert body.count('= sub_1804cdb00(') == 3
+    assert 'sub_1804cdb00(real1 & float.NaN)' in body
+    assert '(double)(real' in body
+    assert '(int)(5.0d - (double)(real' in body
+    assert '(float)sub_1804cdb00' not in body

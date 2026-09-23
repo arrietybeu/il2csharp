@@ -5,6 +5,24 @@ from il2cpp.runtime.meta import IMM_OPS
 from il2cpp.text import _int_lit, _deref_spans_all, _norm_twin, _paren_spans_all, _term_up, disp_add, reg_name, rty_has_value, strip_outer
 from il2cpp.x64 import ARG_REGS, ARG_XMM, KLASS_VTABLE, VOLATILE
 
+def _fp32_arg_ok(text):
+    """True when an argument text is spellable enough to print.
+
+    A bare `?` never parses, so an argument containing one is not a
+    proven argument and the call keeps today's spelling. Null-conditional
+    `?.`, coalescing `??`, and the honest `unknown` marker all parse and
+    pass; declining a valid text (a ternary, a quoted `?`) only keeps an
+    old spelling, never invents a wrong one.
+    """
+    try:
+        t = text or ''
+        if '?' not in t:
+            return True
+        return re.search(r'(?<![\w?])\?(?![?])', t) is None
+    except Exception:
+        return False
+
+
 class _CallsMixin:
     def _info_name(self, info):
         """info tuple -> C# name for a resolved call target, or None."""
@@ -127,6 +145,16 @@ class _CallsMixin:
                         and reg_name(nx.op0_register) == 'XMM0':
                     fire = True
                 elif m == Mnemonic.MOVSS and nx.op_count == 2 \
+                        and nx.op1_kind == OpKind.REGISTER \
+                        and reg_name(nx.op1_register) == 'XMM0':
+                    fire = True
+                elif m in (Mnemonic.CVTSS2SD, Mnemonic.CVTSS2SI,
+                            Mnemonic.CVTTSS2SI) and nx.op_count == 2 \
+                        and nx.op1_kind == OpKind.REGISTER \
+                        and reg_name(nx.op1_register) == 'XMM0':
+                    fire = True
+                elif m == Mnemonic.MOVAPS and nx.op_count == 2 \
+                        and nx.op0_kind == OpKind.REGISTER \
                         and nx.op1_kind == OpKind.REGISTER \
                         and reg_name(nx.op1_register) == 'XMM0':
                     fire = True
@@ -1383,6 +1411,7 @@ class _CallsMixin:
             if value is not None and not value._unk and value.text \
                     and value.text.strip() \
                     and value.text.strip() not in ('?', '_') \
+                    and _fp32_arg_ok(value.text) \
                     and self._fp32_scalar_next(ins):
                 self._hint_tok(value, _R4_TY)
                 call = '%s(%s)' % (name, value.text)

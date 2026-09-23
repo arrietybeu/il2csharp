@@ -1,5 +1,26 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: FP32-unary conversion/copy consumes (2026-09-24, LANDED)
+
+The consumer gate additionally fires on float-consuming conversions
+with source XMM0 (`cvtss2sd/cvtss2si/cvttss2si`, rendered by the
+existing `(double)/(int)` casts) and on `movaps` reg,reg copies from
+XMM0 (bitwise copy preserves the value); double-source conversions
+(`cvtsd2ss` et al) and VEX forms still decline. A new `_fp32_arg_ok`
+helper declines arguments containing a bare `?` (never parses;
+`?.`/`??`/`unknown` pass).
+
+Evidence: Slider `SliderLerpUnclamped` (15267) recovers two sites --
+`float real2 = sub_1804cdb00(real1 & float.NaN);` and `float real3 =
+...` feeding `(double)(real3)` / `(int)(5.0d - (double)(real3))`
+chains; the third site honestly declines (its argument carries
+`(double)(?)`, unspellable until SIMD-lane provenance heals upstream).
+Corpus-isolated diff vs stashed baseline: exactly 1 file (Slider.cs),
+improvements plus renumber cascades. Tests: +2 portable (conversion/
+copy fires, arg spellability) +1 game; focused 18 passed; full suite
+954 passed / 0 failed. Strict scratch builds (490/6,622 + 802/8,997,
+all zero), brace 0, parse 0/0/0. No goldens changed.
+
 ## Current work: FP32-unary conditional consume (2026-09-24, LANDED)
 
 `_fp32_scalar_next` now walks up to 16 instructions forward to the
