@@ -464,6 +464,19 @@ set byte-identically (same 3 IDs). Open #2 remainder: vtable occupants
 on abstract bases (needs store provenance -- do not touch without it),
 receiver-driven generic substitution (synthetic table).
 
+## Addendum — 2026-09-22, generic slice closed without patch
+
+Designed (extractor + hook + inflated-chain swap) then empirically
+closed: 23762's homes already close via the MethodRef slot path,
+closed-generic bases never reach `_field_expr` there (0 hits traced),
+and corpus mining found zero hook-shaped sites (open result +
+correctly-attributed closed receiver + pure-result fix) -- the 9
+open-result sites need use→def consumers, 24679/109849 are
+misattributed field lanes, the 187 family is already fine.
+`selectable1`/`obj17`/`obj11` need sidecar/SIMD-lanes/use→def
+respectively (documented). Deferred with the hinted round; no
+invisible infra shipped.
+
 ## Addendum — 2026-09-22, boxed-bool fold (unpromoted)
 
 The interface round left `object obj32 = obj5.MoveNext();

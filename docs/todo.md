@@ -1,4 +1,23 @@
 # il2csharp — TODO (open work and historical triage)
+## Current work: generic-slice closure (2026-09-22, unpromoted, no source change)
+
+Subagent-designed, empirically closed without a patch. Same rules:
+`final_out/` untouched, no regen, no promotion.
+
+- Verified on mi 23762: MethodRef kind-6 slot path already closes all
+  generic homes; closed-generic bases never reach `_field_expr`
+  (0 hits traced), so the inflated-chain swap is a proven no-op here;
+  `selectable1` needs byte-range sidecar (documented), `obj17` needs
+  SIMD lanes, `obj11` needs use→def (bare-temp receiver at lift).
+- Corpus mining for hook-shaped sites (open result + correctly
+  attributed closed-generic receiver + pure-result-typing fix): ZERO
+  hits. 9 open-result sites need downstream-consumer proof (use→def);
+  the 1 closed-receiver + object case (24679) is a misattributed field
+  lane with zero `get_Current` candidates; 109849 likewise; the 187
+  family is void/closed/slot-named already.
+- Verdict: receiver-driven substitution deferred to sidecar machinery
+  alongside hinted receivers. No invisible infra shipped.
+
 ## Current work: promotion r4a (2026-09-22, PROMOTED)
 
 User-authorized. Strict rebuild `r4a_out1`: 11,183 files / 114,458
