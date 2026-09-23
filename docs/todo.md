@@ -1,4 +1,41 @@
 # il2csharp — TODO (open work and historical triage)
+
+## Current work: InventoryManager join loss (2026-09-23, fixed in source)
+
+`UpdateInventorySlotsUI` (MethodDef 25624, VA `0x18070b620`) has an
+unbound `image3.sprite = obj21` in the promoted and fresh lifts. Native
+block `0x18070baf4` calls the sprite setter after two paths: predecessor
+68 (`0x18070ba96`) carries `RCX = t1014` and
+`RDX = this.objSprites[this.inventoryIds[v145]]`; predecessor 75
+(`0x18070baed`) carries `RCX = this.inventorySprites_[v145]` and
+`RDX = this.emptySprite`. The setter therefore runs on both paths.
+`_build_phi_copies` creates a phi for `RDX` (`v223`) but none for
+`RCX`; the structured body already has `t1014.sprite = v223` before
+`_rename_locals`. The latter merely names the unbound value `image3`.
+
+Real-pass instrumentation proved both `RCX` expressions had identical
+text at the equality check, but separate definition sites and one use
+each. Later binding renamed only the first expression. The merge now
+keeps a typed object array-element value with distinct definitions as
+a phi, even when its texts match. `_phi_decl_hoist` then lifts the
+receiver and sprite declarations above the diamond, preserving each
+arm's assignment. The historical twin-tail match remains first; the
+non-tail extension runs only after a prior hoist on that shape.
+
+Evidence: MethodDef 25624 now renders `Image obj22; Sprite obj23;`
+before the branch, assigns both in each arm, and calls
+`obj22.sprite = obj23;` at the join. A game regression and a portable
+two-value hoist test pin it. Full suite: 934 passed. Strict scratch
+build (`--types InventoryManager --only Assembly-CSharp`): 158 bodies,
+0 failures, 0 fallbacks, 0 type emission failures; brace audit 0/2.
+Strict `Assembly-CSharp` scratch build: 490 files / 6,622 bodies,
+0 failures, 0 fallbacks, 0 type emission failures; brace audit 0/490;
+tree-sitter parse 0 bad / 0 ERROR / 0 MISSING. Against promoted r4c,
+27 Assembly-CSharp files differ; sampled diffs are phi copies and
+declaration hoists, with the target's two receiver assignments intact.
+`final_out/` remains the read-only promoted r4c tree. No snapshot
+regeneration or promotion was done.
+
 ## Current work: promotion r4c (2026-09-23, PROMOTED)
 
 User-authorized (`just promote`). Strict rebuild `r4c_out1`: 11,183

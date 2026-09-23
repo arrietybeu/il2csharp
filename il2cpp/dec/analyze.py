@@ -490,7 +490,15 @@ class _AnalyzeMixin:
                     # (VOLATILE pops, paths that never defined it). Naming
                     # it a phi, not collapsing to None, keeps the later
                     # read honest (objN) instead of rendering `?`.
-                    if len(set(texts)) == 1 and vals[0] is not None:
+                    # Two loads can print the same array expression but
+                    # denote separate native values. A later use may bind
+                    # only one Expr to a temp; preserve both with a phi.
+                    separate_defs = (len(set(texts)) == 1 and vals[0] is not None
+                        and '[' in texts[0] and ']' in texts[0]
+                        and all(v.kind == 'obj' and isinstance(v.ty, tuple) for v in vals)
+                        and len({v._defpos for v in vals}) > 1
+                        and any(v._uses for v in vals))
+                    if len(set(texts)) == 1 and vals[0] is not None and not separate_defs:
                         merged[k] = vals[0]
                     elif k == FLAGS:
                         defined = [v for v in vals if isinstance(v, Expr) and isinstance(v.ty, tuple)]

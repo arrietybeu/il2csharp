@@ -781,6 +781,21 @@ def test_phi_decl_hoist_across_if_else():
     lines2 = ["flag6 = Foo();"] + lines
     assert dec._phi_decl_hoist(list(lines2)) == lines2
 
+
+def test_phi_decl_hoist_two_values_with_non_tail_declarations():
+    dec = Decompiler.__new__(Decompiler)
+    lines = [
+        "if (empty)", "{", "Image image1 = left;", "Sprite sprite1 = a;",
+        "}", "else", "{", "Image image1 = right;", "Sprite sprite1 = b;",
+        "}", "image1.sprite = sprite1;",
+    ]
+    assert dec._phi_decl_hoist(lines) == [
+        "Sprite sprite1;", "Image image1;",
+        "if (empty)", "{", "image1 = left;", "sprite1 = a;",
+        "}", "else", "{", "image1 = right;", "sprite1 = b;",
+        "}", "image1.sprite = sprite1;",
+    ]
+
 def phi_color_lifter():
     chain = {0x10: ('r', 1), 0x14: ('g', 1), 0x18: ('b', 1), 0x1C: ('a', 1)}
     il = NS(

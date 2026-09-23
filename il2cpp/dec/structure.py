@@ -247,10 +247,10 @@ class _StructureMixin:
             return None
         return typ, m.group(2), rhs
 
-    def _phi_decl_match(self, lines, i):
+    def _phi_decl_match(self, lines, i, allow_non_tail=False):
         """Full hoist match at i, or None: `if (c) { ..; T x = a; } else
         { ..; T x = b; }` with x read after the join. Returns (indent,
-        tok, typ, tc, ec, a1, a2, rhs1, rhs2) with absolute tail indices.
+        tok, typ, tc, ec, a1, a2, rhs1, rhs2) with absolute assignment indices.
         Every guard must hold: same token, same declared type word, tails
         last in their arms, no flow-break in either arm, no earlier read
         of x in the arms, no earlier visible decl/assignment of x, no
@@ -280,27 +280,39 @@ class _StructureMixin:
             return None
         if len(nn1) == 1 and len(nn2) == 1:
             return None
+        # Prefer the historical twin-tail proof. A separate phi copy
+        # can follow a receiver declaration; admit that only when there
+        # is exactly one matching declaration pair in these arms.
         p1 = self._phi_tail_decl(then[nn1[-1]])
         p2 = self._phi_tail_decl(els[nn2[-1]])
-        if p1 is None or p2 is None:
-            return None
-        typ1, tok1, rhs1 = p1
-        typ2, tok2, rhs2 = p2
-        if tok1 != tok2 or typ1 != typ2:
-            return None
-        tok, typ = tok1, typ1
+        if p1 is not None and p2 is not None and p1[:2] == p2[:2]:
+            k1, k2 = nn1[-1], nn2[-1]
+        else:
+            if not allow_non_tail:
+                return None
+            d1 = [(k, p) for k, line in enumerate(then)
+                  if (p := self._phi_tail_decl(line)) is not None]
+            d2 = [(k, p) for k, line in enumerate(els)
+                  if (p := self._phi_tail_decl(line)) is not None]
+            pairs = [(k1, q1, k2, q2) for k1, q1 in d1 for k2, q2 in d2
+                     if q1[:2] == q2[:2]]
+            if len(pairs) != 1:
+                return None
+            k1, p1, k2, p2 = pairs[0]
+        typ, tok, rhs1 = p1
+        rhs2 = p2[2]
         rx = re.compile(r'(?<![\w.])%s(?![\w])' % re.escape(tok))
         flow = re.compile(r'^(?:return|goto|throw|break|continue)\b')
         for body in (then, els):
             for b in body:
                 if flow.match(b.strip()):
                     return None
-        a1 = i + 2 + nn1[-1]
-        a2 = tc + 3 + nn2[-1]
-        for k in range(i + 2, a1):
+        a1 = i + 2 + k1
+        a2 = tc + 3 + k2
+        for k in list(range(i + 2, a1)) + list(range(a1 + 1, tc)):
             if rx.search(lines[k]):
                 return None
-        for k in range(tc + 3, a2):
+        for k in list(range(tc + 3, a2)) + list(range(a2 + 1, ec)):
             if rx.search(lines[k]):
                 return None
         if rx.search(rhs1) or rx.search(rhs2):
@@ -328,7 +340,7 @@ class _StructureMixin:
         indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
         return indent, tok, typ, tc, ec, a1, a2, rhs1, rhs2
 
-    def _phi_decl_hoist(self, lines):
+    def _phi_decl_hoist(self, lines, _round=0):
         """Hoist twin arm declarations above their `if`/`else`.
 
         `if (c) { ..; T x = a; } else { ..; T x = b; }` with x read after
@@ -342,13 +354,18 @@ class _StructureMixin:
         n = len(lines)
         found = []
         for q in range(n):
-            hit = self._phi_decl_match(lines, q)
+            prior_decl = (q > 0 and re.match(
+                r'^\s*[A-Za-z_@][\w@.<>,\[\]*? ]+\s+[A-Za-z_@]\w*\s*;$',
+                lines[q - 1]))
+            hit = self._phi_decl_match(lines, q, _round > 0 and prior_decl)
             if hit is not None:
                 found.append((q, hit))
         counts = {}
         for _, hit in found:
             counts[hit[1]] = counts.get(hit[1], 0) + 1
         at = {q: hit for q, hit in found if counts[hit[1]] == 1}
+        if not at:
+            return lines
         out = []
         i = 0
         while i < n:
@@ -370,7 +387,7 @@ class _StructureMixin:
             out.append('%s%s = %s;' % (ind2, tok, rhs2))
             out.extend(lines[a2 + 1:ec + 1])
             i = ec + 1
-        return out
+        return self._phi_decl_hoist(out, _round + 1) if _round < 15 else out
 
     def _ensure_eh_helper_set(self):
         """Prove the program's throw helpers once, from the whole binary.
