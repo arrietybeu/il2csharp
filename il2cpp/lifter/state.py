@@ -109,6 +109,8 @@ class _StateMixin:
     # while the name stays the honest `sub_X`: the managed identity (e.g.
     # Mathf.Log10, whose registered target differs) is never inferred.
     _FP32_GPR_ARGS = ('RCX', 'RDX', 'R8', 'R9')
+    _FP32_XMM_EXTRA = tuple('XMM%d' % i for i in range(1, 16))
+    _FP32_XMM_HI = tuple('XMM%d' % i for i in range(6, 16))
     _FP32_NONVOL = ('RBX', 'RBP', 'RDI', 'RSI', 'R12', 'R13', 'R14', 'R15')
 
     def _fp32_table(self):
@@ -144,6 +146,7 @@ class _StateMixin:
                 M.MOVAPD: ('w1', (RR, RM, MR)),
                 M.MOVDQA: ('w1', (RR, RM, MR)),
                 M.MOVDQU: ('w1', (RR, RM, MR)),
+                M.MOVSD: ('w1', (RR, RM, MR)),
                 M.MOVD: ('w1', (RR,)),
                 M.MOVQ: ('w1', (RR, RM, MR)),
                 M.VMOVSS: ('w1', ((R, MM),)),
@@ -159,9 +162,9 @@ class _StateMixin:
                 M.AND: ('rw1', (RR, RM, MI8, MI32)),
                 M.OR: ('rw1', (RR, RM, MI8, MI32)),
                 M.XOR: ('rw1', (RR, RM, MI8, MI32)),
-                M.SHL: ('rw1', ((R, I8),)),
-                M.SHR: ('rw1', ((R, I8),)),
-                M.SAR: ('rw1', ((R, I8),)),
+                M.SHL: ('rw1', ((R, I8), (R, R))),
+                M.SHR: ('rw1', ((R, I8), (R, R))),
+                M.SAR: ('rw1', ((R, I8), (R, R))),
                 M.NOT: ('rw1', ((R,),)),
                 M.NEG: ('rw1', ((R,),)),
                 M.INC: ('rw1', ((R,),)),
@@ -169,6 +172,7 @@ class _StateMixin:
                 M.IMUL: ('rw1', (RR,)),
                 M.ADDSS: ('rw1', (RR, RM)),
                 M.SUBSS: ('rw1', (RR, RM)),
+                M.SUBSD: ('rw1', (RR, RM)),
                 M.MULSS: ('rw1', (RR, RM)),
                 M.DIVSS: ('rw1', (RR, RM)),
                 M.SQRTSS: ('rw1', (RR, RM)),
@@ -217,6 +221,12 @@ class _StateMixin:
                        'JCXZ', 'JECXZ', 'JRCXZ'):
                 if hasattr(M, _j):
                     tab[getattr(M, _j)] = ('ctrl', ((O.NEAR_BRANCH64,),))
+            # SETcc writes its byte destination; only flags are read.
+            for _s in ('SETE', 'SETNE', 'SETA', 'SETAE', 'SETB', 'SETBE',
+                       'SETG', 'SETGE', 'SETL', 'SETLE', 'SETS', 'SETNS',
+                       'SETO', 'SETNO', 'SETP', 'SETNP'):
+                if hasattr(M, _s):
+                    tab[getattr(M, _s)] = ('w1', ((R,),))
             names = {}
             for _k, _v in vars(O).items():
                 try:
@@ -289,7 +299,9 @@ class _StateMixin:
             inputs = self._fp32_inputs(target, 0)
             res = inputs is not None and 'XMM0' in inputs \
                 and not (set(inputs) & set(self._FP32_GPR_ARGS)) \
-                and 'STACKARG' not in inputs
+                and not (set(inputs) & set(self._FP32_XMM_EXTRA)) \
+                and 'STACKARG' not in inputs \
+                and 'SHADOWARG' not in inputs
         except Exception:
             res = False
         cache[target] = res
@@ -433,7 +445,8 @@ class _StateMixin:
                 return None
             if self._fp32_inputs(_ct, depth + 1) is None:
                 return None
-        tracked = frozenset(self._FP32_GPR_ARGS + ('XMM0',))
+        tracked = frozenset(self._FP32_GPR_ARGS + ('XMM0',)
+                              + self._FP32_XMM_EXTRA)
         ecur = blocks[start][0]
         entry_end = ecur[-1].next_ip
         for t in branches:
@@ -479,6 +492,26 @@ class _StateMixin:
         gen = {}
         kill = {}
         sub_seen = False
+        has_sub = False
+        try:
+            for _e in blocks[start][0]:
+                if _e.mnemonic == M.SUB and _e.op_count == 2 \
+                        and getattr(_e, 'op0_kind') == O.REGISTER \
+                        and reg_name(_e.op0_register) == 'RSP':
+                    if self._fp32_rsp_imm(_e) is not None:
+                        has_sub = True
+        except Exception:
+            pass
+        # Frameless leaves (no entry frame setup, e.g. tiny CRT
+        # thunks using the caller home area as scratch) work over
+        # the 0x28 shadow store. The shadow holds caller data, so a
+        # sub-shadow read is an input (SHADOWARG) unless its home was
+        # written in the entry block, which dominates every later
+        # read (mid-entry branch targets already decline above).
+        frameless = not has_sub
+        if frameless:
+            frame = 0x28
+        entry_homes = set()
         for k, (cur, succ) in blocks.items():
             g, kk = set(), set()
             for ins in cur:
@@ -529,6 +562,8 @@ class _StateMixin:
                         kk.add(r)
                     if is_w and r in self._FP32_NONVOL:
                         return None
+                    if is_w and r in self._FP32_XMM_HI:
+                        return None
                     if is_w and r == 'RSP':
                         if not self._fp32_rsp_ok(m, k == start, succ == [],
                                                  ins, frame):
@@ -554,17 +589,21 @@ class _StateMixin:
                     if disp is None:
                         return None
                     writes_mem = kind in ('w1', 'rw1') and i == 0
-                    pre_sub = k == start and not sub_seen
+                    pre_sub = k == start and has_sub and not sub_seen
                     if writes_mem:
                         if pre_sub:
                             return None
                         if base == 'RSP' and idx in ('?', 'RSP'):
                             if frame is None or not 0 <= disp < frame:
                                 return None
+                            if k == start:
+                                entry_homes.add((base, disp))
                         elif alias is not None and base == alias \
                                 and idx in ('?', 'RSP'):
                             if frame is None or not -frame <= disp < 0:
                                 return None
+                            if k == start:
+                                entry_homes.add((base, disp))
                         else:
                             return None
                     else:
@@ -573,19 +612,21 @@ class _StateMixin:
                                 g.add('STACKARG')
                             elif disp >= frame + 8:
                                 g.add('STACKARG')
+                            elif frameless and (base, disp) not in entry_homes:
+                                g.add('SHADOWARG')
                         elif base == 'RSP':
                             return None
                         elif alias is not None and base == alias:
                             if idx not in ('?', 'RSP') or frame is None \
                                     or not -frame <= disp < 0:
                                 return None
+                            elif frameless and (base, disp) not in entry_homes:
+                                g.add('SHADOWARG')
                 # VPXOR same-reg form check needs the vex path above only
             gen[k] = g
             kill[k] = kk
-        if frame is None:
-            return None
         must_in = {k: (set() if k == start else None) for k in blocks}
-        full = set(tracked) | {'STACKARG'}
+        full = set(tracked) | {'STACKARG', 'SHADOWARG'}
         for k in blocks:
             if k != start:
                 must_in[k] = set(full)

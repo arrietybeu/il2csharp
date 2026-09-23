@@ -1,5 +1,35 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: R8 double-unary leaves (2026-09-24, LANDED)
+
+The FP proof extends to double callees, proved on 0x1804CD9D0 (CRT
+errno-adjacent double leaf behind Slider's `sub_1804CD9D0` calls):
++MOVSD/+SETcc/+SUBSD table shapes, register-count shifts (op1 read is
+tracked, MUST discounts scratch uses), frameless functions over the
+0x28 shadow store (entry-block-dominated homes read clean, others join
+SHADOWARG), and GEN/KILL over XMM0-15 (YMM/ZMM fold in). The last item
+closed a real hole found by the re-sweep: `mulss xmm0,xmm1` passed with
+inputs=={XMM0} and the render dropped the multiplier; it now declines
+with inputs=={XMM0,XMM1} (pinned portably and by PathProcessor 104653's
+unchanged object spray). The consumer gate returns 'f'/'d'/None;
+CVTSD2SI/CVTTSD2SI with source XMM0 fire double, and the render binds
+`double` in XMM0. Fix-104 casts stay for both widths (they unbox
+against the object stubs -- verified by declaration audit).
+
+Evidence: SliderLerpUnclamped (15267) chains
+`float real2 = (float)sub_1804cdb00(...)` into
+`double real3 = (double)sub_1804CD9D0((double)(real2))` and on to
+`(int)`; FEngineering (2 sites), Panel (2 pixel sites), and
+StylePropertyAnimationSystem (1 site) gain the same double recovery;
+remaining sites decline honestly. Corpus sweep holds at exactly 2
+passing targets (log10f + R8). Tests: +3 portable (SD widths,
+binary-op decline, frameless/SHADOWARG) +1 game (binary-op pin), -1
+obsolete cast-skip test; focused 21 passed; full suite 957 passed /
+0 failed. Strict scratch builds
+(490/6,622 + 802/8,997, all zero), brace 0, parse 0/0/0. Isolated diff
+vs stashed baseline: 4 files, all improvements plus renumber cascades.
+No goldens changed.
+
 ## Current work: FP32-unary conversion/copy consumes (2026-09-24, LANDED)
 
 The consumer gate additionally fires on float-consuming conversions
@@ -58,10 +88,13 @@ propagation; unregistered-identity floor below with the CRT-substrate
 residual documented). The call site additionally requires a scalar
 XMM0 consume on the next instruction (`_fp32_scalar_next`) and a known
 XMM0 value. The render keeps the honest `sub_X` name with one float
-argument and a float XMM0 result; fix-104 skips its redundant `(float)`
-cast for proved leaves only.
+argument and a float XMM0 result; fix-104's `(float)` cast stays (it
+unboxes against the object-returning stub declarations -- skipping it
+broke compilation while staying parse-green, so the skip was designed,
+prototyped, and reverted before landing; casts are load-bearing).
 
-Evidence: 23548/23549 render `float real2 = sub_1804cdb00(volume);`
+Evidence: 23548/23549 render `float real2 =
+(float)sub_1804cdb00(volume);`
 with `real3 = real2 * 20.0f;` (was 4-arg spray + `object` + dropped
 `0f * 20.0f`), dead arg scaffolding DCE'd; KeybindsManager's three
 volume methods (SetSFX/Music/PlayerVoiceVolume) gain the identical
@@ -72,7 +105,7 @@ tests needs branch-aware tracking, a follow-up). Strict scratch builds
 (Assembly-CSharp 490/6,622 + UIElementsModule 802/8,997, all 0 failed /
 0 fallbacks), brace 0, parse 0/0/0 on both. Against a stashed baseline
 build, exactly 2 files differ (both improvements). Tests: +7 portable
-(synthetic callee bytes, decline shapes, consumer gate, cast skip) +2
+(synthetic callee bytes, decline shapes, consumer gate) +2
 game; focused 11 passed; full suite 947 passed / 0 failed (fully
 green). No goldens changed; `final_out/` holds r4d. Package CRLF/no-BOM,
 tests LF.

@@ -1576,30 +1576,6 @@ class _HighLevelMixin:
             k += 1
         return None
 
-    def _stub_call_is_fp32(self, vm):
-        """True when a `sub_<hex>` VA names a proved FP32-unary leaf.
-
-        Fix-104 casts exist for unresolved calls; a call the lifter
-        proved float needs no `(float)` decoration. Unreadable VAs,
-        missing machinery (test doubles), and anything unproved keep
-        the old cast.
-        """
-        try:
-            va = int(vm, 16)
-        except Exception:
-            return False
-        try:
-            prove = getattr(getattr(self, 'L', None),
-                            '_is_fp32_unary_leaf', None)
-        except Exception:
-            return False
-        if prove is None:
-            return False
-        try:
-            return bool(prove(va))
-        except Exception:
-            return False
-
     def _stub_wrap_range(self, code, masked, lo, hi, ty, real, depth=0):
         """Wrap direct-position sub_ calls in masked[lo:hi] with `(ty)`.
 
@@ -1666,8 +1642,6 @@ class _HighLevelMixin:
             return code[lo:a] + cond + code[q:q + 1] + arm1 + code[c:c + 1] + arm2 + code[b:hi]
         vm = self._stub_call_at(masked, a)
         if vm is None or vm in real:
-            return None
-        if inner_ty == 'float' and self._stub_call_is_fp32(vm):
             return None
         span = self._stub_call_span(masked, a + 4 + len(vm))
         if span is None or span[1] != b - 1:

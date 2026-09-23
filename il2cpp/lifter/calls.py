@@ -98,7 +98,7 @@ class _CallsMixin:
         return res
 
     def _fp32_scalar_next(self, ins):
-        """True when XMM0 is consumed as a scalar shortly after `ins`.
+        """Width of the scalar XMM0 consume after `ins`, if any.
 
         Walks forward from the next instruction (at most 16) to a scalar
         FP consume of XMM0 (`mulss/addss/subss/divss xmm0, ...`, or a
@@ -116,7 +116,7 @@ class _CallsMixin:
         Anything else declines and the call keeps today's spelling.
         """
         if not HAVE_ICED:
-            return False
+            return None
         try:
             call_ip = ins.ip
             ip = ins.next_ip
@@ -131,7 +131,7 @@ class _CallsMixin:
             try:
                 code = self.bin.read(ip, 16)
                 if not code:
-                    return False
+                    return None
                 dec = Decoder(64, code, DecoderOptions.NONE)
                 dec.ip = ip
                 nx = next(iter(dec))
@@ -139,43 +139,47 @@ class _CallsMixin:
                 return False
             try:
                 m = nx.mnemonic
+                width = None
                 if m in (Mnemonic.MULSS, Mnemonic.ADDSS,
                          Mnemonic.SUBSS, Mnemonic.DIVSS) \
                         and nx.op0_kind == OpKind.REGISTER \
                         and reg_name(nx.op0_register) == 'XMM0':
-                    fire = True
+                    width = 'f'
                 elif m == Mnemonic.MOVSS and nx.op_count == 2 \
                         and nx.op1_kind == OpKind.REGISTER \
                         and reg_name(nx.op1_register) == 'XMM0':
-                    fire = True
+                    width = 'f'
                 elif m in (Mnemonic.CVTSS2SD, Mnemonic.CVTSS2SI,
                             Mnemonic.CVTTSS2SI) and nx.op_count == 2 \
                         and nx.op1_kind == OpKind.REGISTER \
                         and reg_name(nx.op1_register) == 'XMM0':
-                    fire = True
+                    width = 'f'
                 elif m == Mnemonic.MOVAPS and nx.op_count == 2 \
                         and nx.op0_kind == OpKind.REGISTER \
                         and nx.op1_kind == OpKind.REGISTER \
                         and reg_name(nx.op1_register) == 'XMM0':
-                    fire = True
-                else:
-                    fire = False
+                    width = 'f'
+                elif m in (Mnemonic.CVTSD2SI, Mnemonic.CVTTSD2SI) \
+                        and nx.op_count == 2 \
+                        and nx.op1_kind == OpKind.REGISTER \
+                        and reg_name(nx.op1_register) == 'XMM0':
+                    width = 'd'
             except Exception:
-                return False
-            if fire:
+                return None
+            if width is not None:
                 for t in targets:
                     if call_ip < t <= ip:
-                        return False
-                return True
+                        return None
+                return width
             if not self._fp32_skip_next(nx):
-                return False
+                return None
             if nx.flow_control == FlowControl.CONDITIONAL_BRANCH:
                 try:
                     targets.append(nx.near_branch_target)
                 except Exception:
                     return False
             ip = nx.next_ip
-        return False
+        return None
 
     @staticmethod
     def _fp32_skip_next(nx):
@@ -1408,19 +1412,22 @@ class _CallsMixin:
         if target is not None and re.fullmatch(r'sub_[0-9a-f]+', name) is not None \
                 and self._is_fp32_unary_leaf(target):
             value = self.reg('XMM0')
+            width = None
             if value is not None and not value._unk and value.text \
                     and value.text.strip() \
                     and value.text.strip() not in ('?', '_') \
-                    and _fp32_arg_ok(value.text) \
-                    and self._fp32_scalar_next(ins):
-                self._hint_tok(value, _R4_TY)
+                    and _fp32_arg_ok(value.text):
+                width = self._fp32_scalar_next(ins)
+            if width is not None:
+                rty = _R4_TY if width == 'f' else _R8_TY
+                self._hint_tok(value, rty)
                 call = '%s(%s)' % (name, value.text)
                 for r in VOLATILE:
                     self.regs.pop(r, None)
                 for i in range(1, 6):
                     self.regs.pop('XMM%d' % i, None)
                 self._fresh_unknowns()
-                result = Expr(call, _R4_TY, 'float')
+                result = Expr(call, rty, 'float')
                 self.regs['XMM0'] = result
                 self._bind(result)
                 if self.asm_comments and asm:

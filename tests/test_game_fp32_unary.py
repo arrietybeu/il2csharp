@@ -21,12 +21,11 @@ def test_audio_log10_leaf(game_decompiler, mi, name, label):
     m = il.meta.methods[mi]
     assert m.name == name
     body = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
-    assert 'float real2 = sub_1804cdb00(volume);' in body
+    assert 'float real2 = (float)sub_1804cdb00(volume);' in body
     assert 'real3 = real2 * 20.0f;' in body
     assert 'this.audioMixer.SetFloat("' + label + '", real3)' in body
     assert 'real2 = 0f * 20.0f' not in body
     assert 'obj14 = sub_1804cdb00(' not in body
-    assert '(float)sub_1804cdb00' not in body
 
 
 @pytest.mark.parametrize('mi,name,count', [
@@ -45,7 +44,6 @@ def test_audio_log10_conditional_consume(game_decompiler, mi, name, count):
     assert '0f * 20.0f' not in body
     assert 'obj44 = sub_1804cdb00(' not in body
     assert 'obj29 = sub_1804cdb00(' not in body
-    assert '(float)sub_1804cdb00' not in body
 
 
 def test_slider_log10_conversion_and_copy(game_decompiler):
@@ -56,8 +54,23 @@ def test_slider_log10_conversion_and_copy(game_decompiler):
     m = il.meta.methods[15267]
     assert m.name == 'SliderLerpUnclamped'
     body = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
-    assert body.count('= sub_1804cdb00(') == 3
+    assert body.count('sub_1804cdb00(') == 3
+    assert body.count('sub_1804cd9d0(') == 2
     assert 'sub_1804cdb00(real1 & float.NaN)' in body
+    assert 'sub_1804cd9d0((double)(real' in body
     assert '(double)(real' in body
     assert '(int)(5.0d - (double)(real' in body
-    assert '(float)sub_1804cdb00' not in body
+    assert '(float)sub_1804cdb00' in body
+
+
+def test_binary_op_keeps_honest_spelling(game_decompiler):
+    # 0x180001cf0 is `mulss xmm0,xmm1` (binary): the proof declines on
+    # the XMM1 input instead of dropping an argument, so the call keeps
+    # today's object spray rather than a confidently-wrong unary float.
+    import re
+    il, dec = game_decompiler
+    m = il.meta.methods[104653]
+    assert m.name == 'CalculatePathsThreaded'
+    body = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
+    assert re.search(r'object obj\d+ = sub_180001cf0\(', body) is not None
+    assert '(float)sub_180001cf0' not in body
