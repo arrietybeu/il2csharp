@@ -1,4 +1,20 @@
 # il2csharp — TODO (open work and historical triage)
+## Current work: promotion r4c (2026-09-23, PROMOTED)
+
+User-authorized (`just promote`). Strict rebuild `r4c_out1`: 11,183
+files / 114,458 bodies / 0 failed / 0 fallbacks / 0 type-emission
+failures; brace 0 unbalanced; parse 0/0/0; file set identical to r4a
+(11,276 paths, 49 files differ). 49-file triage: SIMD composites
+(+13), struct-literal recoveries (GridGraph/AstarDebugger/WFX Color,
+native-verified), float typings, renumber cascades, honest residuals
+(net −86 unknown); no regressions (WFX alpha ternary verified
+native-faithful; `?addr` tightening stayed reverted). Promoted by
+byte-identical copy (aggregate `c0ee1b78…1236`); evidence in
+`validation_reports/promotion_r4c.json`. New census: shared
+18,884/2,278, indirect 6,262/884, unknown 15,655/1,365, mem[N]
+398/127, mem_hex 359 strict, goto unchanged, `?addr` 1 (honest
+elision). Post-promotion suite + cleanup below.
+
 ## Current work: ?addr-tightening DISPROVED (2026-09-22, reverted clean)
 
 Narrowing the RSP-copy declines to text-`?` bases rescued mi 65244's

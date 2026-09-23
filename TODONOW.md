@@ -6,12 +6,12 @@ The source of truth is the decompiler under `il2cpp/`. Fixture inputs are
 `testgame/ShiftAtMidnight_Data/il2cpp_data/Metadata/global-metadata.dat` and
 `testgame/GameAssembly.dll`.
 
-## Baseline gates (r4a promotion, 2026-09-22 — prior numbers archived below)
+## Baseline gates (r4c promotion, 2026-09-23 — prior numbers archived below)
 
 - Strict rebuild: 114,458 bodies, 0 failures, 0 fallbacks (matches).
 - Brace audit: 0 unbalanced files. Parse gate: 0 bad / 0 ERROR / 0 MISSING.
-- Full suite: 923 passed, 1 failure: MethodDef 67525 (honest SIMD
-  decline; 32837 + 104428 regened after per-hunk review).
+- Full suite: 933 passed, 0 failed (first fully-green run; 67525
+  regened to the signature-exact composite).
 - `final_out/` is promoted output and must remain read-only.
 - The fixture is private/licensed; never redistribute it.
 
@@ -20,11 +20,11 @@ The source of truth is the decompiler under `il2cpp/`. Fixture inputs are
 All paths below are relative to `C:\Users\crax\Downloads\il2csharp`.
 The count is occurrences/lines first and distinct `.cs` files second.
 
-| category | promoted r4a scan | 2026-09-22 handoff figure | exact output root |
+| category | promoted r4c scan | 2026-09-22 handoff figure | exact output root |
 |---|---:|---:|---|
 | shared-body marker `/*shared body, N candidates*/` | 18,884 / 2,278 | 19,013 / 2,304 | `final_out/**/*.cs` |
 | `/*indirect*/` | 6,262 / 884 | 7,091 / 975 | `final_out/**/*.cs` |
-| literal `unknown` | 15,748 / 1,365 | 16,044 / 1,382 | `final_out/**/*.cs` |
+| literal `unknown` | 15,655 / 1,361 | 16,044 / 1,382 | `final_out/**/*.cs` |
 | raw `mem[N]` | 398 / 127 | ~13,189 / 805 | `final_out/**/*.cs` |
 | `mem_<hex>` load twins | 359 / 95 strict (`mem_addr` params excluded) | 234 / 69 | `final_out/**/*.cs` |
 | `goto` | 8,707 / 903 | 8,705 / 901 | `final_out/**/*.cs` |
