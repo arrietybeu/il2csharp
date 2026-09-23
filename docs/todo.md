@@ -1,4 +1,23 @@
 # il2csharp — TODO (open work and historical triage)
+## Current work: sidecar grounding turn (2026-09-22, unpromoted, no source change)
+
+Traced mi 23762's three defects to their exact producers (semantic-input
+dump + `_field_expr` generic-base trace + addr_of audit) to scope the
+sidecar honestly:
+
+- `selectable1 = dictionary22`: the key type comes from USE-side proof
+  (`_hint_accessor_recv` on the `.navigation` store), never from a
+  proved-struct store -- so a store-side lane writer would never fire
+  here. Needs byte-range slots (documented sidecar), not a writer.
+- Zero closed-genericinst bases reach `_field_expr` in the method, so
+  the inflated-chain swap is a proven no-op here too.
+- `obj17` (Navigation lane): XMM-lane traffic through spills, needs
+  SIMD-lane provenance, not field chains.
+- `obj11 = &dictionary23` + `obj11.Dispose()`: the receiver is a bare
+  temp at lift; `addr_of` tracks memory homes only. Needs use→def.
+- Verdict: all three need deferred machinery (sidecar/SIMD/use→def);
+  no narrow slice exists. No invisible infra shipped.
+
 ## Current work: ?addr extinction round (2026-09-22, unpromoted)
 
 Follows the promoted census (last `?addr`: ReflectionProbeManager).
