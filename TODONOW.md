@@ -427,9 +427,10 @@ Unity.Mathematics.float2; width-4 literal). 80548 stays intact
 (PSRLDQ-popped/integer-tainted values carry no parts -- the guard).
 Fresh: `clamp(x, (float2)(0.0f, 0.0f), (float2)(1.0f, 1.0f))`,
 signature-exact where the golden scalars needed unprovable implicit
-conversions -- golden regened (surgical, SHAs verified). Suite 930/0,
-first fully green run. Open: direct-call materialization, Color,
-general packed tracking.
+conversions -- golden regened (surgical, SHAs verified). Follow-up:
+same gates wired into resolved direct calls via a shared helper
+(67836 smoothstep renders composites, uncovered args stay unknown).
+Suite 933/0. Open: per-arm Color, general packed tracking.
 
 ## Addendum — 2026-09-22, unbound census + rename barrier (unpromoted)
 

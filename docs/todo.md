@@ -21,11 +21,17 @@ CRLF/no-BOM asserts; `tests/` edits LF.
 - Golden REGENED for 67525 only (surgical script, fixture SHAs verified,
   source_sha256 refreshed, CRLF kept, 63 other bodies identical).
   Suite is 930/0 -- first fully green run.
-- Tests: +3 portable (lane readability + decline, lane-texts,
-  integer-carry decline).
-- Gates: compileall pass; portable 781 green; goldens 64/64.
-- Open SIMD remainder: direct-call materialization (same gates),
-  per-arm Color (use→def), general packed tracking (still declined).
+- Follow-up (direct calls, same gates): the tail loop refactored into
+  shared `_materialize_float_lanes`, wired into the resolved-direct
+  path after positional rebuild + trim. mi 67836 smoothstep renders
+  `clamp(unknown, (float2)(0.0f, 0f), (float2)(1.0f, 1.0f))` (+`.x`/`.y`
+  reads); uncovered first arg honestly stays unknown; mixed `0.0f`/`0f`
+  lane spellings kept verbatim (values exact, no normalization pass).
+- Tests: +3 game (`test_game_simd_lanes.py`: tail composite,
+  direct composites, 80548 integer-carry guard).
+- Gates: full suite 933 passed / 0 failed.
+- Open SIMD remainder: per-arm Color (use→def), general packed
+  tracking (still declined).
 
 ## Current work: sidecar grounding turn (2026-09-22, unpromoted, no source change)
 

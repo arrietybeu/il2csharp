@@ -312,12 +312,27 @@ class _ValuesMixin:
                 prepared.append(e.text)
         self._hint_arg_types(prepared, arg_exprs, mi, rty)
         out = self._positional_args(prepared, m2, rty)
-        # float-lane tail args (67525 saturate): a GPR slot holding
-        # an unknown rendering over byte-proven float lanes
-        # materializes the composite at a closed all-float vector
-        # slot. Tails-first staging: direct calls keep today's
-        # spelling; every other shape declines below.
+        return self._materialize_float_lanes(out, arg_exprs, m2, rty)
+
+    def _materialize_float_lanes(self, out, arg_exprs, m2, rty):
+        """Render GPR `?` args with byte-proven float lanes as composites.
+
+        Shared by tails and resolved direct calls (same ri walk
+        `_hint_arg_types`/`_positional_args` use, so receivers and
+        hidden sret buffers keep their skip): a slot holding an unknown
+        rendering over byte-proven float lanes materializes the
+        composite at a closed all-float vector slot (67525 saturate).
+        Width-4 renders the literal, width-8 the house `(float2)(l0,l1)`
+        for Unity.Mathematics.float2 only. Instance/sret/stack/byref/
+        double/open/unresolved/uncovered/part-less/text-mismatched all
+        decline; the 80548 integer carries decline by construction.
+        """
         base = 0 if m2.is_static else 1
+        try:
+            if self.il.returns_sret(rty):
+                base += 1
+        except Exception:
+            pass
         try:
             params = self.meta.method_params(m2)
         except Exception:

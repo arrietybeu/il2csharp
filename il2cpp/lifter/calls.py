@@ -1814,6 +1814,7 @@ class _CallsMixin:
             args = self._positional_args(args, m2, rty)
             if len(args) > want:
                 args = args[:want]
+            args = self._materialize_float_lanes(args, arg_exprs, m2, rty)
             recv_txt = recv.text if recv is not None else ''
             bare_inner = recv_txt[1:] if recv_txt.startswith('&') else recv_txt
             byref = recv_txt.startswith('&') and ('.' in recv_txt
