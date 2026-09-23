@@ -1,5 +1,26 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: promotion r4d (2026-09-23, PROMOTED)
+
+User-authorized (`promote final out`). Strict rebuild `r4d_out1` from
+clean HEAD `1920c71` (the uncommitted scalar parameter-copy slice was
+stashed pre-build and is NOT in this tree): 11,183 files / 114,458
+bodies / 0 failed / 0 fallbacks / 0 type-emission failures; brace 0
+unbalanced; parse 0/0/0; file set identical to r4c (11,276 paths, 783
+files differ). Triage: branch-chain + recursive phi decl hoists across
+the corpus; paired-Jcc float-condition recovery (`unknown != unknown`
+to real lane comparisons, e.g. float3x3) unblocking existing ternary
+folds (net −2,479 unknown, −52 unknown-files); one native-faithful
+dead-diamond resurrection class (mi 104158 `get_remainingDistance`,
+bisected to 2481c16, verified against disassembly — native computes
+pos.z then clobbers it); renumber cascades; shared +5, indirect/memN/
+goto/`?addr` flat, no regressions. Promoted by mirror copy
+(aggregate `b0f798b4…2280`); evidence in
+`validation_reports/promotion_r4d.json`. Post-build suite: 937 passed
+/ 0 failed (fully green). Scratch tree + worktrees removed; tree
+committed and pushed. WIP scalar-copy slice restored to the working
+tree after promotion (still unlanded, see `docs/handoff-2026-09-23.md`).
+
 ## Current work: complete branch-chain declarations (2026-09-23, fixed in source)
 
 `AudioVolumeSliders.SetMusicVolumeInternal` and
