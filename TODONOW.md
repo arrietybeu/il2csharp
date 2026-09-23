@@ -434,6 +434,22 @@ same gates wired into resolved direct calls via a shared helper
 (67836 smoothstep renders composites, uncovered args stay unknown).
 Suite 933/0. Open: per-arm Color, general packed tracking.
 
+## Status — end of 2026-09-22 session (paused, tree clean)
+
+Suite: **932 passed / 0 failed** (fully green; 67525 regened to the
+signature-exact composite). Last source change: direct-call
+float-lane materialization via shared helper (67836 renders
+composites, uncovered args stay unknown). Reverted same day:
+?-text tightening (rescued store miscompiled -- elision was honest,
+now pinned by a game test).
+`final_out/` holds the r4a tree (predates SIMD + direct-call);
+next rebuild will carry them plus the ?addr-tightening revert
+(net: SIMD/direct improvements only).
+Open, hardest-first: field-provenance sidecar (designs + two
+disproofs on file), general packed SIMD (80548-bounded), per-arm
+Color (needs use→def), runtime-generated vtables (decline forever).
+No blockers, no red tests, no uncommitted work.
+
 ## Addendum — 2026-09-22, unbound census + rename barrier (unpromoted)
 
 Work-order §4 (classify before patching), done as a read-only text
