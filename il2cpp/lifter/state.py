@@ -99,6 +99,548 @@ class _StateMixin:
                 returned = True
         return spilled and rooted and named and loaded and returned
 
+    # ---- unregistered pure-FP32-unary leaves ---------------------------
+    # Ground truth: 0x1804cdb00, the CRT log10f behind AudioVolumeSliders'
+    # `sub_1804cdb00(volume)` (mi 23548/23549). The lift sprayed four stale
+    # GPR arguments, bound an `object` result in RAX, and dropped the XMM0
+    # float the following `mulss` consumes (`real2 = 0f * 20.0f`). The proof
+    # below recovers the true shape -- one scalar float in XMM0, scalar
+    # float out XMM0, no GPR/stack arguments, no caller-visible effects --
+    # while the name stays the honest `sub_X`: the managed identity (e.g.
+    # Mathf.Log10, whose registered target differs) is never inferred.
+    _FP32_GPR_ARGS = ('RCX', 'RDX', 'R8', 'R9')
+    _FP32_NONVOL = ('RBX', 'RBP', 'RDI', 'RSI', 'R12', 'R13', 'R14', 'R15')
+
+    def _fp32_table(self):
+        """Operand-access classes for the leaf proof (built once, iced-only).
+
+        Each entry maps a mnemonic to (kind, forms): kind `w1` writes op0
+        only, `rw1` reads and writes op0, `rall` reads every operand,
+        `vex3` is a 3-operand VEX write of op0, `ctrl` carries no register
+        value. Forms use representative immediates; the matcher
+        canonicalizes every immediate kind first, since width never changes
+        an operand's read/write role. Anything absent declines -- the table
+        is an allowlist, so an unknown instruction can only block the
+        proof, never weaken it.
+        """
+        t = getattr(self, '_fp32_access', None)
+        if t is not None:
+            return t
+        t = ({}, {})
+        if HAVE_ICED:
+            M, O = Mnemonic, OpKind
+            R, MM = O.REGISTER, O.MEMORY
+            I8, I32 = O.IMMEDIATE8, O.IMMEDIATE32
+            RR, RM, MR = (R, R), (R, MM), (MM, R)
+            RI8, RI32, MI8, MI32 = (R, I8), (R, I32), (MM, I8), (MM, I32)
+            V3 = ((R, R, R), (R, R, MM), (R, R, I8))
+            tab = {
+                M.MOV: ('w1', (RR, RM, MR, RI8, RI32, MI8, MI32)),
+                M.MOVSX: ('w1', (RR, RM)),
+                M.MOVZX: ('w1', (RR, RM)),
+                M.LEA: ('w1', ((R, MM),)),
+                M.MOVSS: ('w1', (RR, RM, MR)),
+                M.MOVAPS: ('w1', (RR, RM, MR)),
+                M.MOVAPD: ('w1', (RR, RM, MR)),
+                M.MOVDQA: ('w1', (RR, RM, MR)),
+                M.MOVDQU: ('w1', (RR, RM, MR)),
+                M.MOVD: ('w1', (RR,)),
+                M.MOVQ: ('w1', (RR, RM, MR)),
+                M.VMOVSS: ('w1', ((R, MM),)),
+                M.VMOVAPS: ('w1', (RR,)),
+                M.VMOVAPD: ('w1', ((R, MM),)),
+                M.VMOVD: ('w1', (RR,)),
+                M.VMOVQ: ('w1', (RR,)),
+                M.CVTDQ2PS: ('w1', (RR,)),
+                M.VCVTDQ2PS: ('w1', (RR,)),
+                M.CVTSI2SS: ('w1', (RR, RM)),
+                M.ADD: ('rw1', (RR, RM, RI8, RI32, MI8, MI32)),
+                M.SUB: ('rw1', (RR, RM, RI8, RI32, MI8, MI32)),
+                M.AND: ('rw1', (RR, RM, MI8, MI32)),
+                M.OR: ('rw1', (RR, RM, MI8, MI32)),
+                M.XOR: ('rw1', (RR, RM, MI8, MI32)),
+                M.SHL: ('rw1', ((R, I8),)),
+                M.SHR: ('rw1', ((R, I8),)),
+                M.SAR: ('rw1', ((R, I8),)),
+                M.NOT: ('rw1', ((R,),)),
+                M.NEG: ('rw1', ((R,),)),
+                M.INC: ('rw1', ((R,),)),
+                M.DEC: ('rw1', ((R,),)),
+                M.IMUL: ('rw1', (RR,)),
+                M.ADDSS: ('rw1', (RR, RM)),
+                M.SUBSS: ('rw1', (RR, RM)),
+                M.MULSS: ('rw1', (RR, RM)),
+                M.DIVSS: ('rw1', (RR, RM)),
+                M.SQRTSS: ('rw1', (RR, RM)),
+                M.MAXSS: ('rw1', (RR, RM)),
+                M.MINSS: ('rw1', (RR, RM)),
+                M.ANDPS: ('rw1', (RR, RM)),
+                M.ORPS: ('rw1', (RR, RM)),
+                M.XORPS: ('rw1', (RR, RM)),
+                M.PAND: ('rw1', (RR, RM)),
+                M.POR: ('rw1', (RR, RM)),
+                M.PXOR: ('rw1', (RR, RM)),
+                M.PSUBD: ('rw1', (RR, RM)),
+                M.PADDD: ('rw1', (RR, RM)),
+                M.PSRLD: ('rw1', ((R, I8),)),
+                M.CMP: ('rall', (RR, RM, MR, RI8, RI32, MI8, MI32)),
+                M.TEST: ('rall', (RR, RM)),
+                M.COMISS: ('rall', (RR, RM)),
+                M.UCOMISS: ('rall', (RR, RM)),
+                M.VCOMISS: ('rall', (RR, RM)),
+                M.VADDSS: ('vex3', None),
+                M.VSUBSS: ('vex3', None),
+                M.VMULSS: ('vex3', None),
+                M.VDIVSS: ('vex3', None),
+                M.VFMADD213SS: ('vex3', None),
+                M.VFMADD231SS: ('vex3', None),
+                M.VFMSUB213SS: ('vex3', None),
+                M.VFMSUB231SS: ('vex3', None),
+                M.VPAND: ('vex3', None),
+                M.VPOR: ('vex3', None),
+                M.VPXOR: ('vex3', None),
+                M.VPSUBD: ('vex3', None),
+                M.VPADDD: ('vex3', None),
+                M.VPSLLD: ('vex3', None),
+                M.VPSRLD: ('vex3', None),
+                M.VPSRAD: ('vex3', None),
+                M.VANDPS: ('vex3', None),
+                M.VORPS: ('vex3', None),
+                M.VXORPS: ('vex3', None),
+                M.NOP: ('ctrl', ((MM,), (R,), ())),
+                M.JMP: ('ctrl', ((O.NEAR_BRANCH64,),)),
+                M.CALL: ('ctrl', ((O.NEAR_BRANCH64,),)),
+                M.RET: ('ctrl', ((),)),
+            }
+            for _j in ('JA', 'JAE', 'JB', 'JBE', 'JE', 'JNE', 'JG', 'JGE',
+                       'JL', 'JLE', 'JP', 'JO', 'JNO', 'JS', 'JNS', 'JNP',
+                       'JCXZ', 'JECXZ', 'JRCXZ'):
+                if hasattr(M, _j):
+                    tab[getattr(M, _j)] = ('ctrl', ((O.NEAR_BRANCH64,),))
+            names = {}
+            for _k, _v in vars(O).items():
+                try:
+                    names[int(_v)] = _k
+                except Exception:
+                    pass
+            t = (tab, V3, names)
+        self._fp32_access = t
+        return t
+
+    @staticmethod
+    def _fp32_canon(kind, names):
+        try:
+            n = names.get(int(kind), '')
+        except Exception:
+            return kind
+        return 'IMM' if 'IMMEDIATE' in n else kind
+
+    def _fp32_forms_match(self, forms, fk, names):
+        ck = tuple(self._fp32_canon(k, names) for k in fk)
+        for f in forms:
+            if tuple(self._fp32_canon(k, names) for k in f) == ck:
+                return True
+        return False
+
+    @staticmethod
+    def _fp32_sdisp(ins):
+        # memory_displacement arrives sign-extended to 64 bits here.
+        try:
+            d = int(ins.memory_displacement)
+        except Exception:
+            return None
+        if d >= 0x8000000000000000:
+            d -= 0x10000000000000000
+        return d
+
+    def _fp32_rsp_imm(self, ins):
+        ck = getattr(ins, 'op1_kind', None)
+        O = OpKind
+        try:
+            if ck == O.IMMEDIATE8:
+                return int(ins.immediate8)
+            if ck == O.IMMEDIATE32:
+                return int(ins.immediate32)
+            if ck in (O.IMMEDIATE8TO32, O.IMMEDIATE8TO64,
+                      O.IMMEDIATE32TO64):
+                return int(ins.immediate32)
+        except Exception:
+            return None
+        return None
+
+    def _is_fp32_unary_leaf(self, target):
+        """True when an unregistered target proves the FP32-unary shape.
+
+        The callee must read exactly XMM0 (one scalar float argument),
+        never a GPR/stack argument, with no caller-visible effects (the
+        `_fp32_inputs` proof); the caller side -- a scalar float consume
+        of XMM0 on the next instruction -- is the call site's own check
+        in `_call`. Results are memoized per lifter; the address is never
+        hardcoded. Anything unprovable keeps today's honest spelling.
+        """
+        try:
+            cache = self._fp32_unary_cache
+        except AttributeError:
+            cache = self._fp32_unary_cache = {}
+        if target in cache:
+            return cache[target]
+        res = False
+        try:
+            inputs = self._fp32_inputs(target, 0)
+            res = inputs is not None and 'XMM0' in inputs \
+                and not (set(inputs) & set(self._FP32_GPR_ARGS)) \
+                and 'STACKARG' not in inputs
+        except Exception:
+            res = False
+        cache[target] = res
+        return res
+
+    def _fp32_inputs(self, target, depth):
+        """Input registers of an unregistered native function, or None.
+
+        Depths 0 (the direct callee) and 1 (its child, for argument
+        liveness at the call) run the full proof: CFG by recursive
+        descent from the entry VA (never a linear sweep -- a pdata range
+        can pack several thunks behind one extent), an operand-access
+        allowlist per instruction, an RSP-frame bound on memory, and a
+        MUST (must-be-written) fixpoint whose complement of each block's
+        reads-before-local-writes is exactly the input set. Depth 2 and
+        below require only the unregistered-native identity (no managed
+        callbacks one level down); deeper CRT substrate (errno/
+        invalid-parameter paths shuttle caller context below the C#
+        abstraction) is invisible to the C# dataflow and byte-identical
+        under either rendering -- a documented residual, covered
+        empirically by reviewing every affected call site.
+        """
+        if not HAVE_ICED or not target or not self.bin.is_exec_va(target):
+            return None
+        if self.il.addr_candidates.get(target) \
+                or target in self.il.addr_to_method \
+                or target in self.bin.exports:
+            return None
+        if depth >= 2:
+            return frozenset()
+        tab, V3, names = self._fp32_table()
+        if not tab:
+            return None
+        M, O = Mnemonic, OpKind
+        start, finish = self.il.function_extent(target)
+        if start != target or finish is None \
+                or not 0 < finish - start <= 0x1000:
+            return None
+        code = self.bin.read(start, finish - start)
+        if not code:
+            return None
+        try:
+            dec = Decoder(64, code, DecoderOptions.NONE)
+            dec.ip = start
+            raw = list(dec)
+        except Exception:
+            return None
+        by_ip = {ins.ip: ins for ins in raw}
+        blocks = {}
+        work = [start]
+        tailkids = []
+        branches = set()
+        _INT = getattr(M, 'INT', None)
+        _UD2 = getattr(M, 'UD2', None)
+        _HLT = getattr(M, 'HLT', None)
+        while work:
+            ip = work.pop()
+            if ip in blocks:
+                continue
+            if ip < start or ip >= finish or ip not in by_ip:
+                return None
+            cur = []
+            while True:
+                ins = by_ip.get(ip)
+                if ins is None:
+                    return None
+                cur.append(ins)
+                m = ins.mnemonic
+                fc = ins.flow_control
+                if m == M.RET or (m == _INT and getattr(ins, 'len', 0) == 1) \
+                        or m == _UD2 or m == _HLT:
+                    succ = []
+                    break
+                if fc == FlowControl.INDIRECT_BRANCH:
+                    return None
+                if m == M.CALL:
+                    if getattr(ins, 'op0_kind', None) != O.NEAR_BRANCH64:
+                        return None
+                    try:
+                        ct = ins.near_branch_target
+                    except Exception:
+                        return None
+                    nx = ins.next_ip
+                    if not (start <= nx < finish and nx in by_ip):
+                        return None
+                    succ = [nx]
+                    tailkids.append((cur[0].ip, ip, ct, True))
+                    break
+                if fc == FlowControl.UNCONDITIONAL_BRANCH:
+                    try:
+                        t = ins.near_branch_target
+                    except Exception:
+                        return None
+                    if start <= t < finish:
+                        if t not in by_ip:
+                            return None
+                        succ = [t]
+                        branches.add(t)
+                    else:
+                        succ = []
+                        tailkids.append((cur[0].ip, ip, t, False))
+                    break
+                if fc == FlowControl.CONDITIONAL_BRANCH:
+                    try:
+                        t = ins.near_branch_target
+                    except Exception:
+                        return None
+                    nx = ins.next_ip
+                    if not (start <= t < finish and start <= nx < finish):
+                        return None
+                    succ = [nx, t]
+                    branches.add(t)
+                    break
+                nx = ins.next_ip
+                if nx in blocks:
+                    succ = [nx]
+                    break
+                if not (start <= nx < finish) or nx not in by_ip:
+                    return None
+                ip = nx
+                continue
+            blocks[cur[0].ip] = (cur, succ)
+            for s2 in succ:
+                if s2 not in blocks:
+                    work.append(s2)
+        if len(blocks) > 256 or sum(len(c) for c, _ in blocks.values()) > 2048:
+            return None
+        preds = {k: set() for k in blocks}
+        for k, (cur, succ) in blocks.items():
+            for s2 in succ:
+                if s2 in preds:
+                    preds[s2].add(k)
+        for k in blocks:
+            if k != start and not preds[k]:
+                return None
+        for _blk, _ip, _ct, _is_call in tailkids:
+            if not self.bin.is_exec_va(_ct) \
+                    or self.il.addr_candidates.get(_ct) \
+                    or _ct in self.il.addr_to_method \
+                    or _ct in self.bin.exports:
+                return None
+            if self._fp32_inputs(_ct, depth + 1) is None:
+                return None
+        tracked = frozenset(self._FP32_GPR_ARGS + ('XMM0',))
+        ecur = blocks[start][0]
+        entry_end = ecur[-1].next_ip
+        for t in branches:
+            if start < t < entry_end:
+                return None
+        frame = None
+        alias = None
+        try:
+            for _e in ecur:
+                if _e.mnemonic == M.MOV and _e.op_count == 2 \
+                        and getattr(_e, 'op0_kind') == O.REGISTER \
+                        and getattr(_e, 'op1_kind') == O.REGISTER \
+                        and reg_name(_e.op1_register) == 'RSP':
+                    _d = reg_name(_e.op0_register)
+                    if _d in ('RAX', 'RCX', 'RDX', 'R8', 'R9', 'R10', 'R11'):
+                        alias = _d
+                _fc = _e.flow_control
+                if _e.mnemonic in (M.RET, M.CALL) \
+                        or _fc in (FlowControl.UNCONDITIONAL_BRANCH,
+                                   FlowControl.CONDITIONAL_BRANCH,
+                                   FlowControl.INDIRECT_BRANCH):
+                    break
+        except Exception:
+            alias = None
+        if alias is not None:
+            _aw = 0
+            for _k, (_cc, _ss) in blocks.items():
+                for _i2 in _cc:
+                    _kd = tab.get(_i2.mnemonic)
+                    if _kd is None:
+                        continue
+                    _kk2 = _kd[0]
+                    for _j in range(_i2.op_count):
+                        if getattr(_i2, 'op%d_kind' % _j) != O.REGISTER:
+                            continue
+                        if reg_name(getattr(_i2, 'op%d_register' % _j)) != alias:
+                            continue
+                        if (_kk2 in ('w1', 'vex3') and _j == 0) \
+                                or (_kk2 == 'rw1' and _j == 0):
+                            _aw += 1
+            if _aw != 1:
+                alias = None
+        gen = {}
+        kill = {}
+        sub_seen = False
+        for k, (cur, succ) in blocks.items():
+            g, kk = set(), set()
+            for ins in cur:
+                m = ins.mnemonic
+                entry = tab.get(m)
+                if entry is None:
+                    return None
+                kind, forms = entry
+                if forms is not None:
+                    fk = tuple(getattr(ins, 'op%d_kind' % i)
+                               for i in range(ins.op_count))
+                    if not self._fp32_forms_match(forms, fk, names):
+                        return None
+                else:
+                    fk = tuple(getattr(ins, 'op%d_kind' % i)
+                               for i in range(ins.op_count))
+                    if tuple(self._fp32_canon(x, names) for x in fk) not in tuple(
+                            tuple(self._fp32_canon(x, names) for x in f) for f in V3):
+                        return None
+                if k == start and m == M.SUB and ins.op_count == 2 \
+                        and getattr(ins, 'op0_kind') == O.REGISTER \
+                        and reg_name(ins.op0_register) == 'RSP':
+                    if self._fp32_rsp_imm(ins) is not None:
+                        frame = self._fp32_rsp_imm(ins)
+                        sub_seen = True
+                zero_idiom = m in (M.XOR, M.SUB, M.XORPS, M.PXOR) \
+                    and ins.op_count == 2 \
+                    and getattr(ins, 'op0_kind') == O.REGISTER \
+                    and getattr(ins, 'op1_kind') == O.REGISTER \
+                    and ins.op0_register == ins.op1_register
+                nops = ins.op_count
+                for i in range(nops):
+                    r = None
+                    if getattr(ins, 'op%d_kind' % i) == O.REGISTER:
+                        r = reg_name(getattr(ins, 'op%d_register' % i))
+                    if r is None:
+                        continue
+                    if (kind in ('w1', 'vex3') and i == 0) \
+                            or (zero_idiom and i == 0):
+                        is_r, is_w = False, True
+                    elif kind == 'rw1' and i == 0 and not zero_idiom:
+                        is_r, is_w = True, True
+                    else:
+                        is_r, is_w = True, False
+                    if is_r and r in tracked and r not in kk:
+                        g.add(r)
+                    if is_w and r in tracked:
+                        kk.add(r)
+                    if is_w and r in self._FP32_NONVOL:
+                        return None
+                    if is_w and r == 'RSP':
+                        if not self._fp32_rsp_ok(m, k == start, succ == [],
+                                                 ins, frame):
+                            return None
+                for i in range(nops):
+                    if getattr(ins, 'op%d_kind' % i) != O.MEMORY:
+                        continue
+                    try:
+                        base = reg_name(ins.memory_base)
+                    except Exception:
+                        base = '?'
+                    try:
+                        idx = reg_name(ins.memory_index)
+                    except Exception:
+                        idx = '?'
+                    if base not in ('?', 'RIP', 'RSP', alias):
+                        if base in tracked and base not in kk:
+                            g.add(base)
+                    if idx not in ('?', 'RSP'):
+                        if idx in tracked and idx not in kk:
+                            g.add(idx)
+                    disp = self._fp32_sdisp(ins)
+                    if disp is None:
+                        return None
+                    writes_mem = kind in ('w1', 'rw1') and i == 0
+                    pre_sub = k == start and not sub_seen
+                    if writes_mem:
+                        if pre_sub:
+                            return None
+                        if base == 'RSP' and idx in ('?', 'RSP'):
+                            if frame is None or not 0 <= disp < frame:
+                                return None
+                        elif alias is not None and base == alias \
+                                and idx in ('?', 'RSP'):
+                            if frame is None or not -frame <= disp < 0:
+                                return None
+                        else:
+                            return None
+                    else:
+                        if base == 'RSP' and idx in ('?', 'RSP'):
+                            if pre_sub or frame is None:
+                                g.add('STACKARG')
+                            elif disp >= frame + 8:
+                                g.add('STACKARG')
+                        elif base == 'RSP':
+                            return None
+                        elif alias is not None and base == alias:
+                            if idx not in ('?', 'RSP') or frame is None \
+                                    or not -frame <= disp < 0:
+                                return None
+                # VPXOR same-reg form check needs the vex path above only
+            gen[k] = g
+            kill[k] = kk
+        if frame is None:
+            return None
+        must_in = {k: (set() if k == start else None) for k in blocks}
+        full = set(tracked) | {'STACKARG'}
+        for k in blocks:
+            if k != start:
+                must_in[k] = set(full)
+        for _ in range(500):
+            changed = False
+            for k, (cur, succ) in blocks.items():
+                if k == start:
+                    continue
+                new = set(full)
+                for p in preds[k]:
+                    new &= (must_in[p] | kill[p])
+                if new != must_in[k]:
+                    must_in[k] = new
+                    changed = True
+            if not changed:
+                break
+        else:
+            return None
+        inputs = set()
+        for k in blocks:
+            inputs |= (gen[k] - must_in[k])
+        for _blk, _ip, _ct, _is_call in tailkids:
+            sub = self._fp32_inputs(_ct, depth + 1)
+            if sub is None:
+                return None
+            if depth + 1 > 1:
+                continue
+            live = set(must_in[_blk])
+            cur = blocks[_blk][0]
+            for ins2 in cur:
+                if ins2.ip == _ip:
+                    break
+                kind2 = tab[ins2.mnemonic][0]
+                for i in range(ins2.op_count):
+                    r = None
+                    if getattr(ins2, 'op%d_kind' % i) == O.REGISTER:
+                        r = reg_name(getattr(ins2, 'op%d_register' % i))
+                    if r is None:
+                        continue
+                    if (kind2 in ('w1', 'vex3') and i == 0) \
+                            or (kind2 == 'rw1' and i == 0):
+                        live.add(r)
+            inputs |= (set(sub) - live)
+        return frozenset(inputs)
+
+    def _fp32_rsp_ok(self, m, is_entry, is_tail, ins, frame):
+        # The entry frame sub, or a bounded epilogue add in a block that
+        # returns (dynamic stack shapes decline).
+        if m == Mnemonic.SUB and is_entry and self._fp32_rsp_imm(ins) is not None:
+            return True
+        if m == Mnemonic.ADD and is_tail and frame is not None:
+            v = self._fp32_rsp_imm(ins)
+            return v is not None and 0 < v <= frame
+        return False
+
     def _is_fence_body(self, target):
         """Recognize the unregistered full-fence helper by proof. -- fix 107
 

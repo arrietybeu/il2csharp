@@ -1,5 +1,36 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: unregistered FP32-unary leaves (2026-09-24, LANDED)
+
+`sub_1804cdb00(volume)` (CRT log10f, 0x1804cdb00) is proved, never
+named: a MUST-fixpoint input proof over the callee (`_is_fp32_unary_leaf`
+in `il2cpp/lifter/state.py`, next to the sqrt/fence recognizers) shows
+exactly XMM0 read, no GPR/stack arguments, and no caller-visible
+effects (pdata extent, recursive-descent CFG, operand-access allowlist,
+RSP-frame/alias bounds, must-be-written fixpoint; depth-1 input
+propagation; unregistered-identity floor below with the CRT-substrate
+residual documented). The call site additionally requires a scalar
+XMM0 consume on the next instruction (`_fp32_scalar_next`) and a known
+XMM0 value. The render keeps the honest `sub_X` name with one float
+argument and a float XMM0 result; fix-104 skips its redundant `(float)`
+cast for proved leaves only.
+
+Evidence: 23548/23549 render `float real2 = sub_1804cdb00(volume);`
+with `real3 = real2 * 20.0f;` (was 4-arg spray + `object` + dropped
+`0f * 20.0f`), dead arg scaffolding DCE'd; KeybindsManager's three
+volume methods (SetSFX/Music/PlayerVoiceVolume) gain the identical
+improvement. Corpus sweep: exactly 1 of 2,676 unregistered targets
+passes (21 sites); PlayerManager/StoreManager/Slider/stub sites decline
+(principled: no immediate scalar consume -- conditional use after flag
+tests needs branch-aware tracking, a follow-up). Strict scratch builds
+(Assembly-CSharp 490/6,622 + UIElementsModule 802/8,997, all 0 failed /
+0 fallbacks), brace 0, parse 0/0/0 on both. Against a stashed baseline
+build, exactly 2 files differ (both improvements). Tests: +7 portable
+(synthetic callee bytes, decline shapes, consumer gate, cast skip) +2
+game; focused 11 passed; full suite 947 passed / 0 failed (fully
+green). No goldens changed; `final_out/` holds r4d. Package CRLF/no-BOM,
+tests LF.
+
 ## Current work: scalar parameter-copy inference (2026-09-23, LANDED)
 
 A single prologue copy of a scalar metadata parameter now carries its

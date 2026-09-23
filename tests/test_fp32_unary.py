@@ -1,0 +1,107 @@
+"""Unregistered pure-FP32-unary leaf proof: gates and declines.
+
+Portable coverage for the il2cpp/lifter/state.py recognizer, the
+calls.py consumer gate, and the highlevel.py cast skip. The positive
+case uses 17 hand-encoded x64 bytes (stable ISA encodings, no fixture):
+sub rsp,8 / movss xmm1,xmm0 / addss xmm0,xmm1 / add rsp,8 / ret.
+"""
+from types import SimpleNamespace
+
+from iced_x86 import Mnemonic
+
+from il2cpp.dec.highlevel import _HighLevelMixin
+from il2cpp.lifter.calls import _CallsMixin
+from il2cpp.lifter.state import _StateMixin
+
+
+BASE = 0x1000
+# sub rsp,8; movss xmm1,xmm0; addss xmm0,xmm1; add rsp,8; ret
+CALLEE_OK = bytes([
+    0x48, 0x83, 0xEC, 0x08,
+    0xF3, 0x0F, 0x10, 0xC8,
+    0xF3, 0x0F, 0x58, 0xC1,
+    0x48, 0x83, 0xC4, 0x08,
+    0xC3,
+])
+# mov eax,ecx (reads a GPR argument register)
+GPR_READ = bytes([0x8B, 0xC1])
+# sub rsp,8; xor eax,eax (zero idiom, no XMM0 traffic); add rsp,8; ret
+NO_XMM = bytes([0x48, 0x83, 0xEC, 0x08, 0x31, 0xC0,
+                0x48, 0x83, 0xC4, 0x08, 0xC3])
+# mulss xmm0,dword ptr [rip+0]
+MULSS_NEXT = bytes([0xF3, 0x0F, 0x59, 0x05, 0x00, 0x00, 0x00, 0x00])
+
+
+class _FakeState(_StateMixin):
+    pass
+
+
+def _fake(code, registered=False):
+    il = SimpleNamespace(
+        addr_candidates={BASE: [('method', 0)]} if registered else {},
+        addr_to_method={},
+        function_extent=lambda va: (BASE, BASE + len(code)),
+        bin=SimpleNamespace(
+            is_exec_va=lambda va: va == BASE,
+            read=lambda va, n: code if va == BASE else None,
+            exports={},
+        ),
+    )
+    self = _FakeState.__new__(_FakeState)
+    self.il = il
+    self.bin = il.bin
+    return self
+
+
+def test_table_lists_core_shapes():
+    self = _fake(CALLEE_OK)
+    tab, _v3, _names = self._fp32_table()
+    assert tab[Mnemonic.MOV][0] == 'w1'
+    assert tab[Mnemonic.ADDSS][0] == 'rw1'
+    assert tab[Mnemonic.VMULSS][0] == 'vex3'
+    assert tab[Mnemonic.CMP][0] == 'rall'
+    assert Mnemonic.PUSH not in tab
+
+
+def test_fires_on_minimal_unary():
+    self = _fake(CALLEE_OK)
+    assert self._fp32_inputs(BASE, 0) == frozenset({'XMM0'})
+    assert self._is_fp32_unary_leaf(BASE) is True
+
+
+def test_declines_registered_target():
+    self = _fake(CALLEE_OK, registered=True)
+    assert self._fp32_inputs(BASE, 0) is None
+    assert self._is_fp32_unary_leaf(BASE) is False
+
+
+def test_declines_gpr_input():
+    self = _fake(GPR_READ + CALLEE_OK)
+    inputs = self._fp32_inputs(BASE, 0)
+    assert inputs is not None and 'RCX' in inputs
+    assert self._is_fp32_unary_leaf(BASE) is False
+
+
+def test_declines_missing_xmm0():
+    self = _fake(NO_XMM)
+    assert self._fp32_inputs(BASE, 0) == frozenset()
+    assert self._is_fp32_unary_leaf(BASE) is False
+
+
+def test_scalar_next_gate():
+    bin = SimpleNamespace(read=lambda va, n: MULSS_NEXT)
+    ins = SimpleNamespace(next_ip=0x2000)
+    assert _CallsMixin._fp32_scalar_next(
+        SimpleNamespace(bin=bin), ins) is True
+    bin2 = SimpleNamespace(read=lambda va, n: b'\xC3')
+    assert _CallsMixin._fp32_scalar_next(
+        SimpleNamespace(bin=bin2), ins) is False
+    bin3 = SimpleNamespace(read=lambda va, n: None)
+    assert _CallsMixin._fp32_scalar_next(
+        SimpleNamespace(bin=bin3), ins) is False
+
+
+def test_stub_cast_skip_declines_without_machinery():
+    dec = SimpleNamespace(L=None)
+    assert _HighLevelMixin._stub_call_is_fp32(dec, '1804cdb00') is False
+    assert _HighLevelMixin._stub_call_is_fp32(dec, 'zzzz') is False

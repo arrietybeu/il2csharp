@@ -1,6 +1,6 @@
 from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.common import csharp_type_name
-from il2cpp.expr import Expr, _BARE_TOKEN_RX, _R8_TY, _REFARG_RX, _USE_BIND_MIN, _byref_arg_render, _is_unresolved_gp, _recv_fold, _recv_shaped
+from il2cpp.expr import Expr, _BARE_TOKEN_RX, _R4_TY, _R8_TY, _REFARG_RX, _USE_BIND_MIN, _byref_arg_render, _is_unresolved_gp, _recv_fold, _recv_shaped
 from il2cpp.runtime.meta import IMM_OPS
 from il2cpp.text import _int_lit, _deref_spans_all, _norm_twin, _paren_spans_all, _term_up, disp_add, reg_name, rty_has_value, strip_outer
 from il2cpp.x64 import ARG_REGS, ARG_XMM, KLASS_VTABLE, VOLATILE
@@ -78,6 +78,42 @@ class _CallsMixin:
         res = cur if cur != va else None
         cache[va] = res
         return res
+
+    def _fp32_scalar_next(self, ins):
+        """True when the instruction after `ins` consumes XMM0 as a scalar.
+
+        A `mulss/addss/subss/divss xmm0, ...` (or a `movss` spill/copy
+        from XMM0) proves the caller expects the call's scalar float
+        result in XMM0 -- the consumer-side half of the FP32-unary proof
+        (the callee-side half is `_is_fp32_unary_leaf`). Anything else --
+        integer use, no use, an unknown next instruction -- declines, and
+        the call keeps today's honest spelling.
+        """
+        if not HAVE_ICED:
+            return False
+        try:
+            nx_ip = ins.next_ip
+            code = self.bin.read(nx_ip, 16)
+            if not code:
+                return False
+            dec = Decoder(64, code, DecoderOptions.NONE)
+            dec.ip = nx_ip
+            nx = next(iter(dec))
+        except Exception:
+            return False
+        try:
+            if nx.mnemonic in (Mnemonic.MULSS, Mnemonic.ADDSS,
+                               Mnemonic.SUBSS, Mnemonic.DIVSS) \
+                    and nx.op0_kind == OpKind.REGISTER \
+                    and reg_name(nx.op0_register) == 'XMM0':
+                return True
+            if nx.mnemonic == Mnemonic.MOVSS and nx.op_count == 2 \
+                    and nx.op1_kind == OpKind.REGISTER \
+                    and reg_name(nx.op1_register) == 'XMM0':
+                return True
+        except Exception:
+            return False
+        return False
 
     def _dead_shared_forwarder(self, target, ins):
         """True when a pending bare-statement must be declined: the caller
@@ -1273,6 +1309,35 @@ class _CallsMixin:
             if self.asm_comments and asm:
                 self.emit(ins.ip, '', asm)
             return
+
+        # Unregistered pure-FP32-unary leaf (ground truth 0x1804cdb00,
+        # proved per callee, never by address): the callee reads exactly
+        # XMM0 and no GPR/stack argument with no caller-visible effects,
+        # and the next instruction consumes a scalar float from XMM0 (see
+        # above). Render that shape -- one float argument, a float XMM0
+        # result -- instead of the stale-GPR spray with a fabricated
+        # `object` RAX result that drops the value (`0f * 20.0f`). The
+        # name stays `sub_X`; the managed identity is never inferred.
+        if target is not None and re.fullmatch(r'sub_[0-9a-f]+', name) is not None \
+                and self._is_fp32_unary_leaf(target):
+            value = self.reg('XMM0')
+            if value is not None and not value._unk and value.text \
+                    and value.text.strip() \
+                    and value.text.strip() not in ('?', '_') \
+                    and self._fp32_scalar_next(ins):
+                self._hint_tok(value, _R4_TY)
+                call = '%s(%s)' % (name, value.text)
+                for r in VOLATILE:
+                    self.regs.pop(r, None)
+                for i in range(1, 6):
+                    self.regs.pop('XMM%d' % i, None)
+                self._fresh_unknowns()
+                result = Expr(call, _R4_TY, 'float')
+                self.regs['XMM0'] = result
+                self._bind(result)
+                if self.asm_comments and asm:
+                    self.emit(ins.ip, '', asm)
+                return
 
         # build arg list
         args = []
