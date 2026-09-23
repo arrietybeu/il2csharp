@@ -89,9 +89,9 @@ The fourth scalar parameter-copy change described here is now landed
 failed, strict `Assembly-CSharp` scratch build plus brace/parse gates
 passed, committed and pushed. The `TODONOW.md` working-tree addenda
 were preserved as committed. No goldens were changed; `final_out/` +
-`validation_reports/` hold the r4d promotion above. The provenance
-lead in [handoff-2026-09-23.md](handoff-2026-09-23.md) still stands
-for the unregistered `sub_1804cdb00` audio result.
+`validation_reports/` hold the r4d promotion above. The `sub_1804cdb00`
+provenance lead from [handoff-2026-09-23.md](handoff-2026-09-23.md) is
+now closed by the top section (FP32-unary leaves, LANDED).
 
 ## Current work: complete branch-chain declarations (2026-09-23, fixed in source)
 
