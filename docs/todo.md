@@ -1,5 +1,35 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: scalar parameter-copy inference (2026-09-23, LANDED)
+
+A single prologue copy of a scalar metadata parameter now carries its
+exact declared type (`il2cpp/dec/highlevel.py`, in the hint seeding
+ahead of `_rename_locals`). This recovers stack homes like
+`s_10 = volume` (float) as `float real1 = volume` without inferring
+from an unrelated later use. A second write or an address /
+`ref` / `out` / `in` escape declines; existing concrete hints win.
+
+Evidence: both AudioVolumeSliders methods (23548/23549) render
+`float real1 = volume` with `real1.ToString("0.0")` while keeping the
+paired-Jcc and branch-chain recoveries; the StreamBuffer 8-arg
+overload (113044) stays fully bound with renumbered int temps (its
+game assertion now pins the parameter at the store, which is the
+regression invariant). Tests: +1 portable (single-write fire,
+rewrite/address-escape declines) plus evolved game pins; focused 30
+passed. Full suite: 938 passed / 0 failed (fully green, +1 vs r4d).
+Strict `Assembly-CSharp` scratch build: 490 files / 6,622 bodies, 0
+failed, 0 fallbacks, 0 type emission failures; brace 0/490; parse 0
+bad / 0 ERROR / 0 MISSING. Scratch-tree AudioVolumeSliders verified
+(`float real1 = volume`, no `unknown != unknown`). No goldens
+changed; `final_out/` + `validation_reports/` hold r4d until an
+explicit promotion call. Package source kept CRLF/no-BOM, tests LF.
+
+Open lead (unchanged): AudioVolumeSliders still calls unregistered
+`sub_1804cdb00` (native XMM0 scalar result, identity and arity
+unproved; current lift renders `real2 = 0f * 20.0f`). Prove
+call/result provenance before replacing the raw call; do not guess
+from `Mathf.Log10` (its registered target differs).
+
 ## Current work: promotion r4d (2026-09-23, PROMOTED)
 
 User-authorized (`promote final out`). Strict rebuild `r4d_out1` from
@@ -20,6 +50,17 @@ goto/`?addr` flat, no regressions. Promoted by mirror copy
 / 0 failed (fully green). Scratch tree + worktrees removed; tree
 committed and pushed. WIP scalar-copy slice restored to the working
 tree after promotion (still unlanded, see `docs/handoff-2026-09-23.md`).
+
+## Current handoff: 2026-09-23 stop (LANDED)
+
+The fourth scalar parameter-copy change described here is now landed
+(see the top section): focused 30 passed, full suite 938 passed / 0
+failed, strict `Assembly-CSharp` scratch build plus brace/parse gates
+passed, committed and pushed. The `TODONOW.md` working-tree addenda
+were preserved as committed. No goldens were changed; `final_out/` +
+`validation_reports/` hold the r4d promotion above. The provenance
+lead in [handoff-2026-09-23.md](handoff-2026-09-23.md) still stands
+for the unregistered `sub_1804cdb00` audio result.
 
 ## Current work: complete branch-chain declarations (2026-09-23, fixed in source)
 

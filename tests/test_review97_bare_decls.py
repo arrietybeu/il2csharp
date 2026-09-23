@@ -9,6 +9,7 @@ typed `bool flagN` ternary/0/1 folds, declaration-aware ternary arms,
 and typed hop-temp folding.
 """
 from il2cpp import Decompiler
+from types import SimpleNamespace
 
 
 INT_T = (0, 0x08 << 16)
@@ -53,6 +54,27 @@ def test_later_var_line_becomes_bare_assignment():
 def test_var_then_bare_stays_bare():
     assert rename(["var t1 = obj2;", "t1 = obj3;"]) == [
         "object obj1 = obj2;", "obj1 = obj3;"]
+
+
+def test_single_prologue_scalar_param_copy_keeps_declared_type():
+    dec = Decompiler.__new__(Decompiler)
+    dec._var_types = {}
+    param = SimpleNamespace(name='volume', type=0)
+    il = SimpleNamespace(types=[FLOAT_T], type_name=lambda ty: 'float')
+    dec.L = SimpleNamespace(
+        meta=SimpleNamespace(method_params=lambda method: [param]),
+        il=il, slot_types={}, _var_types={}, _type_hints={})
+    method = object()
+    assert dec._rename_locals(['s_10 = volume;', 'Use(s_10);'], method) == [
+        'float real1 = volume;', 'Use(real1);']
+    dec._var_types = {}
+    assert dec._rename_locals(
+        ['s_10 = volume;', 's_10 = 0f;', 'Use(s_10);'], method) == [
+        'object obj1 = volume;', 'obj1 = 0f;', 'Use(obj1);']
+    dec._var_types = {}
+    assert dec._rename_locals(
+        ['s_10 = volume;', 'Use(ref s_10);'], method) == [
+        'object obj1 = volume;', 'Use(ref obj1);']
 
 
 def test_comparisons_labels_and_members_untouched():

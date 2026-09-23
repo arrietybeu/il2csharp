@@ -8,6 +8,7 @@ targets now; temp-vs-param spelling collisions keep the honest lift
 name instead of a silent capture.
 """
 import pytest
+import re
 
 from test_game_goldens import game_decompiler
 
@@ -41,5 +42,12 @@ def test_params_keep_spellings(game_decompiler, mi, name, va, lines):
     assert hex(m.addr) == va
     text = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
     for ln in lines:
-        assert ln in text
+        if ln.startswith('this.buf[num'):
+            # The integer temp may renumber as earlier prologue copies
+            # acquire their proved scalar types. Pin the actual parameter
+            # at the store, which is this regression's invariant.
+            value = ln.split('] = ', 1)[1]
+            assert re.search(r'this\.buf\[num\d+\] = ' + re.escape(value), text)
+        else:
+            assert ln in text
     assert 'obj5' not in text and 'obj6' not in text

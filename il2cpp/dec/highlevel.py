@@ -1214,6 +1214,41 @@ class _HighLevelMixin:
                                   for p in self.L.meta.method_params(method))
             except Exception:
                 pass
+        # A single prologue copy of a scalar metadata parameter carries its
+        # exact declared type. This recovers stack homes like `s_10 = volume`
+        # (float) without inferring from an unrelated later use. A second
+        # write or address escape declines; existing concrete hints win.
+        if method is not None:
+            try:
+                scalar_params = {}
+                for p in self.L.meta.method_params(method):
+                    ty = self.L.il.types[p.type]
+                    te = (ty[1] >> 16) & 0xFF if isinstance(ty, tuple) else 0
+                    if te in (0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                              0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x18, 0x19):
+                        scalar_params[safe_ident(p.name)] = ty
+                copy_rx = _re.compile(
+                    r'^\s*(?:var\s+)?((?:v\d+|t\d+|s_[0-9a-fA-F]+))\s*=\s*'
+                    r'([A-Za-z_@]\w*)\s*;$')
+                for st in lines:
+                    if _re.match(r'^\s*(?:if|else|while|for|foreach|do|switch|'
+                                 r'try|catch|finally|goto|return|throw)\b', st) \
+                            or st.strip() in ('{', '}') or st.strip().endswith(':'):
+                        break
+                    hit = copy_rx.match(st)
+                    if hit is None or hit.group(2) not in scalar_params:
+                        continue
+                    tok, src = hit.groups()
+                    token = _re.escape(tok)
+                    writes = _re.compile(r'(?<![\w.])%s(?!\w)\s*(?:[+\-*/%%&|^]?=(?!=|>)|\+\+|--)'
+                                         % token)
+                    escapes = _re.compile(r'(?<!&)&(?!&)\s*%s\b|\b(?:ref|out|in)\s+%s\b'
+                                          % (token, token))
+                    if sum(bool(writes.search(line)) for line in lines) == 1 \
+                            and not any(escapes.search(line) for line in lines):
+                        self._var_types.setdefault(tok, scalar_params[src])
+            except (AttributeError, IndexError, TypeError):
+                pass
         ordered = [t for t in tokens
                    if t not in param_names
                    and not (t in seen or seen.add(t))]

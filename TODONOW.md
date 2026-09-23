@@ -533,3 +533,34 @@ Folds in 8 methods (25368, 24059, 25132, 25872, 26880, 27213, 97399,
 105906); unbox/`&` uses and ref-null tests decline. Portable + game
 pins green; full suite holds the failure set byte-identically (same 3
 IDs, zero golden movement).
+
+## Addendum — 2026-09-23, InventoryManager audit (15 findings)
+
+| # | Category | Count / Location | Notes |
+|---|----------|------------------|-------|
+| 1 | Unresolved sub_ decompiler stubs | 27 unique, 419+ calls | Shared IL2CPP generic bodies (array getters, singleton getters, coroutine wrapper, GetComponent). Harmless but need manual relabeling for readability. |
+| 2 | image3 uninitialized-branch bug | UpdateInventorySlotsUI, ~line 445 | Fixed in decompiler source 2026-09-23: distinct native array-element loads now receive a join phi; both receiver and sprite are assigned on both arms. The promoted r4c tree still shows the old output. |
+| 3 | Unvalidated RPC input | Rpc_ChangeItemStorage/Rpc_CMD_ChangeItemStorage | No bounds/range check on invSlot, value, value2 before array write; client predicts locally first. |
+| 4 | God-class architecture | whole file, 403 fields, 16,380 lines | Weapons, mop, trash, UI, and 40-item placement system all crammed into InventoryManager. |
+| 5 | Hardcoded per-item Template/TemplateRed fields | 204 ...TemplateRed field declarations | Should be a dictionary/ScriptableObject-driven table instead of ~100 hand-declared Transform pairs. |
+| 6 | String-typed, hash-compared item RPC | PlaceItem/Rpc_CMD_PlaceItem, 29 distinct big-int hash comparisons (num1 != 39xxxxxxxxx) | Compiled from a switch(type) on string literals; fragile, no compile-time safety, wastes bandwidth sending strings over the wire. |
+| 7 | Empty decompiler noise blocks | 200 if (X.initialized == 0) { } stubs, 18 il2cpp_codegen_initialize_runtime_metadata/il2cpp_object_new manual exception-construction blocks | Purely decompiler scaffolding for type initializers and thrown exceptions (e.g. the NotSupportedException in IEnumerator.Reset()); safe to ignore/strip when cleaning up. |
+| 8 | Dead/empty conditional | IsValidItemIndex, if (data_183e71c21 == null) { } | No-op branch, leftover static-field init check. |
+| 9 | Reference-vs-null array comparison | IsValidItemIndex: StoreManager.__field_Instance.pickupObjs != 0 | Should read as != null; decompiler rendering artifact, not a runtime bug. |
+| 10 | Pointless array re-fetch in loop | UpdateInventorySlotsUI, animatorArray1 = this.inventorySlots; re-assigned every iteration | Bounds-check codegen noise, no functional effect, just visual clutter. |
+| 11 | Raw unsafe pointer/offset RPC serialization | 419 occurrences of (byte*)/(int*) casts with hardcoded offsets like +0x1c, +0x24 | Normal Fusion RPC codegen, but brittle: any change to SimulationMessage layout or Fusion version silently breaks these offsets. |
+| 12 | Bare catch with manual SetException | 1 occurrence, in _Rpc_CMD_PlaceItem_d__288.MoveNext | Swallows the real exception type — typical of decompiled async/IAsyncStateMachine machinery, not something you'd write by hand. |
+| 13 | 6 manual NotSupportedException/NotImplementedException throws | e.g. _StopIgnore_d__242.Reset() | Standard IEnumerator.Reset() boilerplate — expected, not a real issue. |
+| 14 | Only 11 Debug.LogError guard rails across 16k lines | scattered | Very sparse defensive logging for a class this large and this networked — most array/index accesses have no bounds guard beyond the few IsValidItemIndex call sites. |
+| 15 | Inconsistent field naming | inventorySprites vs inventorySprites_ | Trailing underscore suggests a renamed/duplicated field the original devs never cleaned up; easy to swap them by mistake (as arguably happened in issue #2). |
+
+## Addendum — 2026-09-23, session handoff
+
+Three fixes are committed and pushed: join receiver phi (`2481c16`),
+paired float Jcc flags (`14e2ae0`), and complete branch-chain local
+hoist (`1920c71`). The follow-up scalar parameter-copy inference and
+tests are still uncommitted: 30 focused tests passed, while the full
+suite was interrupted near 69% and has no final result. Resume from
+`docs/handoff-2026-09-23.md` before landing it. The unregistered
+`sub_1804cdb00` audio scalar result remains open; do not guess its
+identity or regenerate the promoted output.
