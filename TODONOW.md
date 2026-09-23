@@ -6,11 +6,12 @@ The source of truth is the decompiler under `il2cpp/`. Fixture inputs are
 `testgame/ShiftAtMidnight_Data/il2cpp_data/Metadata/global-metadata.dat` and
 `testgame/GameAssembly.dll`.
 
-## Baseline gates (known good; do not disturb)
+## Baseline gates (r4a promotion, 2026-09-22 — prior numbers archived below)
 
-- Strict rebuild: 114,458 bodies, 0 failures, 0 fallbacks.
-- Brace audit: 0 unbalanced files.
-- Full suite: 879 passed, 2 failures only: MethodDefs 67525 and 104428.
+- Strict rebuild: 114,458 bodies, 0 failures, 0 fallbacks (matches).
+- Brace audit: 0 unbalanced files. Parse gate: 0 bad / 0 ERROR / 0 MISSING.
+- Full suite: 923 passed, 1 failure: MethodDef 67525 (honest SIMD
+  decline; 32837 + 104428 regened after per-hunk review).
 - `final_out/` is promoted output and must remain read-only.
 - The fixture is private/licensed; never redistribute it.
 
@@ -19,16 +20,16 @@ The source of truth is the decompiler under `il2cpp/`. Fixture inputs are
 All paths below are relative to `C:\Users\crax\Downloads\il2csharp`.
 The count is occurrences/lines first and distinct `.cs` files second.
 
-| category | current scan | supplied handoff figure | exact output root |
+| category | promoted r4a scan | 2026-09-22 handoff figure | exact output root |
 |---|---:|---:|---|
-| shared-body marker `/*shared body, N candidates*/` | 18,995 / 2,304 | 19,013 / 2,304 | `final_out/**/*.cs` |
-| `/*indirect*/` | 7,091 / 975 | 7,091 / 975 | `final_out/**/*.cs` |
-| literal `unknown` | 12,084 / 1,383 | 16,044 / 1,382 | `final_out/**/*.cs` |
-| raw `mem[N]` | 13,189 / 805 | ~13,189 / 805 | `final_out/**/*.cs` |
-| `mem_<hex>` load twins | 324 / 70 | 234 / 69 | `final_out/**/*.cs` |
+| shared-body marker `/*shared body, N candidates*/` | 18,884 / 2,278 | 19,013 / 2,304 | `final_out/**/*.cs` |
+| `/*indirect*/` | 6,262 / 884 | 7,091 / 975 | `final_out/**/*.cs` |
+| literal `unknown` | 15,748 / 1,365 | 16,044 / 1,382 | `final_out/**/*.cs` |
+| raw `mem[N]` | 398 / 127 | ~13,189 / 805 | `final_out/**/*.cs` |
+| `mem_<hex>` load twins | 359 / 95 strict (`mem_addr` params excluded) | 234 / 69 | `final_out/**/*.cs` |
 | `goto` | 8,707 / 903 | 8,705 / 901 | `final_out/**/*.cs` |
 | `/* nothing */` | 63 / 1 | 63 / — | `final_out/**/*.cs` |
-| `?addr` | 2 / 2 | 22 / 6 | `final_out/**/*.cs` |
+| `?addr` | 1 / 1 | 22 / 6 | `final_out/**/*.cs` |
 
 The differences are scanner-definition differences, not silently ignored
 files: use the commands in the Census reproducibility section. In particular,

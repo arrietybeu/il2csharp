@@ -1,4 +1,20 @@
 # il2csharp — TODO (open work and historical triage)
+## Current work: promotion r4a (2026-09-22, PROMOTED)
+
+User-authorized. Strict rebuild `r4a_out1`: 11,183 files / 114,458
+bodies / 0 failed / 0 fallbacks / 0 type-emission failures; brace
+audit 0 unbalanced; parse gate 0/0/0; file set identical to the prior
+tree (11,276 paths). Spot-verified in-tree (GetEnumerator/MoveNext/
+Current, IsSameObject(obj1, obj2), StreamBuffer v0). Promoted by
+byte-identical copy (aggregate `e7f406db…bdabf`); evidence in
+`validation_reports/promotion_r4a.json`. New census: shared
+18,884/2,278, indirect 6,262/884, unknown 15,748/1,365, mem[N]
+398/127 (was ~13k — the RSP-copy round at corpus scale), mem_hex 359
+strict, goto unchanged, `?addr` down to its last site
+(ReflectionProbeManager:434, funclet home). The memhex remainder is
+honest (be-None path byte-identical in diff; sampled sites are
+exception/funclet homes). Post-promotion suite + cleanup below.
+
 ## Current work: promotion round — regen + rebuild (2026-09-22)
 
 User-authorized regen/promotion. `tests/goldens_review84.json`
