@@ -1,4 +1,20 @@
 # il2csharp — TODO (open work and historical triage)
+## Current work: ?addr-tightening DISPROVED (2026-09-22, reverted clean)
+
+Narrowing the RSP-copy declines to text-`?` bases rescued mi 65244's
+last `?addr` as `((byte*)obj44 + num55*4)[0] = 4294967295` -- then
+traced end to end and disproved it: obj44 textually aliases a reused
+home (0f/data_ on disjoint arms) while native uses a fresh
+&s_1d0+idx address; the address-of is lost in write-barrier
+conversion and the width/value mismatches, so the line miscompiles
+where the elision honestly declined. Reverted byte-identically (lifts
+match pre-tightening bodies); the elision itself is now pinned by a
+game test against recurrence. Portable anonymous-copy guard kept.
+- Gates: full suite 932 passed / 0 failed (first fully-green run
+  stands).
+- Lesson recorded: rescues must prove the rendered base denotes the
+  native address on the reaching path, not just spell it.
+
 ## Current work: SIMD consumer-side round (2026-09-22, unpromoted)
 
 Subagent-traced (both constants' death sites + 80548 guard shape).

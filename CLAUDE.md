@@ -177,8 +177,6 @@ fix-123 in `validation_reports/review123_*`.
   offset (`mov rbp,rsp` keeps the unreadable frame idiom): the frame path owns
   its disp keys, and absolute tracking there splits homes (stash-proven on
   80548) — RBP behavior is byte-identical with or without copies live.
-  Unknown-base declines fire only on text-`?` bases; named `&s_xx` homes
-  keep their legacy honest composites (65244's last `?addr`).
 - Same-typedef shared-body twins (e.g. Transform get_parent triple) keep the
   honest marker: no receiver proof can split one declaring typedef, and
   consensus typing never resolves identity.

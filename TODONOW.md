@@ -32,10 +32,12 @@ The count is occurrences/lines first and distinct `.cs` files second.
 | `?addr` | 1 / 1 | 22 / 6 | `final_out/**/*.cs` |
 
 `?addr` follow-up (unpromoted): the last site (mi 65244) was our own
-quarantine over-firing on a named `&s_1d0` home -- all 5 decline sites
-now require text-`?` bases, named homes keep legacy composites. Fresh
-lifts render zero `?addr` (the rescued store verified address-correct);
-promoted tree still shows its 1 until the next rebuild.
+quarantine over-firing on a named `&s_1d0` home, so the declines were
+narrowed to text-`?` bases and the store rescued -- then the rescue
+was traced and disproved (rendered base aliases a reused home while
+native uses a fresh address; address-of lost in write-barrier
+conversion), and reverted byte-identically with the elision pinned by
+a game test. `?addr` stays 1, honestly.
 
 The differences are scanner-definition differences, not silently ignored
 files: use the commands in the Census reproducibility section. In particular,

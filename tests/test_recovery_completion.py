@@ -543,25 +543,9 @@ def test_rsp_copy_indexed_stays_raw():
     assert 's_' not in text and '?' in text
 
 
-def test_indexed_lea_through_named_home_keeps_home():
-    # mi 65244: `lea rcx,[rcx+r12*4]` with a NAMED &s_ home base must
-    # keep the home (honest composite), not ?addr -- the ?-text
-    # decline is only for anonymous frame copies.
-    from il2cpp import Expr
-    lift = struct_lifter()
-    lift.regs = {}
-    lift.rsp_delta = 0
-    home = Expr('&s_10', None, 'ptr')
-    home._stack_offset = 0
-    lift.regs['R11'] = home
-    execute(lift, '498d0c0b')  # lea rcx,[r11+rcx]
-    text = lift.regs['RCX'].text or ''
-    assert '?addr' not in text and 's_10' in text
-
-
 def test_indexed_lea_through_anonymous_copy_stays_unknown():
-    # The same shape over a text-'?' copy still declines: the base is
-    # genuinely untracked.
+    # Indexed LEA over a genuinely untracked base declines: the base
+    # is unknown, so no home may be named.
     from il2cpp import Expr
     lift = struct_lifter()
     lift.regs = {}
