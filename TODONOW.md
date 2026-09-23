@@ -244,18 +244,21 @@ Replace the pattern with the other marker. For source ownership, use
 `rg -n` against the exact files listed above; line numbers are current source
 line anchors and must be rechecked after edits.
 
-## Work order for the fixing agent
+## Work order for the fixing agent (status as of r4c promotion)
 
-1. Build a machine-readable per-file/per-method inventory from the commands
-   above, then select representative native methods for each producer class.
-2. Fix shared-body receiver resolution and indirect/interface dispatch as one
-   proof-driven feature; run targeted lifts before any corpus rebuild.
-3. Fix unknown values and raw memory through register/stack/aggregate
-   provenance; add negative tests for ambiguous layouts and stale tiles.
-4. Classify unbound temps only after the upstream fixes; otherwise the count
-   is inflated by unknown producers.
-5. Run compile/parse gates and the full suite. Preserve the exact two known
-   failures (67525, 104428) unless native evidence proves a separate fix.
+1. Inventory: done (census table above, re-counted at promotion).
+2. Shared-body receiver resolution + indirect/interface dispatch:
+   landed as proof-driven slices (array receivers, twins pins,
+   interface dispatch); hinted receivers and generic substitution
+   disproved/deferred with evidence (see addenda).
+3. Unknown values + raw memory: landed as provenance slices (RSP-copy
+   homes, SIMD consumer-side tails + direct); general packed tracking
+   stays declined.
+4. Unbound temps: classified (55 distinct in 21 files, all params or
+   checker FPs in fresh lifts) and fixed (rename barrier + param
+   exclusion); actionable set ~zero.
+5. Gates + suite: 932 passed / 0 failed (first fully-green run; the
+   old 67525/104428 reds were regened after per-hunk review).
 6. Never regenerate or promote `final_out/` without an explicit user call.
 
 ## Stop record — 2026-09-22, SIMD/stack provenance follow-up
@@ -380,13 +383,14 @@ file kept byte-identical in endings).
   decline) + 104428 (stale golden) were already red; 32837 is new but
   proved improvement (above). No other breaks.
 
-### Resume point
+### Resume point (superseded by r4c promotion — historical record follows)
 
-Work order §4 is next: re-census unbound temps now that two
-unknown/raw-memory producer families have landed (naive counts are
-inflated by scope/multi-decl/DCE-residue/comment noise — classify
-before patching). Corpus rebuild + golden regen + promotion remain
-explicit user calls; `final_out/` census above is unchanged by design.
+Work order §4 was completed after this stop record: the unbound census
+collapsed to 55 distinct tokens (all params/checker FPs in fresh
+lifts) and the rename barrier + param exclusion fixed the producers.
+Corpus was rebuilt + regened + promoted twice since (r4a, r4c);
+`final_out/` census above is the r4c recount, not this stop record's
+era. Remaining work is tracked in `docs/todo.md` Current work.
 
 ## Addendum — 2026-09-22, TODONOW #1 first slice (unpromoted)
 

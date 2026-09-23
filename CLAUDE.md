@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-## Current source and validation authority — follow-up promoted tree
+## Current source and validation authority — r4c promoted tree
 
 The working source contains fixes 114 (method dispatch flags, generic
 constructor names), 115 (unsafe on pointer-signature methods/ctors), 116
@@ -16,23 +16,29 @@ unique owner's type with a caller-proven cast), and 123
 fully zero), plus three unnumbered follow-ups: shortest round-trip float32
 literals with fixed-point tie-break, entry stack-parameter names/types
 surviving the pass wipe with slot reloads restoring the recorded kind, and
-exact runtime type on klass-equality cmov select. 795 tests pass. The
-follow-ups completed the full gate — strict rebuild 11,181 files /
-114,458 bodies with 0 failures, parser 0 bad files, direct sweep 116,178
-methods / 0 crashes, 6 reviewed golden changes — and were promoted
-2026-09-19: `final_out/` holds `work/promote_out` (11,274 files, aggregate
-`db468523…050c36105`). The `bckups/` copies of prior promoted
-trees were deleted 2026-09-19 per user call — GitHub is now the history
-authority; any prior tree rebuilds from git history. See `docs/todo.md` for exact evidence and the
+exact runtime type on klass-equality cmov select — and, since, the
+recovery rounds: RSP-copy frame homes (RBP quarantine), array receivers
+via System.Array, rename barrier + param exclusion, interface dispatch
+naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
+direct calls), each decline-by-default with portable + game pins; plus
+documented disproofs (hinted receivers, ?addr tightening,
+receiver-driven generics). 932 tests pass (782 portable + 150 game),
+suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
+both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
+and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
+11,276 paths, aggregate `c0ee1b78…1236`). The `bckups/` copies of prior
+promoted trees were deleted 2026-09-19 per user call — GitHub is now the
+history authority; any prior tree rebuilds from git history. See `docs/todo.md` for exact evidence and the
 remaining compiler backlog.
 
 Read `docs/reviews/REVIEW84.md`–`REVIEW87.md`, `docs/todo.md`'s Current work section, and
 `docs/archive/reviews-log.md` section 0bf first. `final_out/` is the complete strict-built
-follow-up output promoted 2026-09-19 (11,274 files, aggregate `db468523…050c36105`),
+r4c output promoted 2026-09-23 (11,183 `.cs` files / 11,276 paths, aggregate `c0ee1b78…1236`),
 not the Review 84 file set alone, b42/b76, or a partial candidate. Historical paragraphs below retain
 the reasoning behind older changes; their old "current" labels are not release authority.
 `validation_reports/review84/summary.json` (baseline) plus `validation_reports/followups_sweep.json`,
-`followups_parse.json`, and `followups_promotion_verification.json`
+`followups_parse.json`, `followups_promotion_verification.json` (fix-123 era, frozen)
+and `validation_reports/promotion_r4a.json` + `promotion_r4c.json`
 are authoritative for the promoted tree. Fix-114 evidence lives in
 `validation_reports/review114_*`; fix-115 gates, probe, and promotion record
 in `validation_reports/review115_*`; fix-116 in `validation_reports/review116_*`;
@@ -212,15 +218,16 @@ fix-123 in `validation_reports/review123_*`.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test
-(`tests/test_source_format.py`) enforces this contract. **509 tests pass** (391 portable + 118 game;
-358 at the Review 84 baseline).
+(`tests/test_source_format.py`) enforces this contract. **932 tests pass** (782 portable + 150 game;
+64 golden snapshots, all green).
 `goldens_review77.json`, `goldens_review79.json`,
 `goldens_review80.json`, `goldens_review82.json`, and `goldens_review83.json` are
 archived unchanged. Current `goldens_review84.json` uses the same 64 MethodDefs:
-56 bodies are unchanged from Review 83 and eight reviewed bodies recover exact
+53 bodies are unchanged from Review 83 and eleven reviewed bodies recover exact
 constructor/allocation behavior (Reviews 85–89 regenerate with only name-only deltas,
 fix 97 with declaration-only deltas, fix 97e with 0 body changes, fix 99 with 6 reviewed
-dead-typeof removals: see `docs/todo.md` Current work).
+dead-typeof removals, 32837 dead-spill removal, 104428 recovered aggregates,
+67525 float2 composites: see `docs/todo.md` Current work).
 
 Use `tools/csharp_smoke.py` for the .NET 8 compiled-pattern checks, including the
 actual loop emitter. They passed for Review 80 but were not rerun for Reviews

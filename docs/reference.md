@@ -179,7 +179,10 @@ and the applied source patches `patch_*.py` kept as the record.
 
 ## 6. Baselines, promotion, known artifacts
 
-This section is a batch-19 snapshot, kept for its "known artifacts"
+Live authority has moved on: current baseline, gates, and file census
+are `TODONOW.md` (top sections), `docs/todo.md` (Current work), and
+`validation_reports/promotion_r4a.json` + `promotion_r4c.json`. What
+follows is a batch-19 snapshot, kept for its "known artifacts"
 list below — all promotion status here is historical, not Review 79 authority.
 The batch-19-era baseline chain it originally described
 (`b19_out2`, `b18_out12`, `b18_noreind`, `b19_out1`/`b19_sim`/
