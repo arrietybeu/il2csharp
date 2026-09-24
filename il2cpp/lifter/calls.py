@@ -1248,6 +1248,40 @@ class _CallsMixin:
             return 'sub_%x/*shared body, %d candidates*/' % (target, len(cands))
         return 'sub_%x' % target
 
+    _IDENTITY_PURE_ARG = re.compile(
+        r'(?:&)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*|-?(?:0x[0-9a-fA-F]+|[0-9]+)')
+
+    def _shared_identity_value(self, target, cands, arg_exprs, xmm):
+        """Prove a shared native leaf copies RCX to RAX without effects.
+
+        Dropped register values must be pure because their expressions may
+        not have been materialized yet. The result itself is bound at the
+        call instruction, preserving the copied value across later writes.
+        This proves machine semantics only; it never selects a MethodDef.
+        """
+        if target is None or not cands or len(cands) < 2 \
+                or not getattr(self.bin, 'is_exec_va', lambda _va: False)(target):
+            return None
+        cache = getattr(self, '_shared_identity_cache', None)
+        if cache is None:
+            cache = self._shared_identity_cache = {}
+        if target not in cache:
+            cache[target] = self.bin.read(target, 4) == b'\x48\x8b\xc1\xc3'
+        if not cache[target] or not arg_exprs:
+            return None
+        value = arg_exprs[0]
+        if value is None or value._unk or value.kind not in (
+                'obj', 'int', 'str', 'arr', 'local', '?') \
+                or not value.text or value.text.startswith('&') \
+                or not self._IDENTITY_PURE_ARG.fullmatch(value.text):
+            return None
+        for extra in list(arg_exprs[1:4]) + [e for _, e in xmm]:
+            if extra is None or extra._unk:
+                continue
+            if not extra.text or not self._IDENTITY_PURE_ARG.fullmatch(extra.text):
+                return None
+        return value
+
     def _nullary_interface_dispatch(self, target, arg_exprs):
         """Recognize the Win64 interface-offset search and shared tail call.
 
@@ -1639,6 +1673,29 @@ class _CallsMixin:
         # must still occupy its argument position -- `f(a, , b)` is not C#;
         # `_` is the placeholder the absent-register path above already uses.
         args = [a if a and a.strip() else '_' for a in args]
+
+        # The native body itself can settle a shared identity leaf even
+        # when thousands of MethodSpecs own its address. Bind the copied
+        # RCX value where the call executes; no method name is invented.
+        if target is not None and '/*shared body,' in name:
+            identity = self._shared_identity_value(
+                target, self.il.addr_candidates.get(target), arg_exprs,
+                self._xmm_pending)
+            if identity is not None:
+                if identity._defpos is None:
+                    blk = getattr(self.out, 'block', None)
+                    identity._defpos = (
+                        blk, len(blk.stmts) if blk is not None else len(self.out))
+                self._bind(identity)
+                for r in VOLATILE:
+                    self.regs.pop(r, None)
+                for i in range(6):
+                    self.regs.pop('XMM%d' % i, None)
+                self._fresh_unknowns()
+                self.regs['RAX'] = identity
+                if self.asm_comments and asm:
+                    self.emit(ins.ip, '', asm)
+                return
 
         # --- value boxing: il2cpp_value_box(klass, &value) -> (object)(value)
         # the box is an allocation, so a standalone box statement is dead code

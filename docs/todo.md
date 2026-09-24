@@ -1,5 +1,25 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: exact shared identity leaf (2026-09-24, VALIDATED)
+
+The exact executable bytes `mov rax, rcx; ret` prove that a shared native
+body copies its first argument without selecting any MethodDef owner. The
+fold requires a pure tracked first argument and pure extra register values;
+effectful expressions, unknown values, pointers without a safe tracked
+value, and any other native bytes retain the honest shared-body marker.
+`<FindGraphWhichInheritsFrom>b__0` folds its `this.type` copy but retains
+the `graph.GetType()` call marker. `Touchscreen.OnStateEvent` now carries
+the copied `InputEvent*` type through its field reads; its reviewed
+MethodDef 32833 golden was updated.
+
+Evidence: 992 full-suite tests pass. Strict AstarPathfindingProject and
+Unity.InputSystem build: 513 files / 7,249 bodies, 0 failures / 0
+fallbacks / 0 type-emission failures; brace 0, parse 0/0/0. In those
+files, address `0x18063ac90` markers fell 55 → 1 against promoted r5;
+all shared markers fell 302 → 241 in 16 changed files with no per-file
+increase (the latter includes preceding unpromoted changes). `final_out/`
+remains unchanged.
+
 ## Current work: shared static signature proof (2026-09-24, VALIDATED)
 
 A common non-generic static ABI plus call-site parameter types can name a
