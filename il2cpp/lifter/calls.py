@@ -897,6 +897,58 @@ class _CallsMixin:
             return hits[0]
         return None
 
+    def _shared_value_receiver_target(self, cands, recv):
+        """Use an exact stack pointee to distinguish folded value-type getters.
+
+        A stack LEA has no Expr.ty; its slot retains the value type. Every
+        candidate must use RCX as an instance receiver (never a static
+        argument or sret buffer). A MethodSpec with the same declaring
+        TypeDef blocks selection until its instantiation is proved.
+        """
+        if recv is None or recv._unk or recv.kind != 'ptr' \
+                or not (recv.text or '').startswith('&') \
+                or not _REFARG_RX.fullmatch(recv.text[1:]):
+            return None
+        tok = recv.text[1:]
+        evidence = (recv.ty, getattr(self, 'slot_types', {}).get(tok),
+                    getattr(self, '_type_hints', {}).get(tok))
+        keys = {(ty[0], self.il._type_enum(ty))
+                for ty in evidence if ty is not None}
+        if len(keys) != 1:
+            return None
+        td, enum = next(iter(keys))
+        if enum != 0x11 or not 0 <= td < len(self.meta.typedefs) \
+                or not self.meta.typedefs[td].is_valuetype \
+                or self.meta.typedefs[td].generic_container != -1:
+            return None
+        hits = []
+        for candidate in cands:
+            kind, index = candidate
+            if kind == 'method':
+                mi = index
+            elif kind == 'generic':
+                specs = getattr(self.il, 'method_specs', ())
+                if not 0 <= index < len(specs):
+                    return None
+                mi = specs[index][0]
+            else:
+                return None
+            if not 0 <= mi < len(self.meta.methods):
+                return None
+            method = self.meta.methods[mi]
+            if method.is_static or not 0 <= method.return_type < len(self.il.types):
+                return None
+            rty = (self.il.candidate_return_type(candidate)
+                   if kind == 'generic' else self.il.types[method.return_type])
+            if rty is None or self.il.returns_sret(rty):
+                return None
+            if method.declaring == td:
+                if kind != 'method' or method.generic_container != -1 \
+                        or method.param_count != 0:
+                    return None
+                hits.append(candidate)
+        return hits[0] if len(hits) == 1 else None
+
     def _array_receiver_td(self, ty):
         """System.Array typedef for an SZARRAY/ARRAY receiver type.
 
@@ -1629,6 +1681,8 @@ class _CallsMixin:
                                      m2.name.lstrip('.').replace('|', '_').replace('@', '_'))
             else:
                 info = self._shared_object_receiver_target(cands, recv)
+                if info is None:
+                    info = self._shared_value_receiver_target(cands, recv)
                 if info is None:
                     info = self._shared_static_arg_target(cands, arg_exprs)
                 if info is not None:

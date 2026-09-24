@@ -1,5 +1,25 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: exact value-type shared receivers (2026-09-24, VALIDATED)
+
+An address-of stack slot can identify a shared instance getter when its
+tracked pointee is one concrete nongeneric value TypeDef. The candidate
+set must contain only readable instance methods with no sret; a second
+method or MethodSpec on the same declaring type declines. Static calls,
+conflicting type evidence, open owners, and untyped pointer arithmetic
+keep the shared marker. This resolves `StyleValueHandle.get_valueType`
+from `&s_8` in `IsVarFunction`, while `ReadAsString`'s raw pointer stays
+unresolved. A closed enum parameter now casts a proven integer expression
+at the call argument, preserving `StyleEnum<SliceType>.ctor((SliceType)
+styleInt.value, keyword)` after its two getter markers disappear.
+
+Evidence: full suite 978 passed / 0 failed after one reviewed golden
+update (MethodDef 18054 only); strict UIElements scratch build 802 files /
+8,997 bodies, 0 failed / 0 fallbacks / 0 type-emission failures,
+brace 0, parse 0/0/0. Shared markers in UIElements fell 1,332 → 1,277
+(55 fewer in six files, no increases). The prior r5 promoted tree remains
+the comparison reference; no output promotion here.
+
 ## Current work: Object shared-body fallback (2026-09-24, VALIDATED)
 
 A narrow full-candidate receiver proof resolves `Delegate.Clone` /

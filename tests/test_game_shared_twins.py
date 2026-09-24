@@ -55,3 +55,23 @@ def test_unrelated_receiver_proves_object_memberwise_clone(game_decompiler):
 def test_second_unrelated_receiver_proves_object_memberwise_clone(game_decompiler):
     text = lift_text(game_decompiler, 37793, 'Clone', '0x1823366b0')
     assert 'this.MemberwiseClone()' in text
+
+
+def test_stack_value_receiver_proves_shared_getter(game_decompiler):
+    text = lift_text(game_decompiler, 23106, 'IsVarFunction', '0x182e4ad70')
+    assert 'styleValueHandle1.valueType' in text
+    assert 'sub_1808615a0/*shared body' not in text
+
+
+def test_untyped_pointer_keeps_shared_getter_marker(game_decompiler):
+    text = lift_text(game_decompiler, 23105, 'ReadAsString', '0x182e4ada0')
+    assert 'sub_1808615a0/*shared body, 45 candidates*/' in text
+
+
+def test_resolved_getter_keeps_enum_constructor_cast(game_decompiler):
+    text = lift_text(game_decompiler, 18054,
+                     'UnityEngine.UIElements.IStyle.get_unitySliceType',
+                     '0x182f22d60')
+    assert 'styleEnum11.ctor((UnityEngine.UIElements.SliceType)(styleInt1.value),' in text
+    assert 'sub_1811d8370/*shared body' not in text
+    assert 'sub_1809463c0/*shared body' not in text

@@ -221,6 +221,7 @@ class _ValuesMixin:
             if (bits >> 16) & 0xFF in (0x11, 0x12, 0x15) \
                     and not ((bits >> 29) & 1):
                 ev = _int_lit(at)
+                etd = None
                 if ev is not None:
                     etd = self._td_of(pt)
                     em = self.il.enum_members(etd) if etd is not None else None
@@ -228,6 +229,21 @@ class _ValuesMixin:
                         args[ai] = '%s.%s' % (
                             csharp_type_name(self.meta.typedefs[etd].name),
                             em[ev])
+                        continue
+                # A typed integer expression is not implicitly convertible to
+                # an enum parameter. Shared getter resolution exposes this
+                # at StyleEnum<SliceType>.ctor(styleInt.value, keyword): the
+                # former object stub supplied a cast at the caller. Keep the
+                # conversion where the parameter's closed type proves it.
+                if e is not None and not e._unk and e.text == at \
+                        and e.ty is not None and not (e.ty[1] >> 29) & 1 \
+                        and self.il._type_enum(e.ty) in (
+                            0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b):
+                    if etd is None:
+                        etd = self._td_of(pt)
+                    if etd is not None and getattr(
+                            self.meta.typedefs[etd], 'is_enum', False):
+                        args[ai] = '(%s)(%s)' % (self.il.type_name(pt), at)
                         continue
             if at.startswith('&') and hasattr(self.il, '_sf_field_size'):
                 aggregate = self._copied_struct_arg(at, pt)
