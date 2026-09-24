@@ -1,5 +1,21 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: promotion r8 Assembly-CSharp (2026-09-24, PROMOTED)
+
+User-scoped (Assembly-CSharp only; full-tree rebuild aborted by user
+call after ACS completed). Strict `--only Assembly-CSharp` rebuild from
+clean HEAD `e3c7512`: 490 type files / 6,622 bodies / 0 failed / 0
+fallbacks / 0 type-emission failures; brace 0 unbalanced; parse 0/0/0;
+file set identical to r7 ACS (491 paths, 4 files differ). Triage:
+identical-render `ComputeStringHash` x3 (ControllerLayoutMenu,
+InventoryManager, Telephone) + stub disassembly comments
+(`__SharedBodyStubs.cs` 367 -> 2,872 lines); shared 1,086 -> 1,083,
+indirect/unknown/goto/memN flat, zero per-file marker increases. An
+independent second build was byte-identical (determinism cross-check).
+Promoted by mirror copy (ACS aggregate `d6b9147c…ffcc`); evidence in
+`validation_reports/promotion_r8.json`. Scratch trees removed; tree
+committed and pushed. Rest of `final_out/` still holds r7.
+
 ## Current work: noreturn-shared forwarder returns (2026-09-24, LANDED)
 
 The 63 `/* nothing */` bodies (all `Neon` in `Arm.cs`) were shared
