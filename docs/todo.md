@@ -1,5 +1,36 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: shared/indirect disproofs + measurements (2026-09-24, DOCUMENTED)
+
+Subagent census follow-ups that disproved (with native/metadata
+evidence) rather than landed -- no source change, by the same rule as
+the generic-slice closure. Small-N shared bodies are NOT in general
+resolvable: F2 `StartCoroutine` twins (56318/56319, identical static
+`(IEnumerator)` signatures), F1 string twins (602/604
+`Equals`/`op_Equality`, identical static `(string,string)->bool` over
+one folded body -- picking `==` vs `Equals` would guess source
+spelling), F3 Transform triple (56836/56838/56840, same declaring
+typedef, so the same-typedef-twins invariant applies directly). Their
+markers stay honestly.
+- C-shape text fold (`((byte*)R+0)[0]` to klass) is unsound: EntryDoor
+  25181's native loads a struct field pointer (`mov rsi,[rsp+78h]` +
+  null check = the embedded `List<Enemy>` of a `List_1<Enemy>.Enumerator`
+  home) and dispatches slot 30 on the List, so a klass fold would
+  misread struct first-fields. The correct fix is struct-field folding
+  into the existing VIRT_CALL path (lifter field-layout reasoning) --
+  deferred to the sidecar program.
+- Dead-unknown window extension measured: 42 adjacent vs +6 in 1-3
+  statement windows -- declined, not worth the machinery.
+- B2 `this`-base count is 0/271, so the batch-38b bare-base guard
+  stands for lack of any trivially-provable base.
+- The 32 typeof-decl-but-indirect sites are heterogeneous non-shapes,
+  correctly declined (e.g. SessionInfo: no slot computation exists;
+  the typeof travels as a call argument, not a dispatch proof).
+- Next lead if wanted: deref-trail slots (335 sites shaped
+  `... + ((byte*)TOK + 0x0)[0]` with inline typeof nearby) need a
+  typedef-to-implemented-interfaces table plus unique-match gating;
+  that table is sidecar-program plumbing, so this stays designed.
+
 ## Current work: dead-unknown stores + inline-typeof dispatch (2026-09-24, LANDED)
 
 Two subagent-triaged slices from the shared/indirect/unknown census
