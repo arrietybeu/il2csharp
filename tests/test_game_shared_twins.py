@@ -1,10 +1,10 @@
-"""Array receivers resolve their shared Clone; same-typedef twins stay shared.
+"""Array receivers resolve Clone; exact string twins use their shared semantics.
 
 Ground truth: `sub_181c07770` folds 9 instance Clone() bodies. A byte[]
 field home (275/326) or Delegate[] home (4047) can only dispatch to
 System.Array.Clone -- arrays have no subclasses. The 2-candidate
-string twins (144, Equals/op_Equality over one typedef) can never
-split and keep their markers.
+string twins (144, Equals/op_Equality over one typedef) cannot be
+identified individually, but their shared equality behavior is exact.
 """
 import pytest
 
@@ -41,9 +41,10 @@ def test_delegate_array_clones_through_array(game_decompiler):
     assert 'shared body' not in text
 
 
-def test_same_typedef_string_twins_stay_shared(game_decompiler):
+def test_same_typedef_string_twins_render_exact_equality(game_decompiler):
     text = lift_text(game_decompiler, 144, 'ReadReference', '0x181ae3120')
-    assert text.count('sub_181af7520/*shared body, 2 candidates*/') == 5
+    assert text.count('this.ReadName() == ') == 5
+    assert 'sub_181af7520/*shared body' not in text
 
 
 def test_unrelated_receiver_proves_object_memberwise_clone(game_decompiler):

@@ -1,5 +1,21 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: shared string equality semantics (2026-09-24, VALIDATED)
+
+`System.String.Equals(string,string)` and `op_Equality(string,string)`
+share one native body and the same static bool ABI. When both operands are
+tracked strings, string literals, or null, render their common `==`
+behavior without selecting an original MethodDef or source spelling.
+Dropped extra register expressions must be pure. The five previously
+marked `ReadReference` comparisons now spell `ReadName() == literal`;
+unknown operand types retain the marker. All 994 full-suite tests pass.
+The strict Assembly-CSharp build covered 490 files / 6,622 bodies with
+0 failures / 0 fallbacks / 0 type-emission failures, brace 0, parse
+0/0/0. In those files, this alias's markers
+fell 138 → 11 against promoted r5; all shared markers fell 1,287 →
+1,086 with no per-file increases (that total includes earlier
+unpromoted changes). `final_out/` remains unchanged.
+
 ## Current work: exact shared identity leaf (2026-09-24, VALIDATED)
 
 The exact executable bytes `mov rax, rcx; ret` prove that a shared native
@@ -84,10 +100,11 @@ Subagent census follow-ups that disproved (with native/metadata
 evidence) rather than landed -- no source change, by the same rule as
 the generic-slice closure. Small-N shared bodies are NOT in general
 resolvable: F2 `StartCoroutine` twins (56318/56319, identical static
-`(IEnumerator)` signatures), F1 string twins (602/604
-`Equals`/`op_Equality`, identical static `(string,string)->bool` over
-one folded body -- picking `==` vs `Equals` would guess source
-spelling), F3 Transform triple (56836/56838/56840, same declaring
+  `(IEnumerator)` signatures), F1 string twins (602/604
+  `Equals`/`op_Equality`, identical static `(string,string)->bool` over
+  one folded body -- method identity and source spelling remain unknown;
+  typed operands now permit their shared `==` semantics), F3 Transform
+  triple (56836/56838/56840, same declaring
 typedef, so the same-typedef-twins invariant applies directly). Their
 markers stay honestly.
 - C-shape text fold (`((byte*)R+0)[0]` to klass) is unsound: EntryDoor

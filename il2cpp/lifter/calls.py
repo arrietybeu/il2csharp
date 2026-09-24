@@ -1282,6 +1282,68 @@ class _CallsMixin:
                 return None
         return value
 
+    def _shared_string_equality(self, cands, arg_exprs, xmm):
+        """Prove the common behavior of the exact System.String aliases.
+
+        Both metadata owners point to the same native body and declare the
+        same (string, string) -> bool ABI. The operator does not identify
+        the source spelling or select one MethodDef.
+        """
+        if not cands or len(cands) != 2 or len(arg_exprs) < 2:
+            return False
+        names = set()
+        owner_idx = None
+        for kind, mi in cands:
+            if kind != 'method' or not 0 <= mi < len(self.meta.methods):
+                return False
+            method = self.meta.methods[mi]
+            if (not method.is_static or method.param_count != 2
+                    or method.generic_container != -1
+                    or not 0 <= method.declaring < len(self.meta.typedefs)
+                    or not 0 <= method.return_type < len(self.il.types)):
+                return False
+            if owner_idx is None:
+                owner_idx = method.declaring
+            elif owner_idx != method.declaring:
+                return False
+            owner = self.meta.typedefs[method.declaring]
+            ret = self.il.types[method.return_type]
+            if ((owner.namespace, owner.name) != ('System', 'String')
+                    or self.il._type_enum(ret) != 0x02
+                    or (ret[1] >> 29) & 1):
+                return False
+            params = list(self.meta.method_params(method))
+            if len(params) != 2:
+                return False
+            for param in params:
+                if not 0 <= param.type < len(self.il.types):
+                    return False
+                pty = self.il.types[param.type]
+                if self.il._type_enum(pty) != 0x0e or (pty[1] >> 29) & 1:
+                    return False
+            names.add(method.name)
+        if names != {'Equals', 'op_Equality'}:
+            return False
+        for expr in arg_exprs[:2]:
+            if (expr is None or expr._unk or not expr.text
+                    or expr.kind in ('ptr', 'klass', 'usage')
+                    or expr.text.startswith('&')):
+                return False
+            if expr.text in ('0', 'null'):
+                continue
+            if (expr.kind == 'str' and expr.text.startswith('"')
+                    and expr.text.endswith('"')):
+                continue
+            if (expr.ty is None or (expr.ty[1] >> 29) & 1
+                    or self.il._type_enum(expr.ty) != 0x0e):
+                return False
+        for extra in list(arg_exprs[2:4]) + [e for _, e in xmm]:
+            if (extra is not None and not extra._unk
+                    and (not extra.text
+                         or not self._IDENTITY_PURE_ARG.fullmatch(extra.text))):
+                return False
+        return True
+
     def _nullary_interface_dispatch(self, target, arg_exprs):
         """Recognize the Win64 interface-offset search and shared tail call.
 
@@ -1696,6 +1758,27 @@ class _CallsMixin:
                 if self.asm_comments and asm:
                     self.emit(ins.ip, '', asm)
                 return
+
+        # These two System.String names share one native string-equality
+        # body. Emit its string == behavior without assigning a MethodDef.
+        if (target is not None and '/*shared body,' in name
+                and self._shared_string_equality(
+                    self.il.addr_candidates.get(target), arg_exprs,
+                    self._xmm_pending)):
+            left, right = [('null' if a == '0' else a) for a in args[:2]]
+            bool_ty = self.il.types[
+                self.meta.methods[self.il.addr_candidates[target][0][1]].return_type]
+            result = Expr('(%s == %s)' % (left, right), bool_ty, 'int')
+            self._bind(result)
+            for r in VOLATILE:
+                self.regs.pop(r, None)
+            for i in range(6):
+                self.regs.pop('XMM%d' % i, None)
+            self._fresh_unknowns()
+            self.regs['RAX'] = result
+            if self.asm_comments and asm:
+                self.emit(ins.ip, '', asm)
+            return
 
         # --- value boxing: il2cpp_value_box(klass, &value) -> (object)(value)
         # the box is an allocation, so a standalone box statement is dead code

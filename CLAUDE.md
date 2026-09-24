@@ -185,7 +185,11 @@ fix-123 in `validation_reports/review123_*`.
   80548) — RBP behavior is byte-identical with or without copies live.
 - Same-typedef shared-body twins (e.g. Transform get_parent triple) keep the
   honest marker: no receiver proof can split one declaring typedef, and
-  consensus typing never resolves identity.
+  consensus typing never resolves identity. An exact all-candidate semantic
+  operation may render without selecting an owner: the System.String
+  Equals/op_Equality pair shares one body and one `(string,string)->bool`
+  signature, so typed string operands can render `==`. Unknown operand
+  types and effectful extra registers still decline.
 - Array-typed receivers resolve through the System.Array typedef
   (`_system_array_td`, unique-or-decline like `_system_object_td`):
   arrays have no subclasses and Array owns their instance dispatch, so
