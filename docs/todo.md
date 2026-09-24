@@ -1,5 +1,22 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: promotion r7 (2026-09-24, PROMOTED)
+
+User-authorized (promotion on call). Strict rebuild `r7_out1` from
+clean HEAD `d109bb2`: 11,183 files / 114,458 bodies / 0 failed / 0
+fallbacks / 0 type-emission failures; brace 0 unbalanced; parse 0/0/0;
+file set identical to r5 (11,276 paths, 745 files differ). Triage: five
+audited shared-body rounds (Object/value-type/static-signature/
+identity/string-equality); shared 18,889 → 16,919 (−121 files),
+indirect 6,262 → 6,061 (−48 files), unknown −34, memN/goto/`?addr`
+flat, zero per-file marker increases; sampled resolutions verified
+(`this.MemberwiseClone()`, `== "Gamepad"`, `op_Inequality` with TimeSpan
+declines kept). No golden regen needed beyond the two reviewed updates
+already in-tree (suite 994/0 green proves currency). Promoted by mirror
+copy (aggregate `19aa6964…f137502`); evidence in
+`validation_reports/promotion_r7.json`. Scratch tree removed; tree
+committed and pushed.
+
 ## Current work: shared string equality semantics (2026-09-24, VALIDATED)
 
 `System.String.Equals(string,string)` and `op_Equality(string,string)`
