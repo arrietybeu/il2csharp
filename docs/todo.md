@@ -1,5 +1,24 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: Object shared-body fallback (2026-09-24, VALIDATED)
+
+A narrow full-candidate receiver proof resolves `Delegate.Clone` /
+`Object.MemberwiseClone` shared body calls for a concrete class receiver
+outside Delegate's inheritance chain. Every candidate must be a closed,
+parameterless, non-sret instance MethodDef; the receiver must have a
+class TypeDef and exactly Object may remain in its complete base chain.
+The broad shared-receiver heuristic still excludes Object. Typed
+`FUniversalVariable.Copy` and `XmlWriterSettings.Clone` now render
+`this.MemberwiseClone()`; the untyped `SchemaCollectionCompiler` site
+keeps its marker.
+
+Validation: 969 full-suite tests pass; compileall passes. A strict
+`Assembly-CSharp,System.Xml` scratch build lifted 13,204 bodies with
+0 failures / 0 structured fallbacks / 0 type-emission failures;
+1,048 files have 0 unbalanced braces and parse 0/0/0. In those
+assemblies, shared markers fell 2,195 → 2,174 with zero per-file
+increases. `final_out/` remains the r5 promoted reference.
+
 ## Current work: shared/indirect disproofs + measurements (2026-09-24, DOCUMENTED)
 
 Subagent census follow-ups that disproved (with native/metadata

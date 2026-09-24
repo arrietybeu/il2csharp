@@ -859,6 +859,44 @@ class _CallsMixin:
             chain.discard(object_td)
         return chain
 
+    def _shared_object_receiver_target(self, cands, recv):
+        """Resolve Object's method only when every other owner is excluded.
+
+        The broad receiver heuristic omits Object because it would make an
+        unrelated typed receiver look like a match. Here the full candidate
+        set is checked: each owner has the same parameterless instance ABI,
+        and exactly one belongs to the receiver's complete base chain.
+        """
+        if recv is None or recv._unk or recv.ty is None or not cands:
+            return None
+        if (recv.ty[1] >> 29) & 1 or self.il._type_enum(recv.ty) != 0x12:
+            return None
+        td = self._td_of(recv.ty)
+        find_object = getattr(self.il, '_system_object_td', None)
+        object_td = find_object() if find_object is not None else None
+        if td is None or object_td is None or td == object_td:
+            return None
+        chain = set(self.il.base_chain_tds(td))
+        if object_td not in chain:
+            return None
+        hits = []
+        for kind, mi in cands:
+            if kind != 'method' or not 0 <= mi < len(self.meta.methods):
+                return None
+            method = self.meta.methods[mi]
+            if method.is_static or method.param_count != 0 or (
+                    method.generic_container != -1):
+                return None
+            if not 0 <= method.return_type < len(self.il.types):
+                return None
+            if self.il.returns_sret(self.il.types[method.return_type]):
+                return None
+            if method.declaring in chain:
+                hits.append((kind, mi))
+        if len(hits) == 1 and self.meta.methods[hits[0][1]].declaring == object_td:
+            return hits[0]
+        return None
+
     def _array_receiver_td(self, ty):
         """System.Array typedef for an SZARRAY/ARRAY receiver type.
 
@@ -1590,7 +1628,9 @@ class _CallsMixin:
                 name = '%s%s.%s' % (ns2, t2.name,
                                      m2.name.lstrip('.').replace('|', '_').replace('@', '_'))
             else:
-                info = self._shared_static_arg_target(cands, arg_exprs)
+                info = self._shared_object_receiver_target(cands, recv)
+                if info is None:
+                    info = self._shared_static_arg_target(cands, arg_exprs)
                 if info is not None:
                     name = self._info_name(info)
         # Fully shared generic bodies: the address may carry one registered

@@ -44,3 +44,14 @@ def test_delegate_array_clones_through_array(game_decompiler):
 def test_same_typedef_string_twins_stay_shared(game_decompiler):
     text = lift_text(game_decompiler, 144, 'ReadReference', '0x181ae3120')
     assert text.count('sub_181af7520/*shared body, 2 candidates*/') == 5
+
+
+def test_unrelated_receiver_proves_object_memberwise_clone(game_decompiler):
+    text = lift_text(game_decompiler, 28861, 'Copy', '0x1806257b0')
+    assert 'this.MemberwiseClone()' in text
+    assert 'sub_181cf6c90/*shared body' not in text
+
+
+def test_second_unrelated_receiver_proves_object_memberwise_clone(game_decompiler):
+    text = lift_text(game_decompiler, 37793, 'Clone', '0x1823366b0')
+    assert 'this.MemberwiseClone()' in text
