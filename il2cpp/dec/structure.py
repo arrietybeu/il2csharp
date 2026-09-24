@@ -185,6 +185,11 @@ class _StructureMixin:
         # post-render shapes. Render preserves statement order, so dropping
         # a pure unread line cannot reorder or erase any side effect.
         rendered = self._drop_dead_locals(rendered)
+        # dead `unknown` stores overwritten next: the flow-insensitive
+        # drop above keeps any temp read later, so an overwritten
+        # first definition survives; this folds exactly those pairs
+        # (adjacent overwrite, pure unknown RHS, no use between).
+        rendered = self._drop_dead_unknown_store(rendered)
         return self._boxed_bool_null_fold(
             self._semantic_local_names(rendered, m))
 

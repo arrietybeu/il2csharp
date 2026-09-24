@@ -1,5 +1,33 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: dead-unknown stores + inline-typeof dispatch (2026-09-24, LANDED)
+
+Two subagent-triaged slices from the shared/indirect/unknown census
+(18,889 shared / 6,262 indirect / ~13.1k unknown). (A) Adjacent
+`LHS = unknown;` overwritten by the next statement folds away
+(`_drop_dead_unknown_store`, after the fix-99 DCE rerun): bare/index-
+slot lines drop, plain-typed decls strip to `Type x;`; labels, `==`,
+calls/`new` in the destination, `var`/`ref`/keyword decls, fields, and
+second-RHS reads of the destination all decline. Ground truth:
+LagCompensationUtils 63027 twins, RaycastModifier 105455 strip + use
+survival, GraphCollision pointer slot honestly declines (reassign is 4
+stmts away, not adjacent). (B) Interface dispatch with inline
+`typeof(IFace)` in the scan-loop comparator (`_itf_inline_typeof`,
+dual agreement with the slot trail token's declared type; the trail
+token is corroboration only, never rendered; `typeof(X).Member` static
+access never counts as a scan comparison). Ground truth:
+EndlessGenerationManager 25132 `values.GetEnumerator()`.
+
+Evidence: full strict rebuild r6_out1 (11,183 files / 114,458 bodies,
+0 failed / 0 fallbacks, brace 0, parse 0/0/0): 124 files differ --
+112 dispatch resolutions (`get_Item`/`TryGetValue`/`Equals`/`Compare`/
+`MoveNext`/etc. on named receivers; NetworkRunner/ObiSolver/Path keep
+markers for lack of agreement) and 11 dead-store folds plus 1 mixed,
+all hand-sampled correct; indirect 6,262 → 6,052 (−50 files), unknown
+13,097 → 13,063, shared/mem/goto/`?addr` flat, zero per-file marker
+increases. Tests: +4 portable +3 game; focused 28 passed; full suite
+964 passed / 0 failed. No goldens changed; `final_out/` holds r5.
+
 ## Current work: promotion r5 (2026-09-24, PROMOTED)
 
 User-authorized (standing permission for regen/promotion whenever

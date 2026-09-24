@@ -897,6 +897,66 @@ class _FlowMixin:
             i = end
         return out
 
+    @staticmethod
+    def _itf_inline_typeof(lines, slot_line, call_i):
+        """typeof(IFace) text for a scan loop without a typeof decl.
+
+        Some interfaceOffsets searches compare against an inline
+        typeof(IFace) in the loop comparator instead of declaring
+        Type t = typeof(IFace). Accept it only with dual agreement:
+        exactly one distinct inline interface in a loop/comparison
+        line within the search window, AND the slot line trailing
+        token must carry a typed declaration naming that same
+        interface (a bare reassignment in between voids it). The
+        trail token is corroboration only -- it is never rendered
+        (the receiver stays the call's first argument; substituting
+        it would guess object identity). Ground truth:
+        A `typeof(X).Member` occurrence (static access, e.g. the
+        class-init `typeof(X).initialized` guard) is never a scan
+        comparison and is skipped where found.
+        EndlessGenerationManager 25132 (IEnumerable<string>
+        comparator + IEnumerable_1<string> enumerable12 decl).
+        Anything else keeps the honest indirect marker.
+        """
+        try:
+            slot_txt = lines[slot_line]
+        except Exception:
+            return None
+        tm = re.search(r'\+\s*0x138\s*\+\s*(\w+)\s*;\s*$', slot_txt)
+        if tm is None:
+            return None
+        trail = tm.group(1)
+        found = []
+        for j in range(max(0, slot_line - 40), min(len(lines), call_i + 1)):
+            s = lines[j].strip()
+            if _ITF_TYPEOF_RX.match(s):
+                continue
+            for mm in re.finditer(r'typeof\s*\(([^()]*)\)', s):
+                if mm.end() < len(s) and s[mm.end()] == '.':
+                    continue
+                rest = s[:mm.start()] + s[mm.end():]
+                if re.match(r'\s*(for|if|while)\b', s) or '==' in rest or '!=' in rest:
+                    t = mm.group(1).strip()
+                    if t and t not in found:
+                        found.append(t)
+        if len(found) != 1:
+            return None
+        iface = found[0]
+        inw = re.sub(r'\s+', '', iface)
+        bare = re.compile(r'^\s*' + re.escape(trail) + r'\s*=(?!=)')
+        for j in range(slot_line - 1, max(-1, slot_line - 60), -1):
+            ln = lines[j]
+            if bare.match(ln):
+                return None
+            dm = re.match(r'^\s*([A-Za-z_][\w.<>,\s]*?)\s*' + re.escape(trail) + r'\s*=\s*[^=]', ln)
+            if dm is None:
+                continue
+            dn = re.sub(r'\s+', '', dm.group(1))
+            if dn == inw or dn.endswith('.' + inw) or inw.endswith('.' + dn):
+                return iface
+            return None
+        return None
+
     def _name_interface_dispatch(self, lines: List[str]) -> List[str]:
         """todo lead #3: name an interface-dispatch call il2cpp made
         through its runtime interfaceOffsets search (typeof(IFace) +
@@ -951,6 +1011,10 @@ class _FlowMixin:
                 if any(ref.search(out[k2]) for k2 in range(j + 1, i + 1)):
                     iface_text = txt
                 break
+            if iface_text is None:
+                # No Type t = typeof(...) decl in range: accept an
+                # inline comparator typeof with dual agreement (above).
+                iface_text = self._itf_inline_typeof(out, slot_line, i)
             if iface_text is None:
                 continue
             mi = il.interface_method_by_offset(iface_text, rel)

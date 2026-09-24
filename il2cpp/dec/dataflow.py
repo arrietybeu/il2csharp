@@ -584,6 +584,94 @@ class _DataflowMixin:
             lines = [st for i, st in enumerate(lines) if i not in drop]
         return lines
 
+    _DU_KEYWORDS = frozenset((
+        'var', 'ref', 'in', 'out', 'scoped', 'readonly', 'const',
+        'fixed', 'volatile', 'else', 'if', 'for', 'foreach', 'while',
+        'do', 'switch', 'using', 'lock', 'try', 'return', 'throw',
+        'goto', 'case', 'default', 'new'))
+
+    def _dead_unknown_head(self, l1, l2):
+        """Fold an adjacent dead `unknown` store, or None.
+
+        Returns ('drop',) to delete the first line, ('strip', text)
+        to replace it with a bare declaration, or None to keep both.
+        Ground truth: LagCompensationUtils 63027
+        (`vector32 = unknown;` + `vector32 = 0;`, ~16 twins) and
+        GraphCollision 105032 (pointer-slot twin). An adjacent
+        overwrite with no line between is unconditionally sequenced,
+        so the first store is dead iff its right side is
+        side-effect-free (bare `unknown` always is) and the second
+        right side never reads the destination. Labels, `==`, calls
+        in the destination, and `var`/`ref`/keyword declarations
+        all decline; fields were never evidenced, so only bare,
+        index/slot, and plain-typed locals qualify. Never raises.
+        """
+        try:
+            return self._dead_unknown_head_inner(l1, l2)
+        except Exception:
+            return None
+
+    def _dead_unknown_head_inner(self, l1, l2):
+        m1 = re.match(r'^(\s*)(.+?)(?:(?<![\w=!<>])=(?!=))(.+?);\s*$', l1)
+        if m1 is None:
+            return None
+        ind, lhs, rhs = m1.group(1), m1.group(2).strip(), m1.group(3).strip()
+        if rhs != 'unknown' or ':' in lhs:
+            return None
+        if re.search(r'\w\s*\(', lhs) or re.search(r'\bnew\b', lhs):
+            return None
+        if re.fullmatch(r'[A-Za-z_]\w*', lhs):
+            mode, key, head = 'drop', lhs, None
+        elif lhs.endswith(']') and '[' in lhs:
+            mode, key, head = 'drop', lhs, None
+        else:
+            dm = re.match(r'^(.+?)\s+([A-Za-z_]\w*)$', lhs)
+            if dm is None:
+                return None
+            if not dm.group(1).strip() or dm.group(1).strip().split()[0] in self._DU_KEYWORDS:
+                return None
+            mode, key = 'strip', dm.group(2)
+            head = ind + dm.group(1).strip() + ' ' + dm.group(2) + ';'
+        m2 = re.match(r'^(\s*)(.+?)(?:(?<![\w=!<>])=(?!=))(.+?);\s*$', l2)
+        if m2 is None:
+            return None
+        lhs2, rhs2 = m2.group(2).strip(), m2.group(3).strip()
+        if mode == 'strip':
+            if lhs2 != key:
+                return None
+        elif lhs2 != key:
+            return None
+        toks_lhs = set(re.findall(r'[A-Za-z_]\w*', lhs))
+        toks_rhs = set(re.findall(r'[A-Za-z_]\w*', rhs2))
+        if toks_lhs & toks_rhs:
+            return None
+        if mode == 'drop':
+            return ('drop',)
+        return ('strip', head)
+
+    def _drop_dead_unknown_store(self, lines: List[str]) -> List[str]:
+        """Drop `LHS = unknown;` overwritten by the next statement.
+
+        Runs on rendered lines just before `_semantic_local_names`,
+        after every restructuring pass, so the adjacency it sees is
+        final; the flow-insensitive `_drop_dead_locals` cannot drop
+        these (the destination is read later), and this pass cannot
+        disturb it (one deleted pure line, zero uses between).
+        """
+        out = []
+        i, n = 0, len(lines)
+        while i < n:
+            if i + 1 < n:
+                r = self._dead_unknown_head(lines[i], lines[i + 1])
+                if r is not None:
+                    if r[0] == 'strip':
+                        out.append(r[1])
+                    i += 1
+                    continue
+            out.append(lines[i])
+            i += 1
+        return out
+
     # ------------------------------------------------------------------
     _CP_REFOUT_RX = re.compile(
         r'(?:(?:\b(?:ref|out))\s+|&)(obj\d+|num\d+|flag\d+|real\d+|v\d+|t\d+)')
