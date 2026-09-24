@@ -1,5 +1,17 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: shared stubs show SOME code (2026-09-24, LANDED)
+
+Unresolved `__SharedBodyStubs` entries listed only the owner note plus a
+throwing body -- no code. Each stub now also lists the address's first
+native instructions (up to 16, stopping at the first ret/int3/ud2) as
+`//` comments: real bytes, no managed owner selected. The signature,
+throw, and owner note are unchanged, so call sites and runtime honesty
+are byte-identical; failures decline to the old throw-only shape.
+Probed ground truth: 0x18063ac90 shows `mov rax,rcx; ret` (the identity
+leaf), 0x1825b1150 its 7-insn null-check fallback, 0x180506120 a bare
+`ret 0`. Tests: +5 portable; full suite 1009 passed / 0 failed.
+
 ## Current work: identical-render shared collapse (2026-09-24, LANDED)
 
 Method-only twins that render identically collapse to the first row:
