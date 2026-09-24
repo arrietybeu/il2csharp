@@ -211,7 +211,10 @@ values and create runtime corruption.
 - `goto`: current scan 8,707/903; compiles and represents unresolved
   unstructured control flow. Emitter/structured pipeline is under
   `il2cpp/dec/structure.py`, `flow.py`, and `emit.py`.
-- `/* nothing */`: 63 occurrences in one file; intentional empty bodies.
+- `/* nothing */`: 63 occurrences in one file (`Arm.cs` Neon forwarders);
+  fresh lifts now render all 63 as `return Neon.<s8-variant>(args);`
+  (noreturn-shared forwarder proof, 2026-09-24). Promoted `final_out/`
+  still shows the old bodies until a rebuild.
 - `__SharedBodyStubs`: throwing stubs are intentional behavior for unresolved
   runtime targets; see `il2cpp/emitter.py` stub generation.
 - `?addr`: current promoted tree has only 2 occurrences in 2 files; nearly

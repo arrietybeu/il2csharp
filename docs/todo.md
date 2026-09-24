@@ -1,5 +1,25 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: noreturn-shared forwarder returns (2026-09-24, LANDED)
+
+The 63 `/* nothing */` bodies (all `Neon` in `Arm.cs`) were shared
+`call; int3` forwarders (`vmvn/vand/vorn` families) whose single proven
+target throws `NotImplementedException` on x64. `_dead_shared_forwarder`
+dropped the pending call; `_dead_shared_forwarder_return` now renders
+`return Target(args);` when the target is one readable MethodDef with
+the caller's exact return tuple (both non-void) and the call text is
+marker-free -- MSVC's own abort is the noreturn evidence, so the tail
+return compiles and names only proven identities. Everything else
+declines to the old drop.
+
+Evidence: fresh lifts of the whole 2,407-method Neon type show 0
+`/* nothing */` and 63 `return Neon.<s8-variant>(args);` (e.g. 107037
+`return Neon.vmvn_s8(a0);`, 107123 `return Neon.vorn_s8(a0, a1);`).
+Corpus shape census: 70 methods match, all Neon, all return-equal, so
+the blast radius is one family. Tests: +2 portable (fire + 7 declines)
++2 game; full suite 1013 passed / 0 failed after one reviewed golden
+update (107123 only). `final_out/` still holds r7 (unpromoted).
+
 ## Current work: shared stubs show SOME code (2026-09-24, LANDED)
 
 Unresolved `__SharedBodyStubs` entries listed only the owner note plus a

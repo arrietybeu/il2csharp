@@ -247,6 +247,40 @@ class _CallsMixin:
             return False
         return True
 
+    def _dead_shared_forwarder_return(self, target, ins, call, rty):
+        """`return <call>;` for a noreturn-shared forwarder, else None.
+
+        Same shape `_dead_shared_forwarder` declines (shared caller body,
+        exactly one target owner, abort right after the call): the call is
+        the whole reachable behavior and MSVC's own `call; int3/ud2` is
+        the noreturn evidence, so spelling it as a tail `return` compiles
+        and names only proven identities. Fires only when the target is
+        one readable MethodDef whose exact return tuple equals the
+        caller's (so `return` type-checks), both non-void, and the call
+        text carries no honesty marker. Everything else declines to the
+        old drop."""
+        if not call or '/*' in call or rty is None:
+            return None
+        if not self._dead_shared_forwarder(target, ins):
+            return None
+        try:
+            cands = (getattr(self.il, 'addr_candidates', None) or {}).get(target) or []
+            if len(cands) != 1 or cands[0][0] != 'method':
+                return None
+            tmi = cands[0][1]
+            m = getattr(self, '_current_method', None)
+            if m is None or not 0 <= tmi < len(self.meta.methods):
+                return None
+            if self.il._type_enum(rty) == 0x01:
+                return None
+            crt = self.il.types[m.return_type] \
+                if 0 <= m.return_type < len(self.il.types) else None
+            if crt is None or crt != rty:
+                return None
+            return 'return %s;' % call
+        except Exception:
+            return None
+
     # fix 93: the noreturn raisers the discovery pass names from the
     # exception-class string their wrapper chain lea's
     # (`raise_IndexOutOfRangeException`,
@@ -2630,6 +2664,9 @@ class _CallsMixin:
                     self.meta.methods[mi].name.rpartition('.')[2].startswith('get_') \
                     and len(call) >= _USE_BIND_MIN:
                 if self._dead_shared_forwarder(target, ins):
+                    ret = self._dead_shared_forwarder_return(target, ins, call, rty)
+                    if ret is not None:
+                        self.emit(ins.ip, ret, asm)
                     return
                 pc = getattr(self, '_pending_calls', None)
                 if pc is None:

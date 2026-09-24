@@ -188,8 +188,13 @@ fix-123 in `validation_reports/review123_*`.
   consensus typing never resolves identity. An exact all-candidate semantic
   operation may render without selecting an owner: the System.String
   Equals/op_Equality pair shares one body and one `(string,string)->bool`
-  signature, so typed string operands can render `==`. Unknown operand
-  types and effectful extra registers still decline.
+   signature, so typed string operands can render `==`. Unknown operand
+   types and effectful extra registers still decline.
+- A shared `call; int3/ud2` forwarder renders `return Target(args)` only
+  when the caller body is multi-owner, the target is exactly one readable
+  MethodDef, the call text is marker-free, and the caller's exact return
+  tuple equals the target's (both non-void). MSVC's own abort is the
+  noreturn evidence; anything else keeps the honest `/* nothing */` drop.
 - Array-typed receivers resolve through the System.Array typedef
   (`_system_array_td`, unique-or-decline like `_system_object_td`):
   arrays have no subclasses and Array owns their instance dispatch, so
