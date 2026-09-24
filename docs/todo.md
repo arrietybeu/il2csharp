@@ -1,5 +1,34 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: shared-residual audit (2026-09-24, DOCUMENTED)
+
+Why the 16,919 remaining shared-body markers stay (r7 tree, per-VA
+metadata join over all 1,011 bodies with markers). Partitions below
+overlap on the generic dimension; treats are per bucket:
+- method+generic mixes: 5,676 sites / 137 VAs need instantiation
+  proof (e.g. `BindingsAllocator.GetNativeOwnedDataPointer` sharing
+  one body with 15 `ConvertExistingDataToNativeArray` specs) --
+  synthetic-table program, the largest bucket.
+- Same-typedef multi-signature: 5,432 / 337. Identical twins
+  (F1/F2/F3) are permanently unresolvable; overloads need
+  conversion-witness or exact-only arg-type elimination (future).
+- Multi-owner same method name: 2,752 / 155 (GetResult/get_IsCompleted/
+  get_Item/ToString pairs) -- return-type/use + static/instance
+  elimination is the next designed slice.
+- Multi-owner different names: 3,859 / 259, incl. mega-shared tiny
+  bodies -- owner proof at scale (field sidecar + use→def).
+- Static/instance mixes: 3,394 / 43 (ToString/op_Implicit 865 sites) --
+  static/instance + arity elimination with spray caveats (future).
+- Non-method (pure generic) addresses: 1,282 / 191 -- instantiation
+  proof, same program as the first bucket.
+- Identical full signatures: 200 / 25 -- same-render collapsing is a
+  possible micro-slice after per-row field audit.
+- Corrected mid-audit: an early "14 true-duplicate VAs" read was a
+  filter artifact (method rows only, hiding generic sharers); the full
+  map has ZERO exact-duplicate addresses, so a registration dedup was
+  prototyped and reverted before landing (no effect, no test could pin
+  it). Audit your tools, not just the tree.
+
 ## Current work: promotion r7 (2026-09-24, PROMOTED)
 
 User-authorized (promotion on call). Strict rebuild `r7_out1` from
