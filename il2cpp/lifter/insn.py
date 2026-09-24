@@ -95,6 +95,8 @@ class _InsnMixin:
                                 and self.meta.methods[c[1]].declaring in chain]
                         if len(hits) == 1:
                             info = hits[0]
+                        if info is None:
+                            info = self._shared_same_render_target(cands)
                 if info is None and not cands:
                     info = self.il.addr_to_method.get(t)
                 if info or self.bin.is_exec_va(t):

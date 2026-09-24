@@ -856,6 +856,54 @@ class _CallsMixin:
                 hits.append((kind, mi))
         return hits[0] if len(hits) == 1 else None
 
+    def _shared_same_render_target(self, cands):
+        """Collapse method-only twins that render identically.
+
+        When every candidate is a non-generic MethodDef with the same
+        rendered owner-qualified name, the same static/instance shape,
+        the same exact parameter types and the same return, the emitted
+        call text, arity trim and result type are identical no matter
+        which row is picked -- choosing the first is unobservable, not
+        a guess at identity. Constructors, generic methods, sret
+        returns and mixed generic specs all decline; anything else
+        keeps today's honest shared-body marker.
+        """
+        if not cands or len(cands) < 2:
+            return None
+        names = set()
+        sigs = set()
+        first = None
+        for kind, mi in cands:
+            if kind != 'method' or not 0 <= mi < len(self.meta.methods):
+                return None
+            m = self.meta.methods[mi]
+            if m.name in ('.ctor', '.cctor') or m.generic_container != -1:
+                return None
+            if not 0 <= m.declaring < len(self.meta.typedefs):
+                return None
+            if not 0 <= m.return_type < len(self.il.types):
+                return None
+            if self.il.returns_sret(self.il.types[m.return_type]):
+                return None
+            nm = self._info_name(('method', mi))
+            if nm is None:
+                return None
+            names.add(nm)
+            if len(names) > 1:
+                return None
+            try:
+                ptypes = tuple(p.type for p in self.meta.method_params(m))
+            except Exception:
+                return None
+            sigs.add((m.name, m.is_static, ptypes, m.return_type))
+            if len(sigs) > 1:
+                return None
+            if first is None:
+                first = ('method', mi)
+        if len(names) != 1 or len(sigs) != 1:
+            return None
+        return first
+
     def _shared_sret_receiver_target(self, cands, arg_exprs):
         """Prove the two-pointer Win64 shared-body family, never from RCX.
 
@@ -1915,6 +1963,8 @@ class _CallsMixin:
                     info = self._shared_static_arg_target(cands, arg_exprs)
                 if info is None:
                     info = self._shared_static_signature_target(cands, arg_exprs)
+                if info is None:
+                    info = self._shared_same_render_target(cands)
                 if info is not None:
                     name = self._info_name(info)
         # Fully shared generic bodies: the address may carry one registered

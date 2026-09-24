@@ -405,7 +405,7 @@ class _FlowMixin:
     _HASH_ARG_RX = re.compile(r'^(\w+)\s*,\s*(.+?)\s*$')
     _HASH_EQUALS_RX = re.compile(r'^(?:[\w.]*\.)?Equals$')
     _HASH_OPEQ_RX = re.compile(r'^(?:[\w.]*\.)?op_Equality$')
-    _HASH_NAME_RX = re.compile(r'^(?:[\w.]*\.)?ComputeStringHash$')
+    _HASH_NAME_RX = re.compile(r'^(?:[\w.<>]*\.)?ComputeStringHash$')
     _HASH_SUBVA_RX = re.compile(r'^sub_([0-9a-f]+)')
     _HASH_IF_RX = re.compile(r'^if \((\w+)\s*(<=|<|==|!=|>=|>)\s*(\d+)\s*\)$')
     _HASH_DECL_RX = re.compile(r'^(?:object|string) (\w+) = (.*?);$')

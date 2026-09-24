@@ -1,5 +1,30 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: identical-render shared collapse (2026-09-24, LANDED)
+
+Method-only twins that render identically collapse to the first row:
+same owner-qualified name, same static/instance shape, same exact
+parameter types, same return. Call text, arity trim and result type
+are identical either way, so the pick is unobservable, not an owner
+guess. Constructors, generic methods/specs and sret returns decline;
+everything else keeps the honest marker. Tails use the same proof
+(the tail path already collapsed identical renders via caller-return
+filtering; non-tails had no equivalent until now). The hash-name
+match also accepts `<PrivateImplementationDetails>.` owners so the
+resolved `ComputeStringHash` still feeds `switch(string)`.
+
+Evidence: 70 sites resolve (ComputeStringHash 33, HashHelpers.Combine
+28, Kernel.Multiply 6, Enumerator.Dispose 2, Locale.GetText 1);
+ValueStringBuilder .ctor 23 honestly retained (ctor decline).
+Ground truth: 24694 renders
+`uint num15 = <PrivateImplementationDetails>.ComputeStringHash(text1);`
+(switch gotos still decline, as triaged); 2991/2992 render only
+`System.Numerics.Hashing.HashHelpers.Combine` (tails already did);
+422/120851 render `Kernel.Multiply` / `Locale.GetText`. Tests: +7
+portable (fire + owner/sig/ctor/generic/sret/arity declines) +3 game;
+full suite 1004 passed / 0 failed. No goldens changed; `final_out/`
+holds r7.
+
 ## Current work: shared-residual audit (2026-09-24, DOCUMENTED)
 
 Why the 16,919 remaining shared-body markers stay (r7 tree, per-VA
