@@ -1,5 +1,24 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: shared static signature proof (2026-09-24, VALIDATED)
+
+A common non-generic static ABI plus call-site parameter types can name a
+shared native address when exactly one metadata owner accepts every known
+argument. Class compatibility includes ancestors; an `object` or interface
+parameter blocks the proof because a more specific observed type could
+also bind it. Pointer/byref, sret, mixed arity, unsupported argument
+types, stale typed registers beyond the declared arity, and duplicate
+signatures decline. This names two `Type.op_Inequality` calls in
+`DateTimeFormat.ExpandPredefinedFormat` (MethodDef 1745) while its two
+`TimeSpan` sites keep markers: one operand is exposed only as `_ticks`.
+The `Object.Equals` / reflection `op_Equality` family stays ambiguous.
+
+Evidence: 986 full-suite tests pass; strict mscorlib scratch build
+1,350 files / 10,715 bodies, 0 failures / 0 fallbacks / 0 type-emission
+failures, brace 0, parse 0/0/0. Against promoted r5, mscorlib markers
+fell 1,374 → 1,301 with no per-file increases; that comparison includes
+the preceding unpromoted receiver fixes. `final_out/` remains unchanged.
+
 ## Current work: exact value-type shared receivers (2026-09-24, VALIDATED)
 
 An address-of stack slot can identify a shared instance getter when its

@@ -768,6 +768,94 @@ class _CallsMixin:
                 hits.append(('method', mi))
         return hits[0] if len(hits) == 1 else None
 
+    def _shared_static_signature_target(self, cands, arg_exprs):
+        """Select one static owner from exact typed GPR arguments.
+
+        Only a common, non-sret, non-generic ABI is considered. Unknown
+        operands give no evidence; known operands must all fit a candidate's
+        declared parameter types. Class arguments may match ancestors, so a
+        derived operand cannot silently prefer an overload on that class.
+        """
+        if not cands or not arg_exprs:
+            return None
+        evidence = []
+        strong = False
+        for i, expr in enumerate(arg_exprs[:4]):
+            if expr is None or expr._unk or expr.ty is None \
+                    or not expr.text or expr.text in ('0', 'null', '_'):
+                continue
+            if expr.kind in ('ptr', 'klass', 'usage') \
+                    or expr.text.startswith('&') or (expr.ty[1] >> 29) & 1:
+                return None
+            te = self.il._type_enum(expr.ty)
+            if te not in (0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                          0x08, 0x09, 0x0a, 0x0b, 0x0e, 0x11, 0x12,
+                          0x18, 0x19):
+                return None
+            evidence.append((i, expr.ty))
+            strong |= te in (0x0e, 0x11, 0x12)
+        if not strong:
+            return None
+        methods = []
+        arity = None
+        for kind, mi in cands:
+            if kind != 'method' or not 0 <= mi < len(self.meta.methods):
+                return None
+            method = self.meta.methods[mi]
+            if not method.is_static or method.generic_container != -1 \
+                    or not 1 <= method.param_count <= 4 \
+                    or not 0 <= method.return_type < len(self.il.types) \
+                    or self.il.returns_sret(self.il.types[method.return_type]):
+                return None
+            if arity is None:
+                arity = method.param_count
+            elif arity != method.param_count:
+                return None
+            params = list(self.meta.method_params(method))
+            if len(params) != arity:
+                return None
+            ptys = []
+            for p in params:
+                if not 0 <= p.type < len(self.il.types):
+                    return None
+                pt = self.il.types[p.type]
+                pte = self.il._type_enum(pt)
+                if (pt[1] >> 29) & 1 or pte in (
+                        0x0f, 0x10, 0x0c, 0x0d, 0x13, 0x15, 0x1c):
+                    return None
+                # Object accepts any reference (and boxed values), while
+                # interface compatibility needs the implemented-interface
+                # table. Neither may be excluded by an exact argument type.
+                if pte == 0x12:
+                    tds = getattr(self.meta, 'typedefs', ())
+                    find_object = getattr(self.il, '_system_object_td', None)
+                    object_td = find_object() if find_object is not None else None
+                    if not 0 <= pt[0] < len(tds) \
+                            or getattr(tds[pt[0]], 'flags', 0) & 0x20 \
+                            or pt[0] == object_td:
+                        return None
+                ptys.append(pt)
+            methods.append((kind, mi, ptys))
+        if any(i >= arity for i, _ in evidence):
+            return None
+        hits = []
+        for kind, mi, ptys in methods:
+            matches = True
+            for i, actual in evidence:
+                expected = ptys[i]
+                ate, pte = self.il._type_enum(actual), self.il._type_enum(expected)
+                if ate == pte and actual[0] == expected[0]:
+                    continue
+                if ate == 0x12 and pte == 0x12:
+                    chain = self.il.base_chain_tds(actual[0])
+                    if expected[0] in chain:
+                        continue
+                matches = False
+                break
+            if matches:
+                hits.append((kind, mi))
+        return hits[0] if len(hits) == 1 else None
+
     def _shared_sret_receiver_target(self, cands, arg_exprs):
         """Prove the two-pointer Win64 shared-body family, never from RCX.
 
@@ -1685,6 +1773,8 @@ class _CallsMixin:
                     info = self._shared_value_receiver_target(cands, recv)
                 if info is None:
                     info = self._shared_static_arg_target(cands, arg_exprs)
+                if info is None:
+                    info = self._shared_static_signature_target(cands, arg_exprs)
                 if info is not None:
                     name = self._info_name(info)
         # Fully shared generic bodies: the address may carry one registered
