@@ -22,23 +22,27 @@ via System.Array, rename barrier + param exclusion, interface dispatch
 naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
 direct calls), each decline-by-default with portable + game pins; plus
 documented disproofs (hinted receivers, ?addr tightening,
-receiver-driven generics). 932 tests pass (782 portable + 150 game),
+receiver-driven generics). 1013 tests pass (836 portable + 177 game),
 suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
 both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
 and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
-11,276 paths, aggregate `c0ee1b78…1236`). The `bckups/` copies of prior
+11,276 paths, aggregate `c0ee1b78…1236`). Promotions since (r4d, r5, r7,
+r8 Assembly-CSharp) supersede the tree; see `docs/todo.md` Current work
+and `validation_reports/promotion_r*.json`. The `bckups/` copies of prior
 promoted trees were deleted 2026-09-19 per user call — GitHub is now the
 history authority; any prior tree rebuilds from git history. See `docs/todo.md` for exact evidence and the
 remaining compiler backlog.
 
 Read `docs/reviews/REVIEW84.md`–`REVIEW87.md`, `docs/todo.md`'s Current work section, and
 `docs/archive/reviews-log.md` section 0bf first. `final_out/` is the complete strict-built
-r4c output promoted 2026-09-23 (11,183 `.cs` files / 11,276 paths, aggregate `c0ee1b78…1236`),
+tree (r7 full plus r8 Assembly-CSharp, both 2026-09-24; the r4c aggregate below is history),
 not the Review 84 file set alone, b42/b76, or a partial candidate. Historical paragraphs below retain
 the reasoning behind older changes; their old "current" labels are not release authority.
 `validation_reports/review84/summary.json` (baseline) plus `validation_reports/followups_sweep.json`,
 `followups_parse.json`, `followups_promotion_verification.json` (fix-123 era, frozen)
 and `validation_reports/promotion_r4a.json` + `promotion_r4c.json`
++ `promotion_r4d.json` + `promotion_r5.json` + `promotion_r7.json` +
+`promotion_r8.json` (r8 scoped to Assembly-CSharp)
 are authoritative for the promoted tree. Fix-114 evidence lives in
 `validation_reports/review114_*`; fix-115 gates, probe, and promotion record
 in `validation_reports/review115_*`; fix-116 in `validation_reports/review116_*`;
@@ -227,7 +231,7 @@ fix-123 in `validation_reports/review123_*`.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test
-(`tests/test_source_format.py`) enforces this contract. **932 tests pass** (782 portable + 150 game;
+(`tests/test_source_format.py`) enforces this contract. **1013 tests pass** (836 portable + 177 game;
 64 golden snapshots, all green).
 `goldens_review77.json`, `goldens_review79.json`,
 `goldens_review80.json`, `goldens_review82.json`, and `goldens_review83.json` are

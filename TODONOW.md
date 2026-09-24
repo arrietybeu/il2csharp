@@ -567,3 +567,19 @@ suite was interrupted near 69% and has no final result. Resume from
 `docs/handoff-2026-09-23.md` before landing it. The unregistered
 `sub_1804cdb00` audio scalar result remains open; do not guess its
 identity or regenerate the promoted output.
+
+## Addendum — 2026-09-24, stub code + forwarder returns + r8 ACS
+
+Three source changes landed since (all committed and pushed): shared
+stubs list their address's first native instructions as comments (throw
+preserved), identical-render method twins collapse to the first row (70
+sites), and noreturn-shared `call; int3` forwarders render
+`return Target(args)` (all 63 `/* nothing */` in `Arm.cs` Neon).
+`final_out/` Assembly-CSharp promoted to r8 (4 files differ vs r7:
+ComputeStringHash x3 + stub comments; evidence in
+`validation_reports/promotion_r8.json`); rest of tree holds r7. Full
+suite: 1013 passed / 0 failed (836 portable + 177 game). Open, by
+payoff: same-name multi-owner receiver pick (~1.5k sites), static/
+instance+arity ToString/op_Implicit (865 sites, 1 VA), constant-zero
+fold (239 sites, 2 VAs). Census table above still scans the r4c/r7
+eras; fresh counts live in `docs/todo.md` Current work.

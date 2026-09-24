@@ -62,9 +62,8 @@ $env:PYTHONPATH = '<repo>;tools'
 Goldens key on MethodDef row (`mi`), never VA (shared bodies alias).
 
 **Portable tests:** `python -m pytest -q -m "not game" --disable-warnings`
-(718 pass). **Full suite:** `python -m pytest -q` (~2 min, needs fixture
-env above; game goldens fail only on known-triaged entries — see
-`docs/todo.md`; any NEW failure is yours).
+(836 pass). **Full suite:** `python -m pytest -q` (~3.5 min, needs fixture
+env above; suite is fully green — any failure is yours).
 
 **Rebuild a tree:** `python il2csharp.py testgame -o <name_out1> [--only
 Assembly-CSharp]`. Name output `*_out1/` (git-ignored). Gate with
@@ -92,12 +91,14 @@ unproven shape keeps today's spelling; raw is always honest.
   without an explicit user call. Stash-prove-clean before attributing a
   break to your change.
 
-## Current state (2026-09-20, `main` clean)
+## Current state (2026-09-24, `main` clean)
 
-Rounds 3b–3d landed unpromoted: SIMD twins (70050 golden-exact, 107123
-`/* nothing */`), `switch(string)` phase 1 (25293/24765/twins fold,
-24694 gotos decline), event `+=`/`-=`, native `.Count`, exact `<T>`,
-ternary materialization. Full suite: 822 passed / 22 failed (all
-triaged). Open: per-arm Color (needs use→def machinery), Navigation
-merge-side facts (two approaches disproved), 22 golden regens +
-promotion (user call).
+Landed since: identical-render shared collapse (70 sites), shared-stub
+native disassembly comments, noreturn-shared forwarder returns (63
+Neon `/* nothing */` -> `return Target(args)`), r8 Assembly-CSharp
+promotion (ComputeStringHash x3 + stub comments; rest of tree at r7).
+Full suite: 1013 passed / 0 failed (836 portable + 177 game). Open, by
+payoff: same-name multi-owner receiver pick (~1.5k sites: GetResult /
+get_IsCompleted / floatN get_Item), ToString/op_Implicit static+arity
+(865 sites, 1 VA, spray caveats need a probe), constant-zero fold (239
+sites, 2 VAs).
