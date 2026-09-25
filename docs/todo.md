@@ -1,5 +1,45 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: constant-zero fold DISPROVED (2026-09-25, DOCUMENTED)
+
+Subagent census + independent ground-truth probes closed the
+"constant-zero fold (239 sites, 2 VAs)" as a fold slice -- no source
+change, markers stay honest.
+
+The 2 VAs (scan counts sum exactly 216 + 23 = 239; claimed N ==
+method+generic on both):
+- `0x180625830` (216 sites): `xor al,al; ret`. 459 method owners
+  (`bool` 456 + 3 structs) + 3,075 generic sharers. `xor al,al`
+  zeroes only the low byte -- and struct owners share the address
+  (probed mi 5208 `Task.Yield->YieldAwaitable` at the same VA), so
+  multi-byte readers take entry-stale upper bits: not even
+  value-uniform, disproved at native level before typing.
+- `0x180507630` (23 sites): `xor eax,eax; ret`. Value-uniform zero
+  (zero-extends full rax), but 304 owners across `int`/`string`/
+  `XmlSchema`/`object`/`Material`/`long`/`Nullable<int>`/enums/arrays
+  + 17 generic sharers -- no single C# literal spells zero across
+  them; generic gate blocks regardless.
+
+Call-site shapes (probed, not just scanned): `0x180625830` fires only
+in `MoveNext()` triple-patterns with `object` results
+(`object obj25 = sub_180625830/*shared body, 3534 candidates*/(0)`,
+forwarded then `== null` null-tested) -- folding to `false`/`0`
+mistypes the box, guesses the null test, and corrupts awaiter slots.
+`0x180507630` sites are heterogeneous reference casts
+(`(Material)sub(...)`, `return sub(...)` as reference) where `0`
+does not compile; only `null` would work, needing owner proof.
+Neither VA is the bare-`ret`, identity-leaf, string-fallback, or
+struct-buffer zero nearby (`0x180506120`/`0x18063ac90`/
+`0x1825b1150`/`0x180d931a0` all disjoint, checked).
+
+This also confronts the unknown-never-becomes-zero guardrail
+(`test_recovery_completion.py:490`): a fold here would rewrite
+untyped `object`/`unknown` text, exactly what the pin forbids.
+Verdict: decline both VAs. Next payoff: the ToString/op_Implicit
+static+arity spray probe (865 sites, 1 VA `0x1825b1150`, disjoint).
+No goldens moved; suite untouched (no source change; portable
+836/0 re-verified green this session).
+
 ## Current work: same-name receiver pick DISPROVED (2026-09-25, DOCUMENTED)
 
 Subagent census + ground-truth probes closed the multi-owner same-name
