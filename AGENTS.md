@@ -91,14 +91,18 @@ unproven shape keeps today's spelling; raw is always honest.
   without an explicit user call. Stash-prove-clean before attributing a
   break to your change.
 
-## Current state (2026-09-24, `main` clean)
+## Current state (2026-09-25, `main` clean)
 
 Landed since: identical-render shared collapse (70 sites), shared-stub
 native disassembly comments, noreturn-shared forwarder returns (63
 Neon `/* nothing */` -> `return Target(args)`), r8 Assembly-CSharp
 promotion (ComputeStringHash x3 + stub comments; rest of tree at r7).
-Full suite: 1013 passed / 0 failed (836 portable + 177 game). Open, by
-payoff: same-name multi-owner receiver pick (~1.5k sites: GetResult /
-get_IsCompleted / floatN get_Item), ToString/op_Implicit static+arity
-(865 sites, 1 VA, spray caveats need a probe), constant-zero fold (239
-sites, 2 VAs).
+Documented since (no source change, markers stay honest): same-name
+receiver-pick disproof (~1.9k sites need sidecar, not sig
+elimination), constant-zero fold disproof (239 sites, 2 VAs).
+Full suite: 1013 passed / 0 failed (836 portable + 177 game; portable
+836/0 re-verified this session). Open, by payoff: ToString/op_Implicit
+spray probe (865 sites, 1 VA `0x1825b1150`), `op_Implicit`
+return-type subset (tens of sites), GetHashCode mixed VA (10 sites),
+Cpp2IL declaration cross-check (unfiled); then the sidecar program and
+a full-tree r8-equivalent promotion (user call).

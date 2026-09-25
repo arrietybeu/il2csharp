@@ -1,5 +1,31 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Open work index (2026-09-25; history below untouched)
+
+By payoff. `## Current work` headers farther down are chronological log
+labels, not live status -- newest section is on top and each section's
+own status tag rules.
+- ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`):
+  the only un-disproved micro-slice. Both candidates consume one
+  register today; the unrun scan is whether any of the 865 call shapes
+  fits exactly one candidate.
+- `op_Implicit` return-type subset (tens of sites, e.g.
+  Angle/StyleFloat/TimeValue at `0x182da54f0`): needs a typed-use
+  scan; sole caller sampled (13332) declines on `object`.
+- GetHashCode mixed VA (10 sites, `0x181b14c10`): forwarder body,
+  stale trailing `0`, inconsistent tail rendering across twins.
+- Cpp2IL declaration cross-check gate (proposed, not yet filed):
+  diff emitted declarations against Cpp2IL-reconstructed DLLs.
+- Sidecar program (large, deferred by design): method+generic mixes
+  (5.6k), different-name mega-shared (3.9k), same-typedef overloads,
+  struct-field folding, per-arm Color, Navigation merge-side,
+  instantiation proof.
+- Full-tree promotion of the r8 changes (only Assembly-CSharp
+  promoted; rest of `final_out/` holds r7) -- user call.
+- Closed 2026-09-25, markers stay honest: same-name receiver pick
+  (~1.9k) and constant-zero fold (239/2). Evidence in the two
+  DOCUMENTED sections directly below.
+
 ## Current work: constant-zero fold DISPROVED (2026-09-25, DOCUMENTED)
 
 Subagent census + independent ground-truth probes closed the
@@ -88,9 +114,9 @@ Verdict: the headline ~1.9k (GetResult 412 + get_IsCompleted 347 +
 floatN get_Item 323 + ToString/op_Implicit 865) needs receiver proof
 (field sidecar + use->def + whole-tile preference, per the 25687/24238
 TaskAwaiter precedent) or instantiation proof -- not sig elimination.
-Next payoff order: constant-zero fold (239 sites, 2 VAs), then the
-`op_Implicit` static+arity spray probe. No goldens moved; suite
-untouched (no source change).
+Remaining next payoff (constant-zero since disproved, see above): the
+ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`).
+No goldens moved; suite untouched (no source change).
 
 ## Current work: promotion r8 Assembly-CSharp (2026-09-24, PROMOTED)
 
@@ -178,16 +204,17 @@ overlap on the generic dimension; treats are per bucket:
   (F1/F2/F3) are permanently unresolvable; overloads need
   conversion-witness or exact-only arg-type elimination (future).
 - Multi-owner same method name: 2,752 / 155 (GetResult/get_IsCompleted/
-  get_Item/ToString pairs) -- return-type/use + static/instance
-  elimination is the next designed slice.
+  get_Item/ToString pairs) -- sig elimination DISPROVED 2026-09-25
+  (see top sections); needs receiver/instantiation proof (sidecar).
 - Multi-owner different names: 3,859 / 259, incl. mega-shared tiny
   bodies -- owner proof at scale (field sidecar + use→def).
 - Static/instance mixes: 3,394 / 43 (ToString/op_Implicit 865 sites) --
-  static/instance + arity elimination with spray caveats (future).
+  mostly mega-shared tiny bodies (declined); the crisp `0x1825b1150`
+  pair's spray probe is still open (see index).
 - Non-method (pure generic) addresses: 1,282 / 191 -- instantiation
   proof, same program as the first bucket.
-- Identical full signatures: 200 / 25 -- same-render collapsing is a
-  possible micro-slice after per-row field audit.
+- Identical full signatures: 200 / 25 -- same-render collapsing LANDED
+  2026-09-24 (70 sites); remainder keeps markers.
 - Corrected mid-audit: an early "14 true-duplicate VAs" read was a
   filter artifact (method rows only, hiding generic sharers); the full
   map has ZERO exact-duplicate addresses, so a registration dedup was
@@ -542,7 +569,7 @@ goto/`?addr` flat, no regressions. Promoted by mirror copy
 committed and pushed. WIP scalar-copy slice restored to the working
 tree after promotion (still unlanded, see `docs/handoff-2026-09-23.md`).
 
-## Current handoff: 2026-09-23 stop (LANDED)
+## Historical handoff: 2026-09-23 stop (LANDED)
 
 The fourth scalar parameter-copy change described here is now landed
 (see the top section): focused 30 passed, full suite 938 passed / 0
@@ -1627,7 +1654,7 @@ Kept: `final_out/` (promoted fix-123 baseline), `work/rpc_payload_out/`
 trees. Historical paragraphs below that cite a removed log/blob/tree keep
 their original lists as the gate record — the file itself is gone.
 
-## Current work: post-promotion residue (fix 123 promoted, see below)
+## Historical residue: post-promotion (fix 123 era; counts predate r4c, see below)
 
 `final_out/` holds the follow-up tree (probe 2,463 errors / 726 files,
 `validation_reports/probe_final_out.json`). CS0053 is 0 there and 0 on the
