@@ -1,5 +1,57 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: same-name receiver pick DISPROVED (2026-09-25, DOCUMENTED)
+
+Subagent census + ground-truth probes closed the multi-owner same-name
+bucket as a return/static/arity elimination slice -- no source change,
+markers stay honest.
+
+Census (read-only regex over `final_out/` 11,183 files + a per-VA
+`Il2Cpp.addr_candidates` join; scripts + `scan.json`/`join.json` live
+only in temp): 2,772 sites / 159 VAs with one shared short name across
+owner typedefs (audit's 2,752/155 plus the r8 ACS churn delta; marker N
+== live method+generic counts on all spot checks). 54% of bucket sites
+(1,493 / 29 VAs) carry generic sharers, so any sig slicer must decline
+them first anyway.
+
+Probes (`tools/inspect_methods.py`, `PYTHONHASHSEED=0`):
+- GetResult 8478 vs 8497 share `0x181baa030` byte-identically, both
+  instance `()->void`; caller 62090 passes `&object` with a void use --
+  return, static/instance and arity are all vacuous.
+- get_IsCompleted 8475 vs 8494, both instance `()->bool` (+ 34 generic
+  sharers); the `test al,al` bool use is shared by both candidates.
+- float2/3/4 `get_Item` 70880/71276/71965 share `0x180d259b0`, all
+  instance `(int)->float` (+ 2 generic) -- generic gate blocks regardless.
+- `InternedString.ToString` 35666 (instance, 0 params) vs `op_Implicit`
+  35675 (static, 1 param) share `0x1825b1150` (`mov rax,[rcx]...ret`),
+  865 sites: both consume exactly one register and return `string`, so
+  static/instance+arity cannot split them; callers pass `&object`
+  (32174 `string text1 = (string)sub_1825b1150(&obj14)`). Same shape for
+  the `Char.ToString` twins (82 sites).
+- `HexToInt` 96557 (`int`) vs 110140 (`uint`) share `0x182af9c50`
+  byte-identically; caller 110055's uses are sign-agnostic
+  (`num58 + (num57 << 4)` -- `+`/`<<` identical for int/uint), so a
+  return-use rule must decline; a fire needs a sign-proving use, none
+  found.
+- `op_Implicit` triple `0x182da54f0` (Angle/StyleFloat/TimeValue):
+  caller 13332 passes untyped `object`, result flows to `object` --
+  use-type is `object`, declines.
+- Mixed `GetHashCode` VA `0x181b14c10` (10 sites, 12 instance +
+  `RuntimeHelpers` static): the shared body is a 2-insn forwarder
+  (`xor edx,edx; jmp`), so the trailing `0` in `(this, 0)` renders is
+  callee-zeroed stale, not a param -- and both shapes still fit one
+  register. Tail rendering is already inconsistent across identical
+  twins there (EventInfo/FieldInfo resolve, ConstructorInfo keeps the
+  marker); touch nothing.
+
+Verdict: the headline ~1.9k (GetResult 412 + get_IsCompleted 347 +
+floatN get_Item 323 + ToString/op_Implicit 865) needs receiver proof
+(field sidecar + use->def + whole-tile preference, per the 25687/24238
+TaskAwaiter precedent) or instantiation proof -- not sig elimination.
+Next payoff order: constant-zero fold (239 sites, 2 VAs), then the
+`op_Implicit` static+arity spray probe. No goldens moved; suite
+untouched (no source change).
+
 ## Current work: promotion r8 Assembly-CSharp (2026-09-24, PROMOTED)
 
 User-scoped (Assembly-CSharp only; full-tree rebuild aborted by user
