@@ -66,7 +66,9 @@ Goldens key on MethodDef row (`mi`), never VA (shared bodies alias).
 env above; suite is fully green — any failure is yours).
 
 **Rebuild a tree:** `python il2csharp.py testgame -o <name_out1> [--only
-Assembly-CSharp]`. Name output `*_out1/` (git-ignored). Gate with
+Assembly-CSharp] [--workers N]`. `--workers 0` = half the cores (max 8);
+the tree is byte-identical, only the schedule changes; `--max-methods`
+forces 1. Name output `*_out1/` (git-ignored). Gate with
 `python work/lib/tree_brace_audit.py <dir>` (must print 0 unbalanced).
 
 **Land a source fix:** repro first (probe script in temp dir, never in
@@ -150,8 +152,12 @@ Documented (no source change, markers stay honest): same-name
 receiver-pick disproof (~1.9k sites need sidecar, not sig
 elimination), constant-zero fold disproof (239 sites, 2 VAs).
 Full suite: 1071 passed / 0 failed (877 portable + 194 game), verified
-against the fixture this session. Open, by payoff: parallel full-tree build
-(18.1 min -> ~1.7 min), unmodelled-instruction invalidation
+against the fixture this session. Landed after r9: `--workers N` in
+`cli.py` (parallel assembly emission, default 1) -- 8 workers measured
+**262.9 s** vs 1,085 s serial (4.1x), tree byte-identical to the promoted
+r9 aggregate; `--workers 0` is half the cores (max 8), and the predicted
+10.8x needs a longest-image-first schedule. Open, by payoff: that
+schedule, unmodelled-instruction invalidation
 (`insn.py`'s silent fall-through leaves a stale destination live),
 ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`),
 `op_Implicit` return-type subset (tens of sites), Cpp2IL declaration
