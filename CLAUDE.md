@@ -22,20 +22,25 @@ via System.Array, rename barrier + param exclusion, interface dispatch
 naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
 direct calls), each decline-by-default with portable + game pins; plus
 documented disproofs (hinted receivers, ?addr tightening,
-receiver-driven generics). 1047 tests pass (859 portable + 188 game),
+receiver-driven generics). 1071 tests pass (877 portable + 194 game),
 suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
 both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
 and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
-11,276 paths, aggregate `c0ee1b78…1236`). Promotions since (r4d, r5, r7,
-r8 Assembly-CSharp) supersede the tree; see `docs/todo.md` Current work
-and `validation_reports/promotion_r*.json`. The `bckups/` copies of prior
+11,276 paths, aggregate `c0ee1b78…1236`). Promotions since (r4d, r5, r7, r8
+Assembly-CSharp) were superseded by **r9, 2026-09-26**: a full-tree strict
+rebuild from `e20f82f` -- 11,183 type files / 114,458 bodies / 0 failed /
+0 structured fallbacks / 0 type-emission failures in 1,085 s, brace 0,
+parse 0/0/0, an independent second build byte-identical, promoted by
+mirror copy (aggregate `73f4426d\u2026c8821`). `final_out/` now holds r9
+everywhere, so r7 and r8 are history; see `docs/todo.md` Current work and
+`validation_reports/promotion_r*.json`. The `bckups/` copies of prior
 promoted trees were deleted 2026-09-19 per user call — GitHub is now the
 history authority; any prior tree rebuilds from git history. See `docs/todo.md` for exact evidence and the
 remaining compiler backlog.
 
 Read `docs/reviews/REVIEW84.md`–`REVIEW87.md`, `docs/todo.md`'s Current work section, and
 `docs/archive/reviews-log.md` section 0bf first. `final_out/` is the complete strict-built
-tree (r7 full plus r8 Assembly-CSharp, both 2026-09-24; the r4c aggregate below is history),
+tree (r9, all 88 images, 2026-09-26; every earlier aggregate below is history),
 not the Review 84 file set alone, b42/b76, or a partial candidate. Historical paragraphs below retain
 the reasoning behind older changes; their old "current" labels are not release authority.
 `validation_reports/review84/summary.json` (baseline) plus `validation_reports/followups_sweep.json`,
@@ -468,7 +473,7 @@ against one of these two real binaries, not asserted from reading code.
    Note: `_final_text`'s line-local transforms are mirrored in
    `work/lib/sim_rewrite.py` — a built tree + ~2 min sim re-gate is the
    fast full-corpus loop for `?`/`unknown`/`default`/select-family
-   changes, but a REAL rebuild (~7-9 min, a `work/runners/run_build_*.py` into
+   changes, but a REAL rebuild (18.1 min measured at r9, a `work/runners/run_build_*.py` into
    `<out>`) is the only truth for Lifter-side changes. Two traps in
    that loop, both paid for in batch 19:
    - **A sim tree may only be compared against another sim tree.**

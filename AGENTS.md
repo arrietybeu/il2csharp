@@ -91,7 +91,24 @@ unproven shape keeps today's spelling; raw is always honest.
   without an explicit user call. Stash-prove-clean before attributing a
   break to your change.
 
-## Current state (2026-09-26, `main` clean)
+## Current state (2026-09-26, `main` clean; `final_out/` = r9)
+
+Promoted 2026-09-26 (**r9**, full tree, all 88 images, from `e20f82f`):
+strict rebuild 11,183 type files / 114,458 bodies / 0 failed / 0 structured
+fallbacks / 0 type-emission failures in **1,085 s (18.1 min)**; brace **0
+unbalanced**; parse **0 bad / 0 ERROR / 0 MISSING / 0 recovery nodes**; an
+independent second build byte-identical (aggregate `73f4426d…c8821` both
+sides); mirror-copied over `final_out` with a per-file sha256 proof, 0 stale
+files. 918 of 11,276 files changed, file set identical, **net method
+signature delta 0**. Census: fabricated pointer sites 97,531 → 83,314
+(-14,217), shared 16,916 → 16,834 (net -82), `/* nothing */` 63 → 0 with
+63 `return Neon.<variant>(...)`, shared calls with an invented trailing `0`
+3,880 → 3,519, `indirect` -4, `goto`/`memN`/`qaddr` flat, `unknown` +53 in
+59 files (typed-but-unknown frame slots replacing fabricated arithmetic).
+One accepted regression, user-called and recorded: mi 23602
+`StandingPeopleConcert.SpawnPeople` loses `Quaternion.Internal_FromEulerRad`
+to a 9-candidate marker. Evidence in
+`validation_reports/promotion_r9.json`. r7 and r8 are history.
 
 Landed 2026-09-26 (one shared body, one argument list): an unresolved
 shared-body **tail** is now bounded by the same largest-declared-arity proof
@@ -118,9 +135,10 @@ Assembly-CSharp, 3 of 60 changed files), a pre-existing lossy area.
 Also landed (batch 1, output-neutral): three class-level `td.index` caches
 made per-instance, `type_sizes` no longer negative (91 rows), Android
 registration fallback gated on ELF.
-A full-tree rebuild measures 1,359 s (22.7 min) for 114,458 bodies, so
-the `~7-9 min` in `CLAUDE.md` is stale; the 88-image loop is
-embarrassingly parallel and still serial.
+A full-tree rebuild measures **1,085 s (18.1 min)** for 114,458 bodies
+(r9, two builds at 1,085/1,086 s), so the `~7-9 min` in `CLAUDE.md` and
+`docs/reference.md` is stale; the 88-image loop is embarrassingly parallel
+and still serial.
 Landed before that: identical-render shared collapse (70 sites),
 shared-stub native disassembly comments, noreturn-shared forwarder
 returns (63 Neon `/* nothing */` -> `return Target(args)`), r8
@@ -133,7 +151,7 @@ receiver-pick disproof (~1.9k sites need sidecar, not sig
 elimination), constant-zero fold disproof (239 sites, 2 VAs).
 Full suite: 1071 passed / 0 failed (877 portable + 194 game), verified
 against the fixture this session. Open, by payoff: parallel full-tree build
-(22.7 min -> ~2.1 min), unmodelled-instruction invalidation
+(18.1 min -> ~1.7 min), unmodelled-instruction invalidation
 (`insn.py`'s silent fall-through leaves a stale destination live),
 ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`),
 `op_Implicit` return-type subset (tens of sites), Cpp2IL declaration

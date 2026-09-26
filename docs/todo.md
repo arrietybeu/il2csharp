@@ -20,19 +20,78 @@ own status tag rules.
   (5.6k), different-name mega-shared (3.9k), same-typedef overloads,
   struct-field folding, per-arm Color, Navigation merge-side,
   instantiation proof.
-- Full-tree promotion of the r8 changes (only Assembly-CSharp
-  promoted; rest of `final_out/` holds r7) -- user call.
+- Full-tree promotion: **DONE at r9** (2026-09-26, all 88 images,
+  aggregate `73f4426d\u2026c8821`); `final_out/` holds r9 everywhere and
+  r7/r8 are history.
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2). Evidence in the two
   DOCUMENTED sections directly below.
 - Parallel full-tree build (`cli.py` loops 88 images serially): measured
-  1,359 s for 114,458 bodies; a 12-worker process pool predicts 128 s
-  (10.8x, 11% imbalance) at 513 MB/worker. Not started.
+  **1,085 s** for 114,458 bodies at r9 (two builds, 1,085/1,086 s); a
+  12-worker process pool predicts ~102 s (10.8x, 11% imbalance) at
+  513 MB/worker. Not started.
 - Audit batch 2 (LANDED, section below): the `mov rbp,rsp` frame lost
   at a CFG merge + `slot_var`'s three sign conventions.
 - Parallel full-tree build (`cli.py` loops 88 images serially): measured
-  1,359 s for 114,458 bodies; a 12-worker process pool predicts 128 s
-  (10.8x, 11% imbalance) at 513 MB/worker. Not started.
+  **1,085 s** for 114,458 bodies at r9 (two builds, 1,085/1,086 s); a
+  12-worker process pool predicts ~102 s (10.8x, 11% imbalance) at
+  513 MB/worker. Not started.
+
+## Current work: promotion r9 full tree (2026-09-26, PROMOTED)
+
+User-authorized (promotion on call). Strict full-tree rebuild `r9_out1` from
+clean HEAD `e20f82f`: **11,183 type files / 114,458 bodies / 0 failed / 0
+structured fallbacks / 0 type-emission failures in 1,085 s**; brace **0
+unbalanced**; parse **0 bad / 0 ERROR / 0 MISSING / 0 recovery nodes**
+(11,183 files, 13.1 s). An independent second strict build `r9_out2` is
+**byte-identical** (11,276 paths, aggregate `73f4426d\u2026c8821` on both
+sides, 0 per-file mismatches). Promoted by mirror copy with a per-file
+sha256 proof; the promoted aggregate equals the candidate aggregate and 0
+stale files were left behind. `final_out/` now holds **r9 everywhere**, so
+r7 and r8 (Assembly-CSharp) are history.
+
+This is the first full-tree promotion since r7, so it carries four landed
+batches at once, not one. 918 of 11,276 files changed; file set identical
+(0 added, 0 removed); 10,358 byte-identical; **net method-signature delta
+0**, no file lost a declaration; net +58,613 lines (286 shrank, 401 grew,
+231 same). Measured, not asserted:
+
+- **Audit batch 2 (the RBP frame).** Fabricated pointer arithmetic
+  97,531 -> **83,314** (-14,217) in 3,126 -> 3,088 files, reproduced with an
+  independent regex (the batch's own figure was -14,169, 0.3% apart).
+  Shrinkers are the expected shape: `TypeConversion.cs` -658, `X86.cs`
+  -592, `ConverterGroups.cs` -549, `VisualElement.cs` -375.
+- **Shared-tail arity trim.** Shared calls carrying an invented trailing
+  `0`: 3,880 -> **3,519** (-361) in 1,086 -> 923 files. Calls keep a real
+  trailing `0`; mi 24077 keeps its four-argument `List<T>.CopyTo` tail.
+- **Noreturn-shared forwarder returns.** `/* nothing */` **63 -> 0**, with
+  63 `return Neon.<s8-variant>(...)` in `Arm.cs`.
+- **Identical-render collapse + stub comments, tree-wide.** Resolved
+  identical-render names 52 -> 109 occurrences; every `__SharedBodyStubs.cs`
+  grows (mscorlib 1,250 -> 9,995 lines, UIElements 606 -> 5,162, ten more
+  assemblies) from the native-disassembly comments that until now were
+  promoted only for Assembly-CSharp.
+- **Flat where it should be flat.** `goto`, `memN`, `qaddr` unchanged;
+  `indirect` -4; `shared` 16,916 -> 16,834 (net **-82**).
+
+Marker increases, read rather than waved through:
+- `unknown` **+53 across 59 files** -- typed-but-unknown frame slots
+  (`Vector3 vector35 = unknown;`) replacing fabricated pointer arithmetic
+  in the same statements, which is the trade batch 2 documented. The
+  fabricated count falls 14,217 in the same diff.
+- **One** net shared-marker increase tree-wide, user-called and accepted:
+  mi 23602 `StandingPeopleConcert.SpawnPeople` loses
+  `Quaternion.Internal_FromEulerRad` to `sub_180895b20/*shared body, 9
+  candidates*/`, because E3 typed the frame home `Vector3` and a partial
+  vector store leaves the value honestly `unknown`, so the call argument is
+  no longer a reconstructed `new Vector3 { ... }` literal for `_call` to key
+  on. One lost callee name against a value that is no longer fabricated.
+
+Evidence in `validation_reports/promotion_r9.json`. Suite at the promoted
+commit: **1071 passed / 0 failed** (877 portable + 194 game). Scratch trees
+removed. **Timing correction:** a full 88-image strict build is 1,085 s
+(18.1 min) for 114,458 bodies on this box, not the 1,359 s the index and
+`AGENTS.md` carried from the batch-1 measurement.
 
 ## Current work: one shared body, one argument list (2026-09-26, LANDED)
 
