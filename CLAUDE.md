@@ -516,12 +516,7 @@ against one of these two real binaries, not asserted from reading code.
    on is one you introduced.
 4. A **full rebuild + brace audit** (`python il2csharp.py <target> -o
    <outdir>`, then `python work/lib/tree_brace_audit.py <outdir>`) is the
-   final gate before promoting a build to the baseline. `--workers N`
-   emits the 88 images across a process pool and is the same tree
-   byte-for-byte (8 workers: 262.9 s vs 1,085 s serial, aggregate
-   `73f4426d\u2026c8821` on both), so the determinism cross-check costs
-   4.4 min instead of 18. `--workers 0` is half the cores, max 8 -- a wide
-   build takes the machine, and `--max-methods` forces 1. Note its blind
+   final gate before promoting a build to the baseline. Note its blind
    spot: it sums `{`/`}` counts per **file**, so a `try { } else { }`
    (individually balanced brace pairs, invalid C#) or two compensating
    errors in the same file both read as 0. Prefer the full-corpus

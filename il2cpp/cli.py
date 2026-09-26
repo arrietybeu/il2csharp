@@ -71,161 +71,6 @@ def find_game_files(path=None, *, metadata=None, binary=None):
     return gmd, bp
 
 
-# -- assembly emission ---------------------------------------------------
-
-_W = {}
-
-
-def _load_runtime(gmd, bp, verbose):
-    """Read metadata + binary and resolve every method's native address.
-
-    Mirrors the phase `main` runs before the image loop, factored out
-    because a parallel build repeats it once per worker process. It keeps
-    that phase whole: a worker that loaded less than the serial build would
-    silently emit fewer bodies.
-    """
-    meta = Metadata(gmd)
-    bin_ = load_binary(bp)
-    if bin_ is None:
-        raise ValueError('unsupported binary format')
-    il = Il2Cpp(meta, bin_)
-    il.verbose = verbose
-    il.assign_images()
-    try:
-        il.find_registrations()
-    except RuntimeError:
-        # The Android loader assumes a different registration struct shape
-        # and lands on a silently wrong registration for a PE; same gate as
-        # `main`.
-        if not isinstance(bin_, ELF):
-            raise
-        il.find_registrations_android()
-    il.load_function_bounds()
-    il.resolve_method_addrs()
-    il._mod_ptr_cache.clear()  # free raw pointer arrays
-    return meta, il
-
-
-def _worker_init(gmd, bp, out_dir, asm_comments, with_bodies, max_methods,
-                 verbose, type_filter):
-    """One runtime and one Emitter per worker process, reused for every
-    image that process is handed (the load costs ~4 s, an image ~12 s)."""
-    meta, il = _load_runtime(gmd, bp, verbose)
-    _W['meta'] = meta
-    _W['em'] = Emitter(il, out_dir, asm_comments=asm_comments,
-                       with_bodies=with_bodies, max_methods=max_methods,
-                       verbose=verbose, type_filter=type_filter)
-
-
-def _worker_emit(image_name):
-    """Emit one image and report per-image deltas.
-
-    Deltas, not totals: the parent's running totals are then the serial
-    ones, so `--workers N` prints the same log as `--workers 1`.
-    """
-    em, meta = _W['em'], _W['meta']
-    img = next((i for i in meta.images if i.name == image_name), None)
-    if img is None:
-        return {'files': 0, 'lifted': 0, 'failed': 0, 'fallbacks': 0,
-                'emit_failed': 0, 'lifter': em.lifter is not None,
-                'error': 'image not found in metadata'}
-    before = (em.lifted, em.failed, em.fallbacks, em.emit_failed)
-    error = None
-    try:
-        files = em.write_assembly_split(img)
-    except Exception as ex:
-        files, error = 0, '%s: %s' % (type(ex).__name__, ex)
-    after = (em.lifted, em.failed, em.fallbacks, em.emit_failed)
-    return {'files': files, 'lifted': after[0] - before[0],
-            'failed': after[1] - before[1],
-            'fallbacks': after[2] - before[2],
-            'emit_failed': after[3] - before[3],
-            'lifter': em.lifter is not None, 'error': error}
-
-
-def _auto_workers():
-    """Default width for `--workers 0`: half the cores, never more than 8.
-
-    Both reasons are real. Memory: a worker holding a live runtime sits at
-    423 MB resident after the load and 581 MB after the four heaviest
-    assemblies, peaking at 672-783 MB, so twelve workers is ~8 GB of peak
-    working set -- enough to die beside anything else running, which is
-    what a 12-worker run did here. Politeness: a promotion build is not
-    the only thing on the machine, and taking every core starves whatever
-    else is running. An explicit `--workers N` still overrides this.
-    """
-    return max(1, min(8, (os.cpu_count() or 2) // 2))
-
-
-def _worker_count(args, images):
-    """Resolve --workers, declining the combinations that cannot hold."""
-    if args.workers < 0:
-        return 0, '--workers must be >= 0'
-    workers = args.workers if args.workers else _auto_workers()
-    if len(images) < 2 or workers < 2:
-        return 1, None
-    if args.max_methods is not None:
-        # the cap is a whole-build brake; a per-worker cap would lift up
-        # to N times the bodies that were asked for
-        return 1, '--max-methods is a per-build cap; running --workers 1'
-    return workers, None
-
-
-def _emit_assemblies(images, em, args, gmd, bp):
-    """Emit every image, serially or across worker processes.
-
-    An image owns its output directory, its `__SharedBodyStubs.cs` and its
-    `.csproj`, and reads nothing another image wrote, so the tree does not
-    depend on the schedule. Returns the serial counters either way.
-    """
-    workers, note = _worker_count(args, images)
-    if note:
-        print('note: ' + note)
-    t0 = time_ms()
-    if workers < 1:
-        workers = 1
-    if workers == 1:
-        total_files = 0
-        for img in images:
-            n = em.write_assembly_split(img)
-            total_files += n
-            print('  %-52s %5d types  (%d bodies, %d failed)' % (
-                img.name, n, em.lifted, em.failed), flush=True)
-        return {'files': total_files, 'lifted': em.lifted,
-                'failed': em.failed, 'fallbacks': em.fallbacks,
-                'emit_failed': em.emit_failed, 'lifter': em.lifter is not None,
-                'errors': []}
-    from concurrent.futures import ProcessPoolExecutor
-    initargs = (gmd, bp, args.out, args.asm, not args.decls_only,
-                args.max_methods, args.verbose, args.types)
-    # say the width before the pool exists: a run killed part-way (a machine
-    # under memory pressure will kill the parent, not a worker) otherwise
-    # leaves a log that never mentions how wide it got
-    print('workers: %d processes | %d images' % (workers, len(images)),
-          flush=True)
-    total = {'files': 0, 'lifted': 0, 'failed': 0, 'fallbacks': 0,
-             'emit_failed': 0, 'lifter': True, 'errors': []}
-    with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init,
-                             initargs=initargs) as pool:
-        futures = [pool.submit(_worker_emit, img.name) for img in images]
-        for img, fut in zip(images, futures):
-            r = fut.result()   # image order: the log matches the serial one
-            if r['error']:
-                total['errors'].append('%s: %s' % (img.name, r['error']))
-            total['files'] += r['files']
-            total['lifted'] += r['lifted']
-            total['failed'] += r['failed']
-            total['fallbacks'] += r['fallbacks']
-            total['emit_failed'] += r['emit_failed']
-            total['lifter'] = total['lifter'] and r['lifter']
-            print('  %-52s %5d types  (%d bodies, %d failed)' % (
-                img.name, r['files'], total['lifted'], total['failed']),
-                flush=True)
-    print('workers: %d processes | wall %d ms' % (workers, time_ms() - t0),
-          flush=True)
-    return total
-
-
 def main(argv):
     import argparse
     ap = argparse.ArgumentParser(
@@ -241,10 +86,6 @@ def main(argv):
     ap.add_argument('--decls-only', action='store_true', help='skip method body lifting')
     ap.add_argument('--asm', action='store_true', help='include native asm comments in bodies')
     ap.add_argument('--max-methods', type=int, default=None, help='cap lifted bodies (debug)')
-    ap.add_argument('--workers', type=int, default=1,
-                    help='emit assemblies in N worker processes (0 = auto: half the cores, '
-                         'max 8). The tree is byte-identical to --workers 1; only the schedule '
-                         'changes')
     ap.add_argument('--probe', action='store_true', help='diagnostics only')
     ap.add_argument('--emit-h', action='store_true',
                     help='also emit an il2cpp.h-style C header (Il2CppDumper format)')
@@ -253,8 +94,6 @@ def main(argv):
 
     if args.max_methods is not None and args.max_methods < 0:
         ap.error('--max-methods must be nonnegative')
-    if args.workers < 0:
-        ap.error('--workers must be >= 0 (0 picks half the cores, max 8)')
     if not args.target and not (args.metadata and args.binary):
         ap.error('provide a target or both --metadata and --binary')
     try:
@@ -331,29 +170,27 @@ def main(argv):
         hpath = os.path.join(args.out, 'il2cpp.h')
         n_types = HeaderEmitter(il, hpath).write()
         print('il2cpp.h: %d types in %d ms -> %s' % (n_types, time_ms() - t0, hpath))
+    em = Emitter(il, args.out, asm_comments=args.asm, with_bodies=not args.decls_only,
+                 max_methods=args.max_methods, verbose=args.verbose, type_filter=args.types)
+
     only = [t.strip().lower() for t in args.only.split(',')] if args.only else None
-    images = [img for img in meta.images
-              if not only or any(t in img.name.lower() for t in only)]
-    workers, _note = _worker_count(args, images)
-    # the parent keeps an Emitter for the two whole-tree files; with a pool
-    # running it needs no Lifter of its own
-    em = Emitter(il, args.out, asm_comments=args.asm,
-                 with_bodies=not args.decls_only and workers == 1,
-                 max_methods=args.max_methods, verbose=args.verbose,
-                 type_filter=args.types)
     t0 = time_ms()
-    stats = _emit_assemblies(images, em, args, gmd, bp)
+    total_files = 0
+    for img in meta.images:
+        if only and not any(t in img.name.lower() for t in only):
+            continue
+        n = em.write_assembly_split(img)
+        total_files += n
+        print('  %-52s %5d types  (%d bodies, %d failed)' % (
+            img.name, n, em.lifted, em.failed))
     em.write_script_json(os.path.join(args.out, 'script.json'))
     em.write_string_literals(os.path.join(args.out, 'stringliteral.json'))
-    for err in stats['errors']:
-        print('error:', err)
     print('done: %d type files in %d ms | bodies lifted: %d, failed: %d | '
           'structured fallbacks: %d, type emit failures: %d' % (
-        stats['files'], time_ms() - t0, stats['lifted'], stats['failed'],
-        stats['fallbacks'], stats['emit_failed']))
-    failed = bool(stats['failed'] or stats['emit_failed'] or stats['errors'])
+        total_files, time_ms() - t0, em.lifted, em.failed, em.fallbacks, em.emit_failed))
+    failed = bool(em.failed or em.emit_failed)
     if args.strict and not args.decls_only:
-        failed = failed or bool(stats['fallbacks']) or not stats['lifter']
+        failed = failed or bool(em.fallbacks) or em.lifter is None
     return 1 if failed else 0
 
 

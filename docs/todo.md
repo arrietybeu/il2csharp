@@ -26,84 +26,16 @@ own status tag rules.
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2). Evidence in the two
   DOCUMENTED sections directly below.
+- Parallel full-tree build (`cli.py` loops 88 images serially): measured
+  **1,085 s** for 114,458 bodies at r9 (two builds, 1,085/1,086 s); a
+  12-worker process pool predicts ~102 s (10.8x, 11% imbalance) at
+  513 MB/worker. Not started.
 - Audit batch 2 (LANDED, section below): the `mov rbp,rsp` frame lost
   at a CFG merge + `slot_var`'s three sign conventions.
-- Parallel full-tree build (LANDED, section below): `--workers N` emits the
-  88 images across a process pool; 8 workers measured **262.9 s** (4.1x)
-  with a tree byte-identical to the promoted r9 aggregate, and `--workers 0`
-  now means half the cores (max 8) instead of every core. The predicted
-  10.8x needs a longest-image-first schedule.
-
-## Current work: parallel assembly build (2026-09-26, LANDED)
-
-`cli.py` looped the 88 images serially, so every promotion gate and every
-determinism cross-check cost two full builds. `--workers N` now emits them
-across a process pool; the default stays 1, so no existing invocation
-changes.
-
-**Why the tree cannot move.** An image owns its output directory, its
-`__SharedBodyStubs.cs` and its `.csproj`, and reads nothing another image
-wrote. Each worker loads the runtime once in a pool `initializer` (4.2 s
-measured, against a 12.3 s mean per image: 1,085 s over 88) and reuses one
-`Emitter` for every image it is handed. What *is* schedule-sensitive is the accounting:
-the serial build prints one running bodies total, so `_worker_emit` returns
-per-image **deltas** and the parent accumulates them in image order --
-a worker returning its own cumulative total would make the log claim a
-different number than the tree holds, which is the plausible-wrong-number
-class this repo refuses to ship. The parent also drops its own `Lifter`
-when a pool is running (it only needs the two whole-tree JSON writers) and
-prints per-image lines in metadata order, so the log is the serial log.
-
-**Measured, and the prediction was wrong.** 8 workers: **262.9 s** for
-114,458 bodies against 1,085 s serial -- **4.1x**, not the 10.8x the
-12-worker model predicted. The gap is scheduling, not I/O: the cost is
-concentrated in a few images (mscorlib, System, Assembly-CSharp,
-UIElements), so the tail is one long image while seven workers idle, and
-the model assumed an even 11% imbalance. A longest-image-first schedule is
-the obvious next step; it is not in this change.
-
-**Determinism, against the promoted tree rather than against itself.** The
-8-worker build reproduces r9 **byte for byte**: 11,276 files, aggregate
-`73f4426d\u2026c8821`, 0 files only-in-either-side, 0 differing, 0 added,
-0 removed -- the same aggregate `validation_reports/promotion_r9.json`
-records for the serial build that was promoted. Bodies lifted 114,458,
-0 failed, 0 structured fallbacks, 0 type-emission failures, 11,183 type
-files, identical to serial.
-
-**Declines, both deliberate.** `--max-methods` is a whole-build brake, so
-it forces `--workers 1` with a printed note rather than lifting up to N
-times the bodies asked for. A single image stays serial (a pool would cost
-more than it saves). A negative `--workers` is an argparse error, not a
-silent clamp to auto -- the first version clamped it and a test caught it.
-
-**What 12 workers actually did, and the three fixes it bought.** `--workers 0`
-resolved to `min(12, CPUs)`, so on this 12-core box an auto build took the
-whole machine (90% CPU) and the run died part-way with exit 1 and an *empty*
-log: the parent is what runs out, stdout was block-buffered through a pipe,
-and nothing recorded how wide the pool had got. Three changes follow from
-that, none of them about speed:
-- `--workers 0` is now **half the cores, max 8** (`_auto_workers`). Auto is
-  a convenience, not a licence to starve the desktop; an explicit
-  `--workers N` is still honoured exactly.
-- the pool **announces its width and image count before it starts**, and
-  **flushes every progress line**, so the next wide run leaves a log even
-  if it dies.
-- the audit's 513 MB/worker is **confirmed** by measurement, not replaced:
-  a worker holding a live runtime sits at 423 MB resident after the load
-  and 581 MB after the four heaviest assemblies, peaking at 672-783 MB, so
-  twelve workers is ~8 GB of peak working set. Half the cores (6 workers,
-  ~4 GB) is a memory decision as much as a politeness one. A first probe
-  appeared to measure 16-31 MB per runtime and was wrong: it discarded the
-  runtime between readings, so the collector reclaimed it before the next
-  number -- worth recording, because the smaller number was the tempting
-  one.
-
-Tests: +13 portable (`tests/test_parallel_build.py`: auto width,
-worker-count resolution, every decline, delta arithmetic, the
-image-not-found and emission-failure paths, and the serial running total),
-+2 game
-(`tests/test_game_parallel_build.py`: the real CLI over two tiny images,
-serial vs 2 and 3 workers, byte-identical trees and identical `done:` lines).
+- Parallel full-tree build (`cli.py` loops 88 images serially): measured
+  **1,085 s** for 114,458 bodies at r9 (two builds, 1,085/1,086 s); a
+  12-worker process pool predicts ~102 s (10.8x, 11% imbalance) at
+  513 MB/worker. Not started.
 
 ## Current work: promotion r9 full tree (2026-09-26, PROMOTED)
 
