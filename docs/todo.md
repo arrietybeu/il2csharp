@@ -25,6 +25,72 @@ own status tag rules.
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2). Evidence in the two
   DOCUMENTED sections directly below.
+- Parallel full-tree build (`cli.py` loops 88 images serially): measured
+  1,359 s for 114,458 bodies; a 12-worker process pool predicts 128 s
+  (10.8x, 11% imbalance) at 513 MB/worker. Not started.
+- Audit batch 2 (next, patch staged): the `mov rbp,rsp` frame lost at a
+  CFG merge (~900 methods fabricate pointer arithmetic on the RBP
+  seed) + `slot_var`'s three sign conventions. Spec and patch script
+  ready; needs its own full rebuild / sweep / parse gate.
+
+## Current work: audit batch 1 -- per-instance caches, struct sizes, ELF gate (2026-09-26, LANDED)
+
+A read-only audit of the whole package (lifter / dec+emitter / runtime+
+metadata / repo+docs, plus an independent corpus census and a full timed
+rebuild) produced three defects that all share one failure mode: silently
+wrong rather than honestly raw. All three are fixed here, and none changes
+a byte of emitted output.
+
+**1. Three class-level caches keyed by a binary-local TypeDef index.**
+`Decompiler._TDNAME_CACHE` (`dec/sugar.py:344`) was a class attribute
+written through the `_LateDecompiler` proxy, and `Emitter._us_cache`
+(`emitter.py:637`) / `_delegate_cache` (`:671`) were mutable
+class-attribute dicts never reset in `__init__`. TypeDef indices are
+binary-local -- the invariant `CLAUDE.md` states for `_chain_cache` /
+`_bases_cache` -- so a shared map hands a second `Decompiler` / `Emitter`
+(a second fixture, which the open Cpp2IL cross-check needs) **another
+binary's index**. Reproduced: with `('Alpha','Widget')` at index 0 in
+binary A and index 1 in binary B, B resolved 0, and `_static_field_name`
+then emits *another type's* static field name -- a wrong name with no
+marker, not a crash. All four maps are now per instance, created lazily
+via `self.__dict__.setdefault` because ~80 test sites build a
+`Lifter`/`Decompiler`/`Emitter` with `__new__` and never run `__init__`.
+The two delegate answers also move into separate dicts: they shared one
+dict, distinguishable only because an `int` key can never equal a
+`('viable', int)` key. The `Emitter._delegate_cache.clear()` workaround at
+`tests/test_review113_type_decls.py:27` existed only because of the class
+attribute and is gone.
+
+**2. Negative struct sizes.** `runtime/registration.py:522` read
+`v - 0x10 if v else None`, whose guard caught only `v == 0`, so every
+`0 < instance_size < 0x10` became a **negative** size -- 91 rows in the
+fixture (values `-15` and `-8`, all `<Module>` definitions), against a
+comment three lines above promising "kept as `None` rather than a
+negative number". Nothing consumes those today (`returns_sret` tests
+`== 0x11`, `_return_abi_is_known` tests `> 0`), which is luck rather than
+design: a negative size is exactly the value that flips a hidden-sret
+decision and shifts every argument register. Now `v >= 0x10`.
+
+**3. The Android registration fallback ran on a PE.** `cli.py` caught
+any `RuntimeError` from `find_registrations()` and then tried
+`find_registrations_android()`, which assumes a *different struct
+shape*. Probed on the x64 fixture it does not fail: `code_reg_va =
+0x183067830` against the classic `0x183067820` -- 0x10 low -- with the
+same 91 modules and the same 116,178/128,954 resolved coverage. So a PE
+with no classic registration traded a clean error for a silently wrong
+one. The fallback is now gated on `isinstance(bin_, ELF)`, and the whole
+registration phase reports `error:` instead of tracebacking.
+
+Tests: +7 portable (`tests/test_cache_isolation.py`), +3 game
+(`tests/test_game_type_sizes.py`). Full suite **1023 passed / 0 failed**
+(843 portable + 180 game), no golden regeneration -- the 64 frozen bodies
+are unchanged, which is the first evidence the batch is output-neutral.
+Output-neutrality gate: a scoped strict rebuild (mscorlib,
+Assembly-CSharp, Unity.Mathematics, Fusion.Runtime) is byte-identical to
+the same assemblies from the pre-patch full build. Invariants recorded in
+`CLAUDE.md`. The `~7-9 min` full-rebuild figure at `CLAUDE.md:407` is
+**stale**: measured 1,359 s (22.7 min) for 114,458 bodies on this
+12-core box, against a 1,374 s serial prediction (1.5% error).
 
 ## Current work: constant-zero fold DISPROVED (2026-09-25, DOCUMENTED)
 

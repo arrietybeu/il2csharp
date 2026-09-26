@@ -22,7 +22,7 @@ via System.Array, rename barrier + param exclusion, interface dispatch
 naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
 direct calls), each decline-by-default with portable + game pins; plus
 documented disproofs (hinted receivers, ?addr tightening,
-receiver-driven generics). 1013 tests pass (836 portable + 177 game),
+receiver-driven generics). 1023 tests pass (843 portable + 180 game),
 suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
 both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
 and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
@@ -61,7 +61,17 @@ fix-123 in `validation_reports/review123_*`.
   newly visible Object tail cannot steal unrelated derived-receiver calls.
 - `_chain_cache` and `_bases_cache` are per `Il2Cpp` instance. TypeDef indices
   are binary-local; never restore class-level cache sharing across loaded
-  fixtures or workspaces.
+  fixtures or workspaces. The same rule covers every `td.index`-keyed map:
+  `Decompiler._tdname_cache` (was the class attribute `_TDNAME_CACHE`),
+  `Emitter._us_cache`, `Emitter._delegate_cache`, and
+  `Emitter._delegate_viable_cache` are per instance, created lazily through
+  `self.__dict__.setdefault` because ~80 tests build a `Lifter`/`Decompiler`/
+  `Emitter` with `__new__` and never run `__init__`. A shared map does not
+  crash — it hands a second binary the first binary's index, and
+  `_static_field_name` then emits another type's field name. Never split one
+  dict's key spaces either: the two delegate answers are separate dicts
+  precisely because an `int` key can only fail to collide with a
+  `('viable', int)` key by accident.
 - `_shared_parameterless_ctor_target` is an exact constructor proof, not normal
   shared-call resolution. Require typed current-constructor `this` or exact
   fresh `_alloc` provenance, a reference-type inheritance match, zero declared
@@ -95,6 +105,19 @@ fix-123 in `validation_reports/review123_*`.
   argument is an observed address. Require a known exact nonzero value-type
   size; generic value types, source-level ref returns, and unsupported opaque
   ABI classes remain unknown.
+- `type_sizes[i]` is `instance_size - 0x10` or `None`, never a negative
+  number: the loader subtracts the 0x10 object header, so any
+  `0 < instance_size < 0x10` (an open generic DEFINITION, a `<Module>` row)
+  is an unknown size, not `-15`. Test `v >= 0x10`, not `v`. A negative size is
+  the plausible-wrong-value that flips a hidden-sret decision and shifts every
+  argument register.
+- The Android registration loader is a *different struct shape*, so it is
+  reachable only for an ELF (`cli.py` gates the fallback on
+  `isinstance(bin_, ELF)`). Probed on the x64 PE it does not fail: it lands on
+  a `code_reg_va` 0x10 below the classic answer with the same module count and
+  the same resolved method coverage, so running it on a PE trades a clean
+  error for a silently wrong registration. The whole registration phase is
+  wrapped and reports `error:` rather than tracebacking.
 - Ambiguous arity trimming happens before sret folding and uses the inflated
   consensus type for the hidden-buffer slot. A typed shared call binds at its
   call instruction so type evidence cannot reorder it across visible effects.
@@ -231,7 +254,7 @@ fix-123 in `validation_reports/review123_*`.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test
-(`tests/test_source_format.py`) enforces this contract. **1013 tests pass** (836 portable + 177 game;
+(`tests/test_source_format.py`) enforces this contract. **1023 tests pass** (843 portable + 180 game;
 64 golden snapshots, all green).
 `goldens_review77.json`, `goldens_review79.json`,
 `goldens_review80.json`, `goldens_review82.json`, and `goldens_review83.json` are

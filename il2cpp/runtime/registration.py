@@ -519,7 +519,7 @@ class _RegistrationMixin:
             p = b.qword(self.type_sizes_ptr + i * 8)
             o = b.va2off(p) if p else None
             v = u32(b.d, o) if o is not None else 0
-            self.type_sizes.append(v - 0x10 if v else None)
+            self.type_sizes.append(v - 0x10 if v >= 0x10 else None)
 
     # ------------------------------------------------------------------
     def _build_method_address_map(self):

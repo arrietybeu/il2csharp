@@ -91,18 +91,31 @@ unproven shape keeps today's spelling; raw is always honest.
   without an explicit user call. Stash-prove-clean before attributing a
   break to your change.
 
-## Current state (2026-09-25, `main` clean)
+## Current state (2026-09-26, `main` clean)
 
-Landed since: identical-render shared collapse (70 sites), shared-stub
-native disassembly comments, noreturn-shared forwarder returns (63
-Neon `/* nothing */` -> `return Target(args)`), r8 Assembly-CSharp
-promotion (ComputeStringHash x3 + stub comments; rest of tree at r7).
-Documented since (no source change, markers stay honest): same-name
+Landed 2026-09-26 (audit batch 1, output-neutral): three class-level
+`td.index` caches made per-instance (`_TDNAME_CACHE`, `_us_cache`,
+`_delegate_cache`, `_delegate_viable_cache`), `type_sizes` no longer
+negative (91 rows), Android registration fallback gated on ELF, whole
+registration phase reports `error:` instead of tracebacking. A full-tree
+rebuild measures 1,359 s (22.7 min) for 114,458 bodies, so the
+`~7-9 min` in `CLAUDE.md` is stale; the 88-image loop is embarrassingly
+parallel and still serial.
+Landed before that: identical-render shared collapse (70 sites),
+shared-stub native disassembly comments, noreturn-shared forwarder
+returns (63 Neon `/* nothing */` -> `return Target(args)`), r8
+Assembly-CSharp promotion (ComputeStringHash x3 + stub comments; rest
+of tree at r7). That full-tree promotion is now *sized*: 101 of 11,276
+files differ from a fresh HEAD build, 95 comment-only or 1:1 renames, 6
+to read.
+Documented (no source change, markers stay honest): same-name
 receiver-pick disproof (~1.9k sites need sidecar, not sig
 elimination), constant-zero fold disproof (239 sites, 2 VAs).
-Full suite: 1013 passed / 0 failed (836 portable + 177 game; portable
-836/0 re-verified this session). Open, by payoff: ToString/op_Implicit
-spray probe (865 sites, 1 VA `0x1825b1150`), `op_Implicit`
-return-type subset (tens of sites), GetHashCode mixed VA (10 sites),
-Cpp2IL declaration cross-check (unfiled); then the sidecar program and
-a full-tree r8-equivalent promotion (user call).
+Full suite: 1023 passed / 0 failed (843 portable + 180 game; portable
+843/0 and full 1023/0 re-verified this session). Open, by payoff: audit
+batch 2 (the `mov rbp,rsp` frame lost at a CFG merge, ~900 methods;
+patch staged), parallel full-tree build (22.7 min -> ~2.1 min),
+ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`),
+`op_Implicit` return-type subset (tens of sites), GetHashCode mixed VA
+(10 sites), Cpp2IL declaration cross-check (unfiled); then the sidecar
+program and a full-tree r8-equivalent promotion (user call).

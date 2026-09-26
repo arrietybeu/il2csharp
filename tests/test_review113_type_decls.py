@@ -24,7 +24,6 @@ def P(ti, name="p"):
 
 
 def make_emitter(methods=(), fields=(), typedefs=(), ifaces=()):
-    Emitter._delegate_cache.clear()
     e = Emitter.__new__(Emitter)
     il = NS(addr_candidates={}, types=TYPES,
             type_name=lambda t: SPELL.get(

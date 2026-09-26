@@ -1,6 +1,6 @@
 from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.arm64 import is_arm64_binary
-from il2cpp.binary import load_binary
+from il2cpp.binary import ELF, load_binary
 from il2cpp.emitter import Emitter
 from il2cpp.headers import HeaderEmitter
 from il2cpp.metadata import Metadata
@@ -129,13 +129,25 @@ def main(argv):
     il = Il2Cpp(meta, bin_)
     il.verbose = args.verbose
     t0 = time_ms()
-    il.assign_images()
     try:
-        il.find_registrations()
-    except RuntimeError:
-        il.find_registrations_android()
-    il.load_function_bounds()
-    il.resolve_method_addrs()
+        il.assign_images()
+        try:
+            il.find_registrations()
+        except RuntimeError:
+            # The Android loader assumes a different registration struct
+            # shape. Probed on the x64 PE it does not fail: it lands on a
+            # code_reg_va 0x10 off the classic answer with the same module
+            # count and the same resolved method coverage, so trying it on
+            # a PE trades a clean error for a silently wrong registration.
+            if not isinstance(bin_, ELF):
+                raise
+            il.find_registrations_android()
+        il.load_function_bounds()
+        il.resolve_method_addrs()
+    except (OSError, ValueError, IndexError, KeyError, struct.error,
+            RuntimeError) as ex:
+        print('error: could not read code/metadata registrations:', ex)
+        return 1
     il._mod_ptr_cache.clear()  # free raw pointer arrays
     n_addr = sum(1 for m in meta.methods if m.addr)
     print('registrations ok | %d/%d methods have native code | %d ms' % (

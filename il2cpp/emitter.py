@@ -634,8 +634,6 @@ class Emitter:
             mods += 'unsafe '
         return '%s%s %s%s(%s)' % (mods, rtname, name, gp, ', '.join(ps))
 
-    _us_cache: Dict[int, bool] = {}
-
     def _unity_serialized(self, td: TypeDef, field_name: str) -> bool:
         """[SerializeField]: a MonoBehaviour / ScriptableObject descendant.
         The caller has already established that this is a non-public
@@ -644,7 +642,8 @@ class Emitter:
         the custom-attribute blob, so it stays a well-scoped guess."""
         if not field_name:
             return False
-        cached = self._us_cache.get(td.index)
+        cache = self.__dict__.setdefault('_us_cache', {})
+        cached = cache.get(td.index)
         if cached is None:
             cached = False
             cur = td.index
@@ -665,19 +664,17 @@ class Emitter:
                     break
                 cur = pt[0]
                 hops += 1
-            self._us_cache[td.index] = cached
+            cache[td.index] = cached
         return cached
-
-    _delegate_cache: Dict[int, bool] = {}
 
     def _is_delegate_td(self, td: TypeDef) -> bool:
         """True for user delegate types (MulticastDelegate subclasses).
 
         System.Delegate/MulticastDelegate themselves stay classes.
-        Cached: base chains are binary-global.
+        Cached per emitter instance (td.index is binary-local).
         """
         try:
-            hit = self._delegate_cache.get(td.index)
+            hit = self.__dict__.setdefault('_delegate_cache', {}).get(td.index)
             if hit is not None:
                 return hit
             res = False
@@ -695,7 +692,7 @@ class Emitter:
                             'MulticastDelegate', 'Delegate'):
                         res = True
                         break
-            self._delegate_cache[td.index] = res
+            self.__dict__.setdefault('_delegate_cache', {})[td.index] = res
             return res
         except Exception:
             return False
@@ -716,17 +713,19 @@ class Emitter:
 
         Needs the instance Invoke (the signature source) and no
         fields, properties, events, or nested types (a `delegate`
-        declaration cannot carry them). Cached per emitter.
+        declaration cannot carry them). Cached per emitter instance.
         """
         try:
-            hit = self._delegate_cache.get(('viable', td.index))
+            hit = self.__dict__.setdefault(
+                '_delegate_viable_cache', {}).get(td.index)
             if hit is not None:
                 return hit
             res = self._delegate_invoke(td) is not None \
                 and not list(self.meta.type_fields(td)) \
                 and not td.property_count and not td.event_count \
                 and not td.nested_count
-            self._delegate_cache[('viable', td.index)] = res
+            self.__dict__.setdefault(
+                '_delegate_viable_cache', {})[td.index] = res
             return res
         except Exception:
             return False

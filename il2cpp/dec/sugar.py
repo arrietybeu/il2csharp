@@ -341,22 +341,25 @@ class _SugarMixin:
             m = self._STATIC_ADDR_RX.search(text, start + 10)
         return text
 
-    _TDNAME_CACHE = None
-
     def _td_idx_by_name(self, full):
-        if self._TDNAME_CACHE is None:
+        # Per INSTANCE, never per class: the values are TypeDef indices, which
+        # are binary-local (CLAUDE.md), so a class-level map hands a second
+        # Decompiler -- a second fixture -- another binary's indices, and
+        # _static_field_name then names another type's static field.
+        c = self.__dict__.setdefault('_tdname_cache', None)
+        if c is None:
             c = {}
             try:
                 for i, td in enumerate(self.L.meta.typedefs):
                     c.setdefault((td.namespace, td.name), i)
             except Exception:
                 c = {}
-            Decompiler._TDNAME_CACHE = c
+            self.__dict__['_tdname_cache'] = c
         if '.' in full:
             ns, nm0 = full.rsplit('.', 1)
         else:
             ns, nm0 = '', full
-        return self._TDNAME_CACHE.get((ns, nm0))
+        return c.get((ns, nm0))
 
     def _static_field_name(self, full, off):
         td = self._td_idx_by_name(full)
