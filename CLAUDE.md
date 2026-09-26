@@ -101,6 +101,19 @@ fix-123 in `validation_reports/review123_*`.
 - Return consensus does not resolve method identity. Keep the honest
   `sub_<va>/*shared body, N candidates*/` rendering and do not apply
   method-name/receiver/property transformations that require one owner.
+- One shared body has one argument list. `_shared_arity_cap` (largest
+  declared arity among an address's candidates, receiver included, plus the
+  hidden sret buffer when the return is the all-candidates consensus) bounds
+  both `_call` and, through `_shared_tail_keep`, an unresolved shared tail --
+  one VA must not print `(x)` when called and `(x, 0)` when tail-jumped. Only
+  a trailing run of literal `0` is droppable, and only below that cap: it is
+  the register a shared forwarder zeroed for the callee (`xor edx,edx` /
+  `mov r8d,0` ahead of the jmp), never something the source wrote. A
+  non-zero extra argument, a single candidate, an unreadable candidate, or a
+  cap that does not sit below the list keeps today's spelling, so a
+  registry-missed sharer that really reads the register (probed:
+  `List<T>.CopyTo`'s R8 at `0x180df9c30`) is untouched. Never trim a
+  *resolved* tail: an identified callee owns its own signature.
 - A consensus value type folds sret only when the individual call's first
   argument is an observed address. Require a known exact nonzero value-type
   size; generic value types, source-level ref returns, and unsupported opaque

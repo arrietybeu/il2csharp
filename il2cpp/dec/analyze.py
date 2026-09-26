@@ -408,6 +408,12 @@ class _AnalyzeMixin:
                                                        marker=False)
                                 else:
                                     _eff_nm = tail_nm or nm
+                                    if tail_nm is None and '/*shared body,' in _eff_nm:
+                                        # mirror of the lifter-side tail trim
+                                        _keep = L._shared_tail_keep(t, args)
+                                        if _keep is not None and 0 < _keep < len(args):
+                                            args = args[:_keep]
+                                            arg_exprs = arg_exprs[:_keep]
                                     if _eff_nm in L.RT_ARITY and len(args) > L.RT_ARITY[_eff_nm]:
                                         args = args[:L.RT_ARITY[_eff_nm]]
                                     elif tail_nm is None and re.fullmatch(r'sub_[0-9a-f]+', nm) and len(args) > 4:

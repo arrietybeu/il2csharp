@@ -484,6 +484,71 @@ class _CallsMixin:
             if len(arg_exprs or []) > len(args):
                 arg_exprs.pop()
 
+    def _shared_arity_cap(self, cands, rty=None):
+        """Largest declared argument-slot count across shared-body candidates.
+
+        Batch 21j's proof, factored out of `_call` so tails can trim with
+        it too: every candidate names a call into the same compiled
+        machine code, so they all consume the same argument registers,
+        and the largest declared arity among them -- receiver included,
+        plus the hidden sret buffer whenever `rty` is the all-candidates
+        consensus return -- bounds the slots the call can use. A
+        candidate the registry cannot read is skipped (the inline loop
+        this came from bounded only the generic row's index and let a
+        malformed method row propagate); `None` means nothing was
+        readable and the caller keeps its legacy spelling.
+        """
+        if not cands:
+            return None
+        wants = []
+        for c in cands:
+            m3 = None
+            try:
+                if c[0] == 'method':
+                    if 0 <= c[1] < len(self.meta.methods):
+                        m3 = self.meta.methods[c[1]]
+                elif c[0] == 'generic':
+                    md3 = self.il.method_specs[c[1]][0]
+                    if 0 <= md3 < len(self.meta.methods):
+                        m3 = self.meta.methods[md3]
+            except Exception:
+                continue
+            if m3 is None:
+                continue
+            rt3 = self.il.types[m3.return_type] \
+                if 0 <= m3.return_type < len(self.il.types) else None
+            abi_rt3 = rty if rty is not None else rt3
+            wants.append(m3.param_count + (0 if m3.is_static else 1)
+                         + int(self.il.returns_sret(abi_rt3)))
+        return max(wants) if wants else None
+
+    def _shared_tail_keep(self, target, args):
+        """How many arguments an unresolved shared-body tail may print.
+
+        `_call` bounds every ambiguous shared body's list by the largest
+        declared arity among its candidates (batch 21j); tails printed the
+        whole register spray instead, so one VA rendered `(x)` when called
+        and `(x, 0)` when tail-jumped, though both name the same compiled
+        code. Reuse that proof here, narrowly: only a trailing run of
+        literal zeros is dropped -- the plumbing value a shared forwarder
+        wrote into a register no candidate declares (`xor edx,edx` / `mov
+        r8d,0` right ahead of the jmp), which is never something the
+        source wrote. A non-zero trailing argument keeps today's spelling,
+        so a registry-missed sharer whose extra register really is read
+        (probed: List`1.CopyTo's R8 at 0x180df9c30) is untouched.
+        Returns the keep count, or None to leave the list alone.
+        """
+        cands = self.il.addr_candidates.get(target) if target else None
+        if not cands or len(cands) < 2 or len(args) <= 1:
+            return None
+        cap = self._shared_arity_cap(cands)
+        if cap is None or not 0 < cap < len(args):
+            return None
+        for i in range(cap, min(len(args), len(ARG_REGS))):
+            if args[i] != '0':
+                return None
+        return cap
+
     def _tail_generic_call(self, tg_name, tg_md, args, arg_exprs):
         """Render a tail resolved through its hidden instantiation argument.
 
@@ -2198,29 +2263,13 @@ class _CallsMixin:
         # elsewhere in the method happened to leave behind as bogus extra
         # "arguments" (unrelated read-before-def temps in the render).
         if mi is None and cands and len(cands) > 1:
-            wants = []
-            for c in cands:
-                m3 = None
-                if c[0] == 'method':
-                    m3 = self.meta.methods[c[1]]
-                elif c[0] == 'generic':
-                    md3 = self.il.method_specs[c[1]][0]
-                    if 0 <= md3 < len(self.meta.methods):
-                        m3 = self.meta.methods[md3]
-                if m3 is not None:
-                    rt3 = self.il.types[m3.return_type] \
-                        if 0 <= m3.return_type < len(self.il.types) else None
-                    # Consensus applies to every candidate, including a
-                    # root VAR/MVAR inflated to a concrete struct.  Use it
-                    # for the hidden-buffer slot when available; the raw
-                    # MethodDef signature cannot classify that ABI.
-                    abi_rt3 = rty if shared_rty else rt3
-                    wants.append(m3.param_count + (0 if m3.is_static else 1)
-                                 + int(self.il.returns_sret(abi_rt3)))
-            if wants:
-                want0 = max(wants)
-                if len(args) > want0:
-                    args = args[:want0]
+            # Consensus applies to every candidate, including a root
+            # VAR/MVAR inflated to a concrete struct.  Use it for the
+            # hidden-buffer slot when available; the raw MethodDef
+            # signature cannot classify that ABI.
+            want0 = self._shared_arity_cap(cands, rty if shared_rty else None)
+            if want0 is not None and len(args) > want0:
+                args = args[:want0]
             shapes = set()
             for c in cands:
                 m3 = None

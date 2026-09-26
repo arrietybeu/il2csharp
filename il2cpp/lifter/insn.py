@@ -222,6 +222,16 @@ class _InsnMixin:
                                 self.regs.pop(r, None)
                             return
                     _eff_nm = tail_nm or nm
+                    if tail_nm is None and '/*shared body,' in _eff_nm:
+                        # one shared body, one argument list: an
+                        # unresolved tail is bounded exactly like
+                        # `_call`'s by the 21j arity proof, so a
+                        # trailing plumbing zero stops being an
+                        # invented `(this, 0)` (see _shared_tail_keep).
+                        _keep = self._shared_tail_keep(t, args)
+                        if _keep is not None and 0 < _keep < len(args):
+                            args = args[:_keep]
+                            arg_exprs = arg_exprs[:_keep]
                     if _eff_nm in self.RT_ARITY and len(args) > self.RT_ARITY[_eff_nm]:
                         args = args[:self.RT_ARITY[_eff_nm]]
                     elif tail_nm is None and re.fullmatch(r'sub_[0-9a-f]+', nm) and len(args) > 4:

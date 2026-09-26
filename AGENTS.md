@@ -93,6 +93,20 @@ unproven shape keeps today's spelling; raw is always honest.
 
 ## Current state (2026-09-26, `main` clean)
 
+Landed 2026-09-26 (one shared body, one argument list): an unresolved
+shared-body **tail** is now bounded by the same largest-declared-arity proof
+`_call` has used since 21j (`_shared_arity_cap` / `_shared_tail_keep`), so
+one VA no longer prints `(x)` when called and `(x, 0)` when tail-jumped --
+the `GetHashCode` forwarder family at `0x181b14c10` was the visible case.
+Only a trailing run of literal `0` goes (callee-zeroed plumbing), so a
+registry-missed sharer whose extra register is really read (`List<T>.CopyTo`'
+s R8 at `0x180df9c30`) is untouched. Paired pre/post sweep over all 5,437
+methods that `jmp` into a multi-candidate address (pre root = `HEAD`
+versions of the three files, no stash): **349 bodies / 363 lines changed, 0
+new crashes**, every changed line its pre-image minus the last `, 0`; 775
+fires over 112 addresses, every one dropping exactly one argument. Calls and
+resolved tails untouched. +18 portable / +6 game.
+
 Landed 2026-09-26 (audit batch 2): the `mov rbp,rsp` frame is now a
 tracked fact (`_rbp_frame`) instead of an inference from the register
 value, so it survives the pass-2 phi merge -- 1,537 method bodies change,
@@ -117,11 +131,11 @@ to read.
 Documented (no source change, markers stay honest): same-name
 receiver-pick disproof (~1.9k sites need sidecar, not sig
 elimination), constant-zero fold disproof (239 sites, 2 VAs).
-Full suite: 1047 passed / 0 failed (859 portable + 188 game), both
-re-verified this session. Open, by payoff: parallel full-tree build
+Full suite: 1071 passed / 0 failed (877 portable + 194 game), verified
+against the fixture this session. Open, by payoff: parallel full-tree build
 (22.7 min -> ~2.1 min), unmodelled-instruction invalidation
 (`insn.py`'s silent fall-through leaves a stale destination live),
 ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`),
-`op_Implicit` return-type subset (tens of sites), GetHashCode mixed VA
-(10 sites), Cpp2IL declaration cross-check (unfiled); then the sidecar
-program and a full-tree promotion (user call).
+`op_Implicit` return-type subset (tens of sites), Cpp2IL declaration
+cross-check (unfiled); then the sidecar program and a full-tree promotion
+(user call).

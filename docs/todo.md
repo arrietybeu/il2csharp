@@ -12,8 +12,8 @@ own status tag rules.
 - `op_Implicit` return-type subset (tens of sites, e.g.
   Angle/StyleFloat/TimeValue at `0x182da54f0`): needs a typed-use
   scan; sole caller sampled (13332) declines on `object`.
-- GetHashCode mixed VA (10 sites, `0x181b14c10`): forwarder body,
-  stale trailing `0`, inconsistent tail rendering across twins.
+- GetHashCode mixed VA (LANDED, section below): the stale trailing `0` is
+  gone from unresolved shared tails; 529 method bodies tree-wide.
 - Cpp2IL declaration cross-check gate (proposed, not yet filed):
   diff emitted declarations against Cpp2IL-reconstructed DLLs.
 - Sidecar program (large, deferred by design): method+generic mixes
@@ -33,6 +33,93 @@ own status tag rules.
 - Parallel full-tree build (`cli.py` loops 88 images serially): measured
   1,359 s for 114,458 bodies; a 12-worker process pool predicts 128 s
   (10.8x, 11% imbalance) at 513 MB/worker. Not started.
+
+## Current work: one shared body, one argument list (2026-09-26, LANDED)
+
+The `GetHashCode` mixed-VA item from the shared-residual audit is closed,
+narrowly. What the audit had found was a rendering inconsistency, not a
+missing identity: MSVC folds the no-arg `GetHashCode` forwarders onto one
+body (`xor edx,edx; jmp 0x181b14c10`), so the same address printed two
+different argument lists depending on how it was reached.
+
+    // mi 8752 ConstructorInfo.GetHashCode, before
+    return (int)sub_181b14c10/*shared body, 13 candidates*/(this, 0);
+    // mi 3961 Delegate.GetHashCode, same address, called not jumped
+    int num2 = (int)sub_181b14c10/*shared body, 13 candidates*/(this.m_target);
+
+The `0` is callee-zeroed plumbing. The forwarder zeroes EDX for the callee,
+no candidate at that address declares a second parameter, and the two twins
+that *do* resolve at the same VA (`EventInfo` mi 8771, `FieldInfo` mi 8790)
+already printed one argument. After: `return (int)sub_181b14c10/*shared
+body, 13 candidates*/(this);` -- the call and the tail finally agree.
+
+**The proof is 21j's, reused rather than reinvented.** Every candidate at an
+address names a call into the same compiled machine code, so they all consume
+the same argument registers, and the largest declared arity among them --
+receiver included, plus the hidden sret buffer when the return is the
+all-candidates consensus -- bounds the slots. `_call` has used that bound
+since batch 21j; the inline loop is now `_shared_arity_cap`, and
+`_shared_tail_keep` reuses it for a tail. Extracting it also hardened the
+`_call` side for free: the old inline loop indexed `meta.methods[c[1]]`
+unchecked and let a malformed candidate row propagate, while the helper
+bounds the index and skips what it cannot read (`None` = nothing readable =
+keep today's spelling).
+
+**Narrow on purpose.** Only a trailing run of literal `0` is droppable, and
+only below the cap, because that is the register a shared forwarder zeroed
+(`xor edx,edx` / `mov r8d,0` right ahead of the jmp) rather than something
+the source wrote. Everything else declines to today's spelling: a non-zero
+extra argument inside the four argument registers, a single candidate, an
+unreadable candidate, a cap that does not sit below the list, and a list of
+one or fewer. Past `ARG_REGS` the zero-run check does not read at all --
+those slots are stack-passed, where no candidate's declared arity can reach,
+so the cap alone bounds them. A *resolved* tail is never touched -- an
+identified callee owns its own signature, and the receiver /
+hidden-generic / same-render proofs above the new trim still run first.
+
+**Scale, measured rather than sampled.** The only methods this can touch are
+those that `jmp` into a multi-candidate address: 5,437 of 114,458. That set
+was lifted twice -- once from a pre-change source root (the package with the
+three touched files restored from `HEAD`, so the working tree was never
+stashed) and once from the new one -- and the two body sets diffed:
+
+- **349 bodies changed / 363 lines, 0 new crashes** (0 pre, 0 post), 0
+  line-count changes, 0 bodies longer. Every changed line is byte-for-byte
+  its pre-image with the *last* `, 0` removed from that shared call's
+  argument list; nothing else moved on any line.
+- 386 methods fire in the real pass. The 37 whose body does not change have
+  their shared marker replaced downstream (identical-render collapse:
+  `return x == y;` at mi 2603), so the trim is invisible there, not wrong.
+
+The instrumented census behind that: 775 fires -- 399 real pass, 376 dry
+pass -- over 531 (method, address) pairs, 529 distinct methods, 112
+addresses, and every fire removed exactly one argument (295 `2->1`,
+413 `3->2`, 67 `4->3`). Largest families by distinct methods:
+`0x182b75030` 97 (30 candidates, the `(this, 0)` `.ctor` shape),
+`0x181af7520` 73 (string `Equals`/`op_Equality`, `(x, y, 0)`), `0x182be3aa0`
+54 (`DockInSlot`), `0x1807ee180` 29, `0x181bb6bf0` 16 (handle
+`Release`/`Close`), `0x181cffb70` 15 (`GetHashCode`).
+
+**Unchanged, deliberately.** Calls were already bounded by 21j, so the 196
+tree-wide `return (T)sub_...(... , 0)` lines whose `0` is a real argument
+(`op_Equality(x, null)` and friends, cap 2 = the list) keep it. So does a
+tail whose extra registers are genuinely read: `mi 24077 SelectNuisanceType`
+still prints the four-argument `List<T>.CopyTo` tail at `0x180df9c30`, the
+probed case where the registry missed a sharer that dispatches on R8.
+
+**Accepted risk, stated rather than hidden.** A registry-missed sharer whose
+extra register is a *zero* the body really reads would lose that argument,
+and the absence of such a sharer is unprovable from the registry. The visible
+alternative -- one body printing `(x)` at a call and `(x, 0)` at a tail, in
+the same file -- is the defect being removed, and it is the shape a reader
+cannot tell from a real parameter.
+
+Tests: +18 portable (`tests/test_shared_tail_arity.py`: cap arithmetic, the
+sret slot, generic specs, unreadable rows, and every decline arm), +6 game
+(`tests/test_game_shared_tail_arity.py`: mi 8752 / 13198 / 78202 / 1231
+trimmed, mi 8771 / 8790 twins unchanged, mi 3961's call site unchanged, mi
+24077's read registers unchanged). Full suite **1071 passed / 0 failed**
+(877 portable + 194 game) with the change in place; no golden moved.
 
 ## Current work: audit batch 2 -- the RBP frame survives a CFG merge (2026-09-26, LANDED)
 
