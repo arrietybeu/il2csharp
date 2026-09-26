@@ -22,7 +22,7 @@ via System.Array, rename barrier + param exclusion, interface dispatch
 naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
 direct calls), each decline-by-default with portable + game pins; plus
 documented disproofs (hinted receivers, ?addr tightening,
-receiver-driven generics). 1023 tests pass (843 portable + 180 game),
+receiver-driven generics). 1047 tests pass (859 portable + 188 game),
 suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
 both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
 and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
@@ -210,6 +210,33 @@ fix-123 in `validation_reports/review123_*`.
   offset (`mov rbp,rsp` keeps the unreadable frame idiom): the frame path owns
   its disp keys, and absolute tracking there splits homes (stash-proven on
   80548) — RBP behavior is byte-identical with or without copies live.
+- `_rbp_is_frame()` consults `_rbp_frame`, a tracked FACT, never the register
+  value. `mov rbp,rsp` sets it; any other write to RBP clears it in `set_reg`;
+  the pass-2 phi merge cannot clear it, because the merge installs values
+  with `L.regs[k] = ...` and so bypasses `set_reg`. Deriving the answer from
+  the value is what broke it: the merge rewrites a never-written `RBP = None`
+  into `Expr('?')`, which `_bind` then rewrites into a temp name, so a text
+  or `_unk` test catches at most half the sites and every `[rbp+N]` in a
+  merged region fabricates pointer arithmetic on the seed
+  (`((byte*)obj9 - 0x30)[0] = vector31`, where `obj9` is not a pointer —
+  named, so it parses, so the parse gate sees nothing). Do not reach for
+  `_defpos` as the discriminator either: `_copy_expr` drops it, so "no
+  definition site" cannot tell an unwritten register from a copy of a
+  written one.
+- `slot_var` sign-extends with `sdisp` before keying, so one native home has
+  one key whatever the caller passed. iced-x86 reports `[rbp-0x30]` as
+  `0xffffffffffffffd0`, and the callers disagree: the RSP-copy path hands in
+  an already-extended `_stack_address`, while the RSP/RBP direct paths and the
+  LEA path hand in `ins.memory_displacement` raw. Two coordinate systems for
+  one home split a `[copy+N]` write from an `[rsp+M]` read into two C# locals
+  and name slots `s_ffffffffffffffd0`. `sdisp` is idempotent on an
+  already-negative value, so normalizing at this single choke point leaves
+  every correct caller's name byte-identical. Both the key and the name must
+  come from that one normalized `off`. The name still uses `abs(off)`, which
+  is pre-existing and deliberately unchanged: it means a `+0x30` and a `-0x30`
+  slot would share the name `s_30` at different keys. Normalizing the name
+  derivation too would rename every correct caller's slot, so fix that latent
+  collision only inside a deliberate rename pass, never as a drive-by.
 - Same-typedef shared-body twins (e.g. Transform get_parent triple) keep the
   honest marker: no receiver proof can split one declaring typedef, and
   consensus typing never resolves identity. An exact all-candidate semantic
@@ -254,7 +281,7 @@ fix-123 in `validation_reports/review123_*`.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test
-(`tests/test_source_format.py`) enforces this contract. **1023 tests pass** (843 portable + 180 game;
+(`tests/test_source_format.py`) enforces this contract. **1047 tests pass** (859 portable + 188 game;
 64 golden snapshots, all green).
 `goldens_review77.json`, `goldens_review79.json`,
 `goldens_review80.json`, `goldens_review82.json`, and `goldens_review83.json` are

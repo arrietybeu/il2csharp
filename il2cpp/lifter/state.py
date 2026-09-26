@@ -3,7 +3,7 @@ from il2cpp.expr import Expr, _BINDABLE_KINDS, _RegState, _USE_BIND_MIN, _bind_r
 from il2cpp.metadata import MethodDef, TypeDef
 from il2cpp.names import safe_ident
 from il2cpp.runtime.core import Il2Cpp
-from il2cpp.text import imm_of, reg_name, strip_outer
+from il2cpp.text import imm_of, reg_name, sdisp, strip_outer
 from il2cpp.x64 import ARG_REGS, ARG_XMM, GPRS, GPR_ALIAS, VOLATILE
 
 class _StateMixin:
@@ -1059,6 +1059,11 @@ class _StateMixin:
         self._array_allocation_loop_guard = False
         self._cur_ip = 0
         self.rsp_delta = 0
+        # this method established no frame pointer until it runs `mov rbp,rsp`.
+        # lift() resets its own per-method state, separate from _setup_entry,
+        # so the frame fact has to be cleared here too or it leaks into every
+        # method this Lifter touches next.
+        self._rbp_frame = False
         self.stack_map: Dict[int, str] = {}   # slot offset from entry rsp -> var name
         self.slot_types: Dict[str, tuple] = {}  # stack var -> il2cpp type (sret buffers)
         self.stack_values: Dict[str, Expr] = {}  # current simple value parked in a stack slot
@@ -1277,6 +1282,9 @@ class _StateMixin:
         # reset per method/pass: t-names repeat across methods and v-names
         # differ between the two analysis passes, so leftovers mis-type
         self._var_types = {}
+        # this method executed `mov rbp,rsp`: a per-method FACT, so unlike
+        # the register value it survives the pass-2 phi merge's Expr('?').
+        self._rbp_frame = False
         if not hasattr(self, 'stack_map'):
             self.stack_map = {}
         if not hasattr(self, 'slot_types'):
@@ -1400,6 +1408,11 @@ class _StateMixin:
         base = GPR_ALIAS.get(name, name)
         if base in ('RSP',):
             return
+        if base == 'RBP' and expr is not None:
+            # A real write to RBP ends the frame-pointer fact. `mov rbp,rsp`
+            # stores None (RSP is never tracked) and re-arms it on the next
+            # line, so this only fires once RBP holds an actual value.
+            self._rbp_frame = False
         self.regs[base] = expr
 
     # ------------------------------------------------------------------
@@ -1756,7 +1769,11 @@ class _StateMixin:
         are scratch and resolve through the register value instead of
         aliasing stack slot s_X (InventoryManager.
         Rpc_CMD_UpdateInventoryForHost 0x180704750 keeps param 1 in
-        RBP, so [rbp+0x18] is inventoryIds_.Length)."""
+        RBP, so [rbp+0x18] is inventoryIds_.Length). `_rbp_frame` is the
+        tracked fact "RBP is the frame pointer right now": set by
+        `mov rbp,rsp`, cleared by any other write to RBP, and deliberately
+        NOT derived from the register value, which the pass-2 merge
+        rewrites."""
         e = self.reg('RBP')
         if e is None:
             return True
@@ -1765,9 +1782,31 @@ class _StateMixin:
             return True
         if getattr(e, '_unk', False):
             return True
+        if getattr(self, '_rbp_frame', False):
+            # RBP IS the frame pointer, tracked as a fact because the pass-2
+            # merge rewrites the register value out from under every arm
+            # above: it replaces a never-written RBP = None with Expr('?'),
+            # and _bind then rewrites that to a temp name, so the merged
+            # region matched nothing and every [rbp+N] in it fabricated
+            # pointer arithmetic on the seed (`((byte*)obj9 - 0x30)[0] =
+            # vector31` where obj9 is not a pointer). Set by `mov rbp,rsp`,
+            # cleared by any other write to RBP (see set_reg), and untouched
+            # by the merge, which writes L.regs directly.
+            return True
         return t.startswith('&s_')
 
     def slot_var(self, off):
+        # Normalize HERE, at the single choke point, because callers hand us
+        # three sign conventions: the RSP-copy path passes an already
+        # sign-extended `_stack_address`, while the RSP/RBP direct paths and
+        # the LEA path pass iced-x86's raw 0xffffffffffffffd0 for [rbp-0x30].
+        # One method then held two coordinate systems for one native home, so
+        # a [copy+N] write and an [rsp+M] read of the same slot became two C#
+        # locals, and the name came out as `s_ffffffffffffffd0`. `sdisp` is
+        # idempotent on an already-negative value, so every caller's existing
+        # name is unchanged; only the raw paths move -- onto the key space
+        # `_stack_address` and the entry-parameter classifier already use.
+        off = sdisp(off)
         key = off + self.rsp_delta
         if key not in self.stack_map:
             self.stack_map[key] = 's_%x' % abs(off)

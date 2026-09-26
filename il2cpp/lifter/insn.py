@@ -317,6 +317,14 @@ class _InsnMixin:
                     # _rbp_is_frame() held. Keep None, not a '?'-text
                     # copy that would flip the frame predicate.
                     e = None
+                if dst == 'RBP' and src == 'RSP':
+                    # `mov rbp,rsp`: the value stays unreadable (RSP is
+                    # never tracked) so the None arm of _rbp_is_frame()
+                    # keeps holding -- but record the FACT, because the
+                    # pass-2 merge replaces that None with Expr('?') and
+                    # every [rbp+N] in a merged block would then fabricate
+                    # pointer arithmetic on the never-written seed.
+                    self._rbp_frame = True
                 if mn != Mnemonic.MOV:
                     # a sign/zero extension moves an integer (chars and
                     # bools included -- both are int-promoted anyway)

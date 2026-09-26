@@ -28,10 +28,123 @@ own status tag rules.
 - Parallel full-tree build (`cli.py` loops 88 images serially): measured
   1,359 s for 114,458 bodies; a 12-worker process pool predicts 128 s
   (10.8x, 11% imbalance) at 513 MB/worker. Not started.
-- Audit batch 2 (next, patch staged): the `mov rbp,rsp` frame lost at a
-  CFG merge (~900 methods fabricate pointer arithmetic on the RBP
-  seed) + `slot_var`'s three sign conventions. Spec and patch script
-  ready; needs its own full rebuild / sweep / parse gate.
+- Audit batch 2 (LANDED, section below): the `mov rbp,rsp` frame lost
+  at a CFG merge + `slot_var`'s three sign conventions.
+- Parallel full-tree build (`cli.py` loops 88 images serially): measured
+  1,359 s for 114,458 bodies; a 12-worker process pool predicts 128 s
+  (10.8x, 11% imbalance) at 513 MB/worker. Not started.
+
+## Current work: audit batch 2 -- the RBP frame survives a CFG merge (2026-09-26, LANDED)
+
+The largest quality defect the audit found: a method that sets up a frame
+pointer loses it at the first CFG merge, and every `[rbp+N]` in the merged
+region becomes pointer arithmetic on the never-written seed.
+
+**E1 -- the frame fact.** `_rbp_is_frame()` read the register *value*, and
+the pass-2 phi merge rewrites that value out from under it. A never-written
+`RBP = None` (exactly what `mov rbp,rsp` produces, since RSP is never
+tracked) becomes `Expr('?', None, '?')` at `analyze.py:460`, and `_bind`
+then rewrites that into a temp name. In a merged block *every* arm of the
+predicate failed -- `None`, `'?addr'`, `_unk`, `&s_` -- and `_read_mem` /
+`_mem_lvalue` fell out of the frame branch into the raw-deref branch.
+Measured on `WrapRopePlayerController` (mi 24062, `push rbp; mov rbp,rsp;
+sub rsp,50h`): **21 sites** like
+
+    ((byte*)obj9 - 0x30)[0] = vector31;      // movsd [rbp-30h], xmm6
+    ((float*)obj9 - 0x28)[0] = real1;         // mov   [rbp-28h], ebx
+    this.rb.AddForce((obj9 - 0x30), ForceMode.Acceleration);
+
+`obj9` is not a pointer, and because it was *named* every statement was legal
+C#, so the parse gate saw nothing. An instrumented trace showed 64
+consultations split across two states -- 32 with RBP text `'?'`, 32 with
+`'v45'` -- which is why the obvious `t == '?'` test fixed only half of them.
+
+The fix tracks the fact instead of inferring it: `_rbp_frame` is set by
+`mov rbp,rsp`, cleared by any other write to RBP inside `set_reg` (the one
+place every register write passes through), and never derived from the
+register value. It survives the merge because the merge installs values with
+`L.regs[k] = ...` and so bypasses `set_reg`. `_defpos` is not a usable
+discriminator either: `_copy_expr` drops it, so "no definition site" cannot
+distinguish an unwritten register from a copy of a written one.
+
+Same method after: typed `UnityEngine.Vector3` locals, a real
+`Vector3.Normalize(...)`, and the real `this.rb.AddForce(vector32,
+ForceMode.Acceleration)`. The 16-byte `movsd` store into a Vector3 home
+stays `vector32 = unknown`, which is the honest marker, not a guess.
+
+**E3 -- one home, one key.** `slot_var` keys by `off + rsp_delta` and names
+by `abs(off)`, but callers disagreed on sign: the RSP-copy path passes an
+already sign-extended `_stack_address`, while the RSP/RBP direct paths and
+the LEA path pass `ins.memory_displacement` raw (iced-x86 reports `[rbp-0x30]`
+as `0xffffffffffffffd0`). One method held two coordinate systems for one
+native home -- mi 24062 held both `(-24, 's_40')` and
+`(18446744073709551480, 's_ffffffffffffffd0')` -- so a `[copy+N]` write and
+an `[rsp+M]` read of one slot became two C# locals and the provenance layer
+could not see the naming layer. `slot_var` now normalizes with `sdisp` at
+that single choke point; `sdisp` is idempotent on an already-negative value,
+so every correct caller's name is byte-identical and only the raw paths move.
+
+**Scale.** A regex census of the pre-batch-2 full build counts **87,471
+fabricated-pointer sites in 2,795 files** -- well past the audit's
+per-method extrapolation (~25k instruction sites), because an affected
+method carries many sites. Worst hit: `Unity.Mathematics` at 22,432, then
+UIElements 8,576, mscorlib 6,830, System.Xml 4,713. Assembly-CSharp scoped
+rebuild: **2,938 -> 2,027** (-911, -31%) with 60 of 491 files changed. The
+residue is the honest unknown-base decline rather than the frame bug: a
+`[rbp+N]` off a base the lifter never proved still renders raw, which is the
+intended direction.
+
+Tests: +16 portable (`tests/test_rbp_frame.py`), +8 game
+(`tests/test_game_rbp_frame.py`, `tests/test_game_rbp_frame_reset.py`).
+
+Gates, all against the final source:
+- **Paired full-corpus sweep, pre- vs post-**: 116,178 methods, 0 crashes
+  both sides; `into_block` **8,075 / 2,046 identical** (so the +4 sites /
+  -2 methods against the `CLAUDE.md` baseline is pre-existing drift from
+  earlier commits, not this batch); brace 0 unclosed / 0 underflow; 0
+  dangling gotos; 0 empty args; tail-arg changes 1,881 / methods 1,801
+  identical; 2,253,753 -> 2,253,029 lines.
+- **Per-method compare**: 1,537 changed bodies, **0 structural changes, 0
+  new crashes**, 0 added / 0 removed methods.
+- **Full strict rebuild**: 11,183 type files / 114,458 bodies / 0 failed /
+  0 structured fallbacks / 0 type-emission failures; brace audit
+  **0 unbalanced**; parse gate **0 bad files / 0 ERROR / 0 MISSING / 0
+  recovery nodes**, exit 0.
+- Corpus-wide fabricated-pointer sites **87,471 -> 73,302** (-14,169,
+  -16.2%), files 2,795 -> 2,752.
+
+Read before accepting, per the golden rule:
+- `Computer.cs`: 72 fabricated sites -> 0, and MSVC's struct-copy idiom
+  comes back as real Unity code -- twelve invented byte-pokes through
+  `obj13` become `Navigation navigation2 = navigation1; navigation1.m_Mode
+  = Mode.Vertical; this.inputText.navigation = navigation1;`.
+- `CurrentDayManager.cs`: 51 -> 0, `Quaternion quaternion1 = default;`
+  replacing `((int*)obj1 + 0x28)[0] = 0;`.
+- `mi 104428 GetBounds` (golden moved): the value no longer round-trips
+  through a fabricated `((byte*)obj41 + 0x0)[0]` hop before reaching the
+  frame slot. The surviving `((byte*)obj40 + 0x0)[0]` is the honest
+  unknown-base decline, not a regression.
+- `mi 105455 ValidateLine` (486 lines, `lea rbp,[rsp-70h]`): recovering the
+  frame **retyped** its slots from `object` to `UnityEngine.Vector3`, so
+  the `object obj87 = unknown;` twin that test pinned no longer occurs
+  there and the use-site is now the better `UnityEngine.Vector3 vector36 =
+  vector34.normalized;`. The dead-unknown-store pass stays pinned by the
+  LagCompensationUtils test.
+
+One honest cost, measured rather than waved through. `mi 32833 OnStateEvent`
+is a `lea rbp,[rsp-38h]` method, so it moves under **E3 alone** (E1 does
+not touch LEA frames): `int num1 = default;` becomes `int num1 = 0;
+num1 = 0f;`. The int type and the zero value are now correctly recovered
+from the slot's `num1 != 1` use, but a **new CS0266** appears -- `0f`
+assigned to an `int` local -- next to the pre-existing one (`object` into
+`int`). Counted across Assembly-CSharp, scalar-declared-with-float-RHS goes
+**550 -> 557 (+7)**, in **3 of the 60 changed files**. That is a
+pre-existing lossy area (550 instances before this batch) touched
+marginally, against 911 fabricated pointer sites removed in the same
+assembly, so it is accepted and recorded here rather than used as a reason
+to narrow a provably-correct key-space fix.
+
+Invariants recorded in `CLAUDE.md`.
 
 ## Current work: audit batch 1 -- per-instance caches, struct sizes, ELF gate (2026-09-26, LANDED)
 

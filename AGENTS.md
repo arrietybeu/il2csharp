@@ -93,14 +93,20 @@ unproven shape keeps today's spelling; raw is always honest.
 
 ## Current state (2026-09-26, `main` clean)
 
-Landed 2026-09-26 (audit batch 1, output-neutral): three class-level
-`td.index` caches made per-instance (`_TDNAME_CACHE`, `_us_cache`,
-`_delegate_cache`, `_delegate_viable_cache`), `type_sizes` no longer
-negative (91 rows), Android registration fallback gated on ELF, whole
-registration phase reports `error:` instead of tracebacking. A full-tree
-rebuild measures 1,359 s (22.7 min) for 114,458 bodies, so the
-`~7-9 min` in `CLAUDE.md` is stale; the 88-image loop is embarrassingly
-parallel and still serial.
+Landed 2026-09-26 (audit batch 2): the `mov rbp,rsp` frame is now a
+tracked fact (`_rbp_frame`) instead of an inference from the register
+value, so it survives the pass-2 phi merge -- 1,537 method bodies change,
+**0 structural changes, 0 new crashes**, and fabricated `(T*)x - 0xNN`
+pointer arithmetic falls 87,471 -> 73,302 tree-wide. `slot_var` now
+sign-extends with `sdisp`, so one native home has one key. Accepted,
+documented cost: +7 scalar-declared-with-float-RHS lines (550 -> 557 in
+Assembly-CSharp, 3 of 60 changed files), a pre-existing lossy area.
+Also landed (batch 1, output-neutral): three class-level `td.index` caches
+made per-instance, `type_sizes` no longer negative (91 rows), Android
+registration fallback gated on ELF.
+A full-tree rebuild measures 1,359 s (22.7 min) for 114,458 bodies, so
+the `~7-9 min` in `CLAUDE.md` is stale; the 88-image loop is
+embarrassingly parallel and still serial.
 Landed before that: identical-render shared collapse (70 sites),
 shared-stub native disassembly comments, noreturn-shared forwarder
 returns (63 Neon `/* nothing */` -> `return Target(args)`), r8
@@ -111,11 +117,11 @@ to read.
 Documented (no source change, markers stay honest): same-name
 receiver-pick disproof (~1.9k sites need sidecar, not sig
 elimination), constant-zero fold disproof (239 sites, 2 VAs).
-Full suite: 1023 passed / 0 failed (843 portable + 180 game; portable
-843/0 and full 1023/0 re-verified this session). Open, by payoff: audit
-batch 2 (the `mov rbp,rsp` frame lost at a CFG merge, ~900 methods;
-patch staged), parallel full-tree build (22.7 min -> ~2.1 min),
+Full suite: 1047 passed / 0 failed (859 portable + 188 game), both
+re-verified this session. Open, by payoff: parallel full-tree build
+(22.7 min -> ~2.1 min), unmodelled-instruction invalidation
+(`insn.py`'s silent fall-through leaves a stale destination live),
 ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`),
 `op_Implicit` return-type subset (tens of sites), GetHashCode mixed VA
 (10 sites), Cpp2IL declaration cross-check (unfiled); then the sidecar
-program and a full-tree r8-equivalent promotion (user call).
+program and a full-tree promotion (user call).
