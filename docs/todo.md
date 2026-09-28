@@ -1,10 +1,24 @@
 # il2csharp — TODO (open work and historical triage)
 
-## Open work index (2026-09-25; history below untouched)
+## Open work index (2026-09-28; history below untouched)
 
 By payoff. `## Current work` headers farther down are chronological log
 labels, not live status -- newest section is on top and each section's
-own status tag rules.
+own status tag rules. Commit hashes cited in sections written before the
+2026-09-28 public scrub are pre-scrub ids and no longer resolve in this
+history (see `docs/public_release.md`).
+- Codegen-intrinsic recognition (program, **first landing 2026-09-28**):
+  a census of plain `sub_` calls found 38,254 sites / 2,663 targets,
+  **36,313 sites (95%) with zero metadata candidates** -- IL2CPP runtime
+  helpers that metadata can never name. Nullary interface dispatch is
+  landed (section below; `0x180002210`/`0x180002380`). Open families by
+  sites: isinst/castclass thunk `0x180479f80` (8,271), alloc/box
+  `0x18043dc60` (2,446), class-init `0x18043e360` (861),
+  `Interlocked.CompareExchange` `0x18043f880` (582), bounds-checked
+  element address `0x1803ed830`/`0x1803ed860` (745), parameterized
+  interface dispatch (the A-family that saves R9:
+  `IUpdatableGraph.CanUpdateAsync` slot 3, `IAstarAI.set_OnSearchPath`
+  slot 26). The census script and report were local scratch (temp).
 - ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`):
   the only un-disproved micro-slice. Both candidates consume one
   register today; the unrun scan is whether any of the 865 call shapes
@@ -20,10 +34,12 @@ own status tag rules.
   (5.6k), different-name mega-shared (3.9k), same-typedef overloads,
   struct-field folding, per-arm Color, Navigation merge-side,
   instantiation proof.
-- Full-tree promotion: **DONE at r10** (2026-09-28, all 88 images,
+- Full-tree promotion: **DONE at r10** (2026-09-28, all 91 images,
   aggregate `b0c87509…b9fe`, 302 files changed vs r9, per-file sha256
   proof, 0 mismatches); `final_out/` holds r10 everywhere and r9/r8/r7
-  are history.
+  are history. A post-parallel codegen candidate (`r12_out1`, 696 of
+  11,276 files changed) is built and gated but **not promoted** (user
+  call).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2). Evidence in the two
   DOCUMENTED sections directly below.
@@ -39,6 +55,64 @@ own status tag rules.
   proxy (count, code bytes, max/top-5 extent) ranks them high.
 - Audit batch 2 (LANDED, section below): the `mov rbp,rsp` frame lost
   at a CFG merge + `slot_var`'s three sign conventions.
+
+## Current work: codegen intrinsics, landing 1 -- interface dispatch (2026-09-28, LANDED)
+
+A read-only census of every plain `sub_` call site in the promoted r10
+tree (38,254 sites, 2,663 targets) separated two populations: identity
+misses (1,941 sites whose VA has metadata candidates) and **codegen
+intrinsics (36,313 sites whose VA has none -- 95%)**. The top 25 targets
+alone carry 22,840 sites. Structural disassembly identified the hot
+families (index entry above); nullary interface dispatch is landed first
+because its call sites already spell everything needed:
+`(slot, typeof(IInterface), receiver, ...)`.
+
+**Recognition.** `_iface_dispatch_arity` (state.py) proves a body is an
+interface-offset dispatcher from its instructions, not its bytes: exactly
+one `movzx ..., word [k+0x12E]` (interface count), one `mov ..., [k+0xB0]`
+(interface table), one `add ..., 0x138` and one `shl ..., 4`
+(method-entry fold), an indirect tail jmp, and a call on the miss path.
+Of the family members found, the two hot ones (`0x180002210`,
+`0x180002380`) read R9 -- the register right after slot/iface/receiver --
+never; a reading variant forwards one managed argument and declines this
+landing. `_init_runtime_ids` scans the hot-target set it already collects
+and fills `rt_iface`; `_nullary_interface_dispatch` admits those members
+structurally and keeps the older exact byte template as a second path.
+
+**Return closure.** `IEnumerable<T>.GetEnumerator()` returns
+`IEnumerator<T>`; the interface's instantiation comes from
+`_generic_class_args(iface.ty)` and `_subst_closed` closes the return
+tuple. An unclosable open T declines (`IEnumerator_1<T>` with no T in
+scope parses but is not valid C#). Getter results keep the inline property
+render.
+
+**Binding.** Interface results are materialized at the call instruction
+(getters excepted). Left lazy, the enumerator stack home declared one
+temp and the phi copy's `_bind` minted a second, emitting a duplicated
+`GetEnumerator()` whose second instance was the one iterated. The
+shared-return path already bound immediately for this ordering reason.
+
+**Measured.** Full strict `r12_out1` at `--workers 4`: 11,183 type files /
+114,458 bodies / **0 failed / 0 structured fallbacks / 0 type-emission
+failures** in 572,803 ms; brace audit **0 unbalanced / 11,183 files**;
+parse gate **0 bad / 0 ERROR / 0 MISSING**. Per-file vs `final_out` (r10):
+**696 of 11,276 files changed, file set identical**. Assembly-CSharp's
+`sub_180002210`/`sub_180002380` call sites: **55 -> 0**, and
+`IDisposable` sites now fold into `obj?.Dispose();` (the null-conditional
+sugar pass finally has a real call to fold). Suite **1147 passed / 0
+failed** (943 portable + 204 game).
+
+Tests: +5 portable (`tests/test_recovery_followup.py`: family arity 0/1,
+mutated body declines, structural admission, forwarder declines) and +2
+game (`tests/test_game_interface_dispatch.py`: mi 26761 binds the
+enumerator once with no `sub_180002210`, mi 27447 folds `?.Dispose()`).
+
+**Declines kept.** Static methods, parameterized methods (this landing),
+an unclosable return, a method not uniquely addressable by
+`td.method_start + slot`, and any body the predicate does not prove; those
+keep `sub_...`. The A-family parameterized variants are the next slice:
+the helper forwards through R9 and the argument width must be matched to
+the declared parameter type before it can render.
 
 ## Current work: parallel build re-land + heaviest-first schedule (2026-09-28, LANDED)
 
@@ -89,9 +163,9 @@ aggregate, **0 mismatches / 0 missing / 0 stale**, file set identical to r9
 (302 files differ). `final_out/` now holds r10 everywhere; the r9 backup
 and the emptied candidate path were removed. Evidence:
 `validation_reports/promotion_r10.json`. The candidate was built from the
-batch tree (commit `cbcbe3e` content, now `99d14bb` after rebasing onto
-`e3763a8`; that commit's CLI/emitter additions do not change any emitted
-`.cs` file).
+batch tree (the audit-batch-3 content, now commit `68ed034`; the
+CLI/emitter-only commits it was rebased over -- the parallel-build revert
+and the sunshine additions -- do not change any emitted `.cs` file).
 
 ## Current work: audit batch 3 — five landings, three layers (2026-09-28, LANDED/PROMOTED)
 
@@ -255,7 +329,7 @@ Marker increases, read rather than waved through:
 
 Evidence in `validation_reports/promotion_r9.json`. Suite at the promoted
 commit: **1071 passed / 0 failed** (877 portable + 194 game). Scratch trees
-removed. **Timing correction:** a full 88-image strict build is 1,085 s
+removed. **Timing correction:** a full 91-image strict build is 1,085 s
 (18.1 min) for 114,458 bodies on this box, not the 1,359 s the index and
 `AGENTS.md` carried from the batch-1 measurement.
 

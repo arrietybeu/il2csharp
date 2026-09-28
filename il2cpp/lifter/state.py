@@ -99,6 +99,82 @@ class _StateMixin:
                 returned = True
         return spilled and rooted and named and loaded and returned
 
+    def _iface_dispatch_arity(self, target):
+        """Recognize an interface-offset dispatcher; return its managed
+        argument count (0 or 1), or None when the body is not one.
+
+        Unity compiles a call through an interface into a helper that
+        searches the receiver class's interface table for the interface
+        klass, computes the method entry as
+        ``klass + 0x138 + (interfaceOffset + slot) * 16`` and tail-jumps
+        into it. The fixture's hot family members (0x180002210 and
+        0x180002380 among them) carry different prologues from the byte
+        template `_nullary_interface_dispatch` pins, but the same
+        arithmetic: exactly one ``movzx ..., word [k+0x12E]`` interface
+        count, exactly one ``mov ..., [k+0xB0]`` interface table, exactly
+        one ``add ..., 0x138`` and one ``shl ..., 4`` method-entry fold,
+        an indirect tail jmp, and a call on the miss path. A read of R9 --
+        the register right after the (slot, iface, receiver) triple --
+        means the helper forwards one managed argument. A different
+        runtime keeps the honest `sub_` fallback.
+        """
+        if not HAVE_ICED or not target or not self.bin.is_exec_va(target):
+            return None
+        if self.il.addr_candidates.get(target) or target in self.bin.exports:
+            return None
+        start, finish = self.il.function_extent(target)
+        if start != target or finish is None or not 0x20 < finish - target <= 0x400:
+            return None
+        code = self.bin.read(target, finish - target)
+        if not code:
+            return None
+        try:
+            dec = Decoder(64, code, DecoderOptions.NONE)
+            dec.ip = target
+            insns = list(dec)
+        except Exception:
+            return None
+        n_count = n_table = n_add = n_shl = n_tail = n_call = 0
+        reads_r9 = False
+        for ins in insns:
+            if ins.mnemonic == Mnemonic.MOVZX \
+                    and ins.op1_kind == OpKind.MEMORY \
+                    and ins.memory_displacement == 0x12E:
+                n_count += 1
+            elif ins.mnemonic == Mnemonic.MOV \
+                    and ins.op0_kind == OpKind.REGISTER \
+                    and ins.op1_kind == OpKind.MEMORY \
+                    and ins.memory_displacement == 0xB0 \
+                    and ins.memory_base != IReg.RIP:
+                n_table += 1
+            elif ins.mnemonic == Mnemonic.ADD \
+                    and ins.op1_kind in (OpKind.IMMEDIATE32TO64,
+                                         OpKind.IMMEDIATE32) \
+                    and ins.immediate32 == 0x138:
+                n_add += 1
+            elif ins.mnemonic == Mnemonic.SHL \
+                    and ins.op1_kind == OpKind.IMMEDIATE8 \
+                    and ins.immediate8 == 4:
+                n_shl += 1
+            elif ins.mnemonic == Mnemonic.JMP \
+                    and ins.op0_kind in (OpKind.REGISTER, OpKind.MEMORY):
+                n_tail += 1
+            elif ins.mnemonic == Mnemonic.CALL \
+                    and ins.op0_kind == OpKind.NEAR_BRANCH64:
+                n_call += 1
+            # a forwarded managed argument enters through R9 as a source;
+            # a write (`xor r9d,r9d` in the byte-template variant) is not a
+            # read, so the source operand is what counts.
+            if not reads_r9 and ins.op1_kind == OpKind.REGISTER \
+                    and ins.op1_register == IReg.R9 \
+                    and not (ins.op0_kind == OpKind.REGISTER
+                             and ins.op0_register == IReg.R9):
+                reads_r9 = True
+        if n_count == 1 and n_table == 1 and n_add == 1 and n_shl == 1 \
+                and n_tail and n_call:
+            return 1 if reads_r9 else 0
+        return None
+
     # ---- unregistered pure-FP32-unary leaves ---------------------------
     # Ground truth: 0x1804cdb00, the CRT log10f behind AudioVolumeSliders'
     # `sub_1804cdb00(volume)` (mi 23548/23549). The lift sprayed four stale
@@ -909,6 +985,15 @@ class _StateMixin:
                 self.rt_wbarrier.add(t)
                 self.rt_names[t] = 'il2cpp_codegen_write_barrier'
         self._helper_stats = stats
+        # interface-offset dispatchers: the same slot arithmetic under a
+        # different prologue (the fixture's 0x180002210/0x180002380).
+        # Only members that never read R9 are nullary; the recognizer in
+        # `calls.py` admits exactly those structurally.
+        self.rt_iface = {}
+        for _t in sorted(set(cnt) | set(stats)):
+            _ar = self._iface_dispatch_arity(_t)
+            if _ar is not None:
+                self.rt_iface[_t] = _ar
         sqrt_helpers = [target for target in stats
                         if self._is_scalar_sqrt_helper(target)]
         self.rt_sqrt = sqrt_helpers[0] if len(sqrt_helpers) == 1 else None

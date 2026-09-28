@@ -1565,7 +1565,11 @@ class _CallsMixin:
 
         The template fixes slot/type/receiver in RCX/RDX/R8. Only the slow
         lookup's relative call displacement varies; all loads, branches,
-        slot arithmetic and both paths to invoke_impl must match.
+        slot arithmetic and both paths to invoke_impl must match. A body
+        admitted by `_iface_dispatch_arity` as a nullary member (same
+        arithmetic, no R9 read, different prologue -- 0x180002210 and
+        0x180002380 on the fixture) takes that structural proof instead of
+        the byte template.
         """
         if target is None or len(arg_exprs) < 3:
             return None
@@ -1576,17 +1580,18 @@ class _CallsMixin:
         if offset is None or not 0 <= offset <= 0xffff \
                 or iface.kind != 'klass' or not iface.text.startswith('typeof('):
             return None
-        prefix = bytes.fromhex(
-            '48895c2408574883ec20498b184533c9498bf8440fb7932e010000'
-            '66453bca73264c8b9bb00000000f1f840000000000410fb7c14803c0'
-            '493914c3742d6641ffc166453bca72e9440fb7c1488bcfe8')
-        suffix = bytes.fromhex(
-            '4c8b00488bcf488b5008488b5c24304883c4205f49ffe0410fb7d1'
-            '4803d20fb7c9418b44d30803c1489848c1e0044805380100004803c3ebc7')
-        code = self.bin.read(target, len(prefix) + 4 + len(suffix))
-        if code is None or not code.startswith(prefix) \
-                or code[len(prefix) + 4:] != suffix:
-            return None
+        if getattr(self, 'rt_iface', {}).get(target) != 0:
+            prefix = bytes.fromhex(
+                '48895c2408574883ec20498b184533c9498bf8440fb7932e010000'
+                '66453bca73264c8b9bb00000000f1f840000000000410fb7c14803c0'
+                '493914c3742d6641ffc166453bca72e9440fb7c1488bcfe8')
+            suffix = bytes.fromhex(
+                '4c8b00488bcf488b5008488b5c24304883c4205f49ffe0410fb7d1'
+                '4803d20fb7c9418b44d30803c1489848c1e0044805380100004803c3ebc7')
+            code = self.bin.read(target, len(prefix) + 4 + len(suffix))
+            if code is None or not code.startswith(prefix) \
+                    or code[len(prefix) + 4:] != suffix:
+                return None
         td_index = self._td_of(iface.ty)
         if td_index is None:
             return None
@@ -1595,11 +1600,30 @@ class _CallsMixin:
             return None
         mi = td.method_start + offset
         method = self.meta.methods[mi]
-        rt = self.il.types[method.return_type]
-        if method.is_static or method.param_count or not self.il._return_abi_is_known(rt) \
-                or self.il.returns_sret(rt):
+        if method.is_static or method.param_count \
+                or not 0 <= method.return_type < len(self.il.types):
             return None
-        return mi, receiver
+        rty = self.il.types[method.return_type]
+        # `IEnumerable<T>.GetEnumerator()` returns `IEnumerator<T>`: close
+        # the declaring interface's VAR/MVAR from the generic instantiation
+        # the call site named. Printing the open tuple would render
+        # `IEnumerator_1<T>` with no T in scope; an unclosable return keeps
+        # the honest `sub_` fallback instead.
+        closed_key = getattr(self.il, '_closed_type_key', None)
+        if closed_key is not None and closed_key(rty) is None:
+            class_args = None
+            gen_fn = getattr(self, '_generic_class_args', None)
+            if gen_fn is not None:
+                try:
+                    class_args = gen_fn(iface.ty)
+                except Exception:
+                    class_args = None
+            subst = getattr(self.il, '_subst_closed', None)
+            rty = subst(rty, class_args, None) if class_args and subst else None
+        if rty is None or not self.il._return_abi_is_known(rty) \
+                or self.il.returns_sret(rty):
+            return None
+        return mi, receiver, rty
 
     def _wb_operands(self, args, arg_exprs):
         """`il2cpp_codegen_write_barrier(&field, value)` -> (lvalue text,
@@ -2214,10 +2238,10 @@ class _CallsMixin:
                     rty = agreed
                     shared_rty = True
         interface_call = self._nullary_interface_dispatch(target, arg_exprs) if mi is None else None
+        iface_identity = interface_call is not None
         if interface_call is not None:
-            mi, recv = interface_call
-            method = self.meta.methods[mi]
-            rty = self.il.types[method.return_type]
+            mi, recv, iface_rty = interface_call
+            rty = iface_rty
             name = self.il.method_simple_name(mi)
             args, arg_exprs = [recv.text], [recv]
         # Resolve a vtable slot to its metadata method up front, so arg trimming,
@@ -2776,6 +2800,18 @@ class _CallsMixin:
             if shared_rty:
                 self._bind(result)
                 return
+            # An interface dispatch result regularly flows through a stack
+            # home (the enumerator) and a phi copy; left lazy, the home's
+            # own declaration and the later `_bind` both materialize the
+            # call (a duplicated GetEnumerator whose second instance is the
+            # one actually iterated). Materialize once at the call
+            # instruction instead, like the shared-return path above.
+            # Getters keep the inline property render.
+            if iface_identity and not getattr(self, 'dry', False):
+                base = self.meta.methods[mi].name.rpartition('.')[2]
+                if not base.startswith('get_'):
+                    self._bind(result)
+                    return
             # An ignored non-void result would otherwise vanish: the call
             # runs for effect, so hold it pending and flush a bare statement
             # at the next emit when no use renders it first. Used calls keep

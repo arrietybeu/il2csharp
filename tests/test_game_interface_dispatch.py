@@ -36,3 +36,31 @@ def test_boxed_bool_folds_and_unbox_declines(game_decompiler):
     text2 = '\n'.join(dec.lift_method(m2, il.meta.typedefs[m2.declaring]))
     assert 'bool obj35 = enumerator3.MoveNext();' in text2
     assert 'object obj52 = enumerator8.MoveNext();' in text2
+
+
+def test_structural_nullary_family_binds_once(game_decompiler):
+    """The fixture's different-prologue dispatchers (0x180002210 and
+    0x180002380) resolve structurally instead of by byte template: the
+    enumerator call must render exactly once, the loop must reuse the
+    bound temp rather than re-render the call on replay, and the
+    IDisposable sites become real `Dispose` calls."""
+    il, dec = game_decompiler
+    m = il.meta.methods[26761]
+    assert m.name == 'Rpc_CMD_Downed'
+    assert hex(m.addr) == '0x18057b080'
+    text = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
+    assert 'sub_180002210' not in text
+    assert 'sub_180002380' not in text
+    assert text.count('.GetEnumerator()') == 1
+    assert text.count('.MoveNext()') == 1
+    assert '.Current' in text
+    assert '.Dispose();' in text
+
+
+def test_idisposable_calls_fold_to_null_conditional(game_decompiler):
+    il, dec = game_decompiler
+    m = il.meta.methods[27447]
+    assert m.name == 'EncryptJsonToBase64'
+    text = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
+    assert '?.Dispose();' in text
+    assert 'sub_180002380' not in text

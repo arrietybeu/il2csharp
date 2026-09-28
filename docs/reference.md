@@ -246,7 +246,7 @@ The batch-19-era baseline chain it originally described
 - `PYTHONHASHSEED`: fix it before comparing builds.
 - Syntax-check package modules (`python -m compileall il2cpp`) before any
   rebuild — instant, catches typos before a multi-minute build.
-- Builds: 18.1 min serial idle (1,085 s, 114,458 bodies, all 88 images
+- Builds: 18.1 min serial idle (1,085 s, 114,458 bodies, all 91 images
   at r9); r10 measured 24.4 min (1,465,953 ms) with an unrelated build
   competing for CPU. `--workers 8` measured 262.9 s (2026-09-26, r9) and
   275.0 s (2026-09-28, box ~30% external load), tree byte-identical on

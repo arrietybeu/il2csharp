@@ -7,9 +7,9 @@ by the move. All repo paths below are root-relative.
 
 ## Start here (live)
 
-- `docs/todo.md` — current work (parallel-build re-land + heaviest-first
-  schedule, r10 promoted tree), validation status, next priorities,
-  replacement records.
+- `docs/todo.md` — current work (codegen-intrinsic landing 1, r10
+  promoted tree), validation status, next priorities, replacement
+  records.
 - `TODONOW.md` — 2026-09-22 failure-class inventory (historical, r4c era).
 - `docs/handoff-2026-09-23.md` — 2026-09-23 stop record (historical).
 - `docs/reference.md` — working-loop rules (§4), baselines / promotion /

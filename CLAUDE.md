@@ -22,7 +22,7 @@ via System.Array, rename barrier + param exclusion, interface dispatch
 naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
 direct calls), each decline-by-default with portable + game pins; plus
 documented disproofs (hinted receivers, ?addr tightening,
-receiver-driven generics). 1140 tests pass (938 portable + 202 game),
+receiver-driven generics). 1147 tests pass (943 portable + 204 game),
 suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
 both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
 and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
@@ -43,7 +43,7 @@ remaining compiler backlog.
 
 Read `docs/reviews/REVIEW84.md`–`REVIEW87.md`, `docs/todo.md`'s Current work section, and
 `docs/archive/reviews-log.md` section 0bf first. `final_out/` is the complete strict-built
-tree (r10, all 88 images, 2026-09-28; every earlier aggregate below is history),
+tree (r10, all 91 images, 2026-09-28; every earlier aggregate below is history),
 not the Review 84 file set alone, b42/b76, or a partial candidate. Historical paragraphs below retain
 the reasoning behind older changes; their old "current" labels are not release authority.
 `validation_reports/review84/summary.json` (baseline) plus `validation_reports/followups_sweep.json`,
@@ -149,6 +149,22 @@ fix-123 in `validation_reports/review123_*`.
   (`Object.FindObjectsOfType(Type,bool)` rendered `(type)`; the
   AndroidJNI `To*Array(ptr,int)` family, `UnsafeUtility.IsBlittable`).
   Ambiguity returns the text-only annotation, never a guess.
+- An interface-offset dispatcher (the fixture's `0x180002210` /
+  `0x180002380`) is recognized by structure, never by address: exactly one
+  `movzx ..., word [k+0x12E]` interface count, one `mov ..., [k+0xB0]`
+  table, one `add ..., 0x138` and one `shl ..., 4`, an indirect tail jmp,
+  and a miss-path call (`_iface_dispatch_arity`, filled into `rt_iface`
+  by `_init_runtime_ids` from the hot-target set it already collects).
+  Only a member that never reads R9 -- the register after the
+  (slot, iface, receiver) triple -- is a nullary dispatcher, and only
+  nullary methods resolve this way; a reading variant forwards one
+  managed argument and declines for now. The resolved return closes
+  through `_generic_class_args(iface.ty)` + `_subst_closed`; an
+  unclosable open return (`IEnumerator_1<T>` with no T in scope)
+  declines to `sub_`. Results are materialized at the call instruction
+  (getters excepted): left lazy, the enumerator stack home and the phi
+  copy's `_bind` both materialize the call, duplicating `GetEnumerator()`
+  with the second instance as the iterated one.
 - A consensus value type folds sret only when the individual call's first
   argument is an observed address. Require a known exact nonzero value-type
   size; generic value types, source-level ref returns, and unsupported opaque
@@ -338,7 +354,7 @@ fix-123 in `validation_reports/review123_*`.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test
-(`tests/test_source_format.py`) enforces this contract. **1140 tests pass** (938 portable + 202 game;
+(`tests/test_source_format.py`) enforces this contract. **1147 tests pass** (943 portable + 204 game;
 64 golden snapshots, all green).
 `tests/goldens_review84.json` is **hash-only**: each of the 64 snapshots
 keeps its MethodDef row, VA, owner and name plus `body_sha256` /
@@ -557,7 +573,7 @@ against one of these two real binaries, not asserted from reading code.
 4. A **full rebuild + brace audit** (`python il2csharp.py <target> -o
    <outdir>`, then `python work/lib/tree_brace_audit.py <outdir>`) is the
    final gate before promoting a build to the baseline. `--workers N`
-   emits the 88 images across a process pool, heaviest image (by native
+   emits the 91 images across a process pool, heaviest image (by native
    method count) submitted first, and is the same tree byte-for-byte: the
    full 8-worker r10 tree is 11,276/11,276 files identical to `final_out`
    (275.0 s vs 1,085 s serial on 2026-09-28; 262.9 s on 2026-09-26), so

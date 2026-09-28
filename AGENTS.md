@@ -137,7 +137,7 @@ Checklist: `docs/public_release.md`.
 
 ## Previous state (2026-09-26, `main` clean; `final_out/` = r9)
 
-Promoted 2026-09-26 (**r9**, full tree, all 88 images, from `e20f82f`):
+Promoted 2026-09-26 (**r9**, full tree, all 91 images, from `e20f82f`):
 strict rebuild 11,183 type files / 114,458 bodies / 0 failed / 0 structured
 fallbacks / 0 type-emission failures in **1,085 s (18.1 min)**; brace **0
 unbalanced**; parse **0 bad / 0 ERROR / 0 MISSING / 0 recovery nodes**; an
@@ -194,7 +194,7 @@ to read.
 Documented (no source change, markers stay honest): same-name
 receiver-pick disproof (~1.9k sites need sidecar, not sig
 elimination), constant-zero fold disproof (239 sites, 2 VAs).
-Full suite: 1140 passed / 0 failed (938 portable + 202 game), verified
+Full suite: 1147 passed / 0 failed (943 portable + 204 game), verified
 against the fixture this session. The parallel build is re-landed and
 scheduled: `--workers N` in `cli.py` (default 1), merged with the
 sunshine `--quiet`/`--json`/`--manifest`/`--bodies` flags, with heaviest
@@ -204,7 +204,18 @@ force 1. A full 8-worker build is byte-identical to `final_out` r10
 (11,276/11,276 files) and the instrumented 6-worker run measures 0.93
 worker efficiency, so the remaining wall is total work and box load, not
 tail order (TextMeshPro/TextCore are the longest images despite low
-method counts). Open, by payoff: unmodelled-instruction invalidation
+method counts). A `sub_` census then found the biggest output
+population: 36,313 of 38,254 plain `sub_` sites (95%) point at IL2CPP
+runtime helpers with no metadata candidate at all. Landing 1 of that
+program recognizes nullary interface dispatch structurally
+(`_iface_dispatch_arity` + `rt_iface`; 0x180002210/0x180002380), closes
+the return from the interface instantiation, and binds the result at the
+call; full strict build `r12_out1` is 696/11,276 files changed with 0
+failed / 0 fallbacks, brace 0, parse 0/0/0, and Assembly-CSharp's helper
+sites are 55 -> 0 with `?.Dispose()` folds. Open, by payoff: the rest of
+the codegen families (isinst/castclass 8,271 sites, alloc/box 2,446,
+class-init 861, Interlocked 582, bounds-checked element address 745,
+parameterized interface dispatch), unmodelled-instruction invalidation
 (`insn.py`'s silent fall-through leaves a stale destination live),
 ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`),
 `op_Implicit` return-type subset (tens of sites), Cpp2IL declaration

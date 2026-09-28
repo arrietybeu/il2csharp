@@ -38,11 +38,14 @@ to verify.
 
 ## Pre-scrub history
 
-The only copy of the pre-scrub history (fixture included) is the local
+Every commit hash in docs written before 2026-09-28 refers to the
+pre-scrub history, which no longer exists on GitHub. The local backup
 bundle `C:\Users\crax\Downloads\il2csharp_prepurge_backup.bundle` (18 MB,
-all refs; LFS pointers only — the fixture bytes are the local `testgame/`
-copy). Every commit hash in docs written before 2026-09-28 refers to that
-bundle, not to GitHub.
+all refs; LFS pointers only -- the fixture bytes are the local `testgame/`
+copy) was **not present** when the repo folder and its parent were
+checked on 2026-09-28 (bundle search, `Get-ChildItem .. -Filter *.bundle`
+-- empty), so the pre-scrub lineage is gone locally too unless that file
+is recovered. If it is ever restored, keep it local: never push it.
 
 ## Decisions recorded 2026-09-28
 

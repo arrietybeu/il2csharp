@@ -423,6 +423,77 @@ def test_nullary_interface_dispatch_rejects_out_of_range_slot():
     assert lift._nullary_interface_dispatch(target, args) is None
 
 
+# The fixture's hot dispatcher family carries different prologues from the
+# PREFIX/SUFFIX template above but the same interface-offset arithmetic.
+# These are the real bodies (0x180002210 nullary, 0x180006020 forwarding
+# one managed argument through R9) with the varying call displacement zeroed.
+B_DISPATCH = bytes.fromhex(
+    '40534883ec20498bd833c0440fb7c14c8b1b450fb78b2e01000066413bc17325'
+    '4d8b93b0000000660f1f8400000000000fb7c84803c9493914ca742366ffc0'
+    '66413bc172eb488bcbe800000000488bcb4c8b00488b50084883c4205b49ffe0'
+    '0fb7d0488bcb4803d2418b44d2084103c0489848c1e0044805380100004903c3'
+    '4c8b00488b50084883c4205b49ffe0')
+A_DISPATCH = bytes.fromhex(
+    '48895c24084889742410574883ec20498bf833c0498bf1440fb7c1488b1f440fb7'
+    '932e01000066413bc2731c4c8b9bb00000000fb7c84803c9493914cb742d66ffc0'
+    '66413bc272eb488bcfe8000000004c8b4008488bd6488bcf488b5c2430488b742438'
+    '4883c4205f48ff200fb7d04803d2418b44d3084103c0489848c1e004480538010000'
+    '4803c3ebc5')
+
+
+def dispatch_helper_lifter(body):
+    target = 0x5000
+    il = NS(
+        types=[INT],
+        _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+        _return_abi_is_known=lambda rt: True,
+        returns_sret=lambda rt: False,
+        function_extent=lambda va: (target, target + len(body)),
+        addr_candidates={},
+    )
+    lift = lifter(il=il)
+    lift.meta = NS(
+        typedefs=[NS(flags=0x20, method_count=4, method_start=0)],
+        methods=[NS(return_type=0, is_static=False, param_count=0,
+                    name='IFoo.Bar')],
+    )
+    lift.bin = NS(
+        read=lambda va, n: body if va == target and n == len(body) else None,
+        is_exec_va=lambda va: va == target,
+        exports={},
+    )
+    return lift, target
+
+
+def test_iface_dispatch_arity_proves_the_nullary_family():
+    lift, target = dispatch_helper_lifter(B_DISPATCH)
+    assert lift._iface_dispatch_arity(target) == 0
+
+
+def test_iface_dispatch_arity_counts_a_forwarded_argument():
+    lift, target = dispatch_helper_lifter(A_DISPATCH)
+    assert lift._iface_dispatch_arity(target) == 1
+
+
+def test_iface_dispatch_arity_rejects_a_mutated_body():
+    bad = bytearray(B_DISPATCH)
+    bad[0x16] ^= 0x01          # low byte of the word [k+0x12E] displacement
+    lift, target = dispatch_helper_lifter(bytes(bad))
+    assert lift._iface_dispatch_arity(target) is None
+
+
+def test_nullary_interface_dispatch_admits_the_structural_family():
+    lift, target = dispatch_helper_lifter(B_DISPATCH)
+    lift.rt_iface = {target: 0}
+    assert lift._nullary_interface_dispatch(target, dispatch_args()) is not None
+
+
+def test_nullary_interface_dispatch_declines_an_argument_forwarder():
+    lift, target = dispatch_helper_lifter(A_DISPATCH)
+    lift.rt_iface = {target: 1}
+    assert lift._nullary_interface_dispatch(target, dispatch_args()) is None
+
+
 def test_return_value_register_abi():
     assert Lifter._return_value_register(F32) == 'XMM0'
     assert Lifter._return_value_register((0, 0x0D << 16)) == 'XMM0'
