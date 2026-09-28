@@ -49,6 +49,14 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   ambiguous-name ties are fixed (sections below), as are the runtime
   vtable sentinel, the swapped PE/Android counters and the `--only`
   no-match exit.
+- Platform support (deferred; **not planned soon**, user call
+  2026-09-28): Linux and macOS binaries (the ELF loader exists and the
+  Android registration path is ELF-gated; Mach-O is unparsed), and better
+  Android support (32-bit ARM, full ARM64 semantics beyond the scaffold
+  in `il2cpp/arm64*.py`). `docs/construct-mapping.md` "Not (yet) done"
+  carries the related low-level gaps (Mach-O/32-bit, klass offsets
+  calibrated for Unity 6000.0/v31). Tracked here as product scope; no
+  work planned.
 
 **Landed/closed pointers (sections below; not open work):**
 - Codegen intrinsics landing 2: IsInst `typeof(T)` sites render
