@@ -140,8 +140,10 @@ class _RegistrationMixin:
         self.generic_adjustor_thunks = q(-12)
         self.generic_method_pointers_count = q(-14)
         self.generic_method_pointers = q(-13)
-        self.reverse_p_invoke_count = q(-15)
-        self.reverse_p_invoke_wrappers = q(-16)
+        # count precedes its wrapper array in the struct (the order the
+        # Android loader reads): -16 is the count, -15 the wrappers.
+        self.reverse_p_invoke_count = q(-16)
+        self.reverse_p_invoke_wrappers = q(-15)
         self.code_reg_va = X - 18 * 8
         self.log('CodeRegistration @ %#x' % self.code_reg_va)
 

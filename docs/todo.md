@@ -43,11 +43,13 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   operand-shape entries but no arithmetic in `insn.py`), F2 value-type
   fragment discard, F3 XMM0-5 clobber, F4 array stride, F5 the two
   remaining `{1: 1, 2: 2, 4: 4, 8: 8}` sites (`insn.py:1400/1501`), Dec
-  F3-F6 (latent, 0 corpus hits), the runtime vtable sentinel
-  (`slot_max_arity` has no gate), the swapped PE/Android
-  reverse-p-invoke counters, `--only` no-match exit 0, BSS name ties.
+  F3-F6 (latent, 0 corpus hits), BSS name ties. The runtime vtable
+  sentinel, the swapped PE/Android counters and the `--only` no-match
+  exit are fixed (section below).
 
 **Landed/closed pointers (sections below; not open work):**
+- Post-r10 small fixes: vtable sentinel gate, classic PE counter order,
+  `--only` no-match error (2026-09-28).
 - Codegen intrinsics landing 1: nullary interface dispatch (2026-09-28).
 - Parallel full-tree build: re-landed 2026-09-28, heaviest-image-first
   schedule, byte-identical r10 tree (275.0 s at 8 workers; 0.93 worker
@@ -65,6 +67,26 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: post-r10 small fixes -- vtable sentinel, counters, `--only` (2026-09-28, LANDED)
+
+Three easy audit leftovers, all output-neutral on this fixture:
+
+- `slot_max_arity` (types.py) now applies the same empty-entry gate
+  `vtable_method` uses (`idx == 0`, raw 0x0/0x1): a raw `1` no longer
+  decodes as method row 0 and inflates a slot's arity cap when row 0 is
+  an instance method. Masked on this fixture only because `methods[0]` is
+  static (1,523 slots).
+- The classic PE CodeRegistration reads the reverse-p-invoke pair in the
+  same order as the Android loader and every other count/array pair:
+  count at -16, wrappers at -15 (unconsumed today, so output-neutral).
+- `--only` matching no assembly is now an error (exit 1) and writes
+  nothing; previously it exited 0 after writing `script.json` /
+  `stringliteral.json` and an empty tree. The image filtering moved
+  before `os.makedirs` so a no-match run creates nothing at all.
+
+Tests: +3 portable (`tests/test_runtime_vtable_arity.py`) and +1 game
+(`tests/test_game_cli_only.py`).
 
 ## Current work: codegen intrinsics, landing 1 -- interface dispatch (2026-09-28, LANDED)
 

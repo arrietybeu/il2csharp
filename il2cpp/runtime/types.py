@@ -426,6 +426,12 @@ class _TypesMixin:
             for td in self.meta.typedefs:
                 for s in range(td.vtable_count):
                     idx = (vt[td.vtable_start + s] & 0x1FFFFFFE) >> 1
+                    # raw 0x0/0x1 entries carry no method bits (the
+                    # same gate `vtable_method` applies): decoding them
+                    # as row 0 would inflate a slot's arity cap
+                    # whenever row 0 is an instance method.
+                    if idx == 0:
+                        continue
                     if idx < nm:
                         m = self.meta.methods[idx]
                         a = m.param_count + (0 if m.is_static else 1)

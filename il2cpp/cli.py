@@ -373,15 +373,19 @@ def main(argv):
         elif not is_arm64_binary(bin_) and not HAVE_ICED:
             say('warning: iced-x86 not installed; x64 bodies disabled (pip install iced-x86)')
 
+    only = [t.strip().lower() for t in args.only.split(',')] if args.only else None
+    images = [img for img in meta.images
+              if not only or any(t in img.name.lower() for t in only)]
+    if only and not images:
+        print('error: --only matched no assembly:', args.only)
+        return 1
+
     os.makedirs(args.out, exist_ok=True)
     if args.emit_h:
         t0 = time_ms()
         hpath = os.path.join(args.out, 'il2cpp.h')
         n_types = HeaderEmitter(il, hpath).write()
         say('il2cpp.h: %d types in %d ms -> %s' % (n_types, time_ms() - t0, hpath))
-    only = [t.strip().lower() for t in args.only.split(',')] if args.only else None
-    images = [img for img in meta.images
-              if not only or any(t in img.name.lower() for t in only)]
     workers, _note = _worker_count(args, images)
     # the parent keeps an Emitter for the two whole-tree files; with a pool
     # running it needs no Lifter of its own
