@@ -196,7 +196,7 @@ class Metadata:
                 nameI, decl, rtok, _rp, pstart, gci, token = struct.unpack_from('<7i', d, b)
                 tail = struct.unpack_from('<4H', d, b + 28)
             else:
-                nameI, decl, rt, pstart, gci, token = struct.unpack_from('<6i', d, b)
+                nameI, decl, rtok, pstart, gci, token = struct.unpack_from('<6i', d, b)
                 tail = struct.unpack_from('<4H', d, b + 24)
             self.methods.append(MethodDef(
                 i, self.getstr(nameI), decl, rtok, pstart, gci,

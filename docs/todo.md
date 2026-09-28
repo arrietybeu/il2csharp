@@ -57,9 +57,16 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   in `il2cpp/arm64*.py`). `docs/construct-mapping.md` "Not (yet) done"
   carries the related low-level gaps (Mach-O/32-bit, klass offsets
   calibrated for Unity 6000.0/v31). Tracked here as product scope; no
-  work planned.
+  work planned. Known cheap seam if it is ever taken up: discovery scans
+  only `gameassembly.dll` / `libil2cpp.so` (`cli.py`), so a Linux build
+  shipping `GameAssembly.so` is missed even though `load_binary` already
+  accepts ELF64; there is no Linux fixture here to smoke-test, so the
+  scan-name change stays unwritten.
 
 **Landed/closed pointers (sections below; not open work):**
+- Pre-v31 metadata crash: the `<6i` method row bound `rt` while the
+  shared `MethodDef` call read `rtok`, killing every real file below
+  v31 on row one (2026-09-28; per-version synthetic tests pin v24-v31).
 - Codegen intrinsics landing 4: out-of-line class-init helper elided
   (2026-09-28; 3 AC sites, 861 tree-wide; no golden moved).
 - Codegen intrinsics landing 3: `Interlocked.CompareExchange` renders as
@@ -97,6 +104,28 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: pre-v31 metadata method-table crash fixed (2026-09-28, LANDED)
+
+Every real `global-metadata.dat` below v31 died with
+`UnboundLocalError: rtok` on the first method row: the pre-v31 `<6i`
+branch bound the return type as `rt` while the shared `MethodDef(...)`
+call read `rtok`. The admitted range (`Metadata.__init__` takes 24-31)
+was broken for most of its span; Megabonk (Steam, metadata v29) is the
+live repro, hit independently on Windows and Linux. Pre-v31 method rows
+are 32 bytes / six int32 and v31 rows are 36 / seven, so the return type
+sits in the same slot in both layouts -- one token unifies them.
+
+`tests/test_metadata_versions.py` builds a minimal but real file per
+version (version-gated header + one method row + one string) for
+v24/27/29/30/31 and pins name, return type, token, slot, flags and
+param count, so neither branch can go unexercised again. Red: the four
+pre-v31 cases fail with the old binding; green: 6/6 after.
+
+Gates: portable suite 973 passed (967 + 6 new). Fixture smoke on the v31
+game is unchanged -- `--probe` 16,916 types / 128,954 methods / 91
+images / registrations ok / 116,178 native bodies, and lift mi 25293
+identical. No output change, so no rebuild was run.
 
 ## Current work: codegen intrinsics, landing 4 -- class-init helper elided (2026-09-28, LANDED)
 
