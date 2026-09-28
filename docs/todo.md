@@ -39,8 +39,9 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   code bytes, max/top-5 extent) ranks them high.
 - Audit-batch-3 deferred findings, still open: F1's remaining half
   (invalidate the destination of genuinely unmodelled instructions --
-  SHUFPS ~1,646, CVTDQ2PS ~197 live reads in Assembly-CSharp), F2
-  value-type fragment discard, Dec F5-F6 (latent, 0 corpus hits).
+  SHUFPS ~1,646, CVTDQ2PS ~197 live reads in Assembly-CSharp; **probed
+  and deferred, lane modeling first -- section below**), F2 value-type
+  fragment discard, Dec F5-F6 (latent, 0 corpus hits).
   F1's MAXSS/MINSS arithmetic family, F3 (XMM0-5 clobber), F4 (array
   stride), F5 (memory-size map), Dec F3/F4 (hop-fold/select guards) and
   the BSS ambiguous-name ties are fixed (sections below), as are the
@@ -77,6 +78,37 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: F1 invalidation -- probed and declined (2026-09-28, NOT LANDED)
+
+The audit's other F1 half -- invalidate the destination of unmodelled
+instructions at `_insn`'s fall-through -- was implemented (an explicit
+SIMD-write allowlist, since the pinned iced build has no per-operand
+access oracle; a fresh unknown replaces the written register) and
+measured on Assembly-CSharp: **145 files changed** (vs 59 before), with
+a mixed outcome that did not justify landing it:
+
+- Honest wins: stale lane values stop being consumed. `Blinker.LateUpdate`
+  computed `original.r - color.g` because the SHUFPS write was ignored --
+  the old body was silently wrong on every channel.
+- But the unknown collapses recoverable values: Blinker's whole
+  `new Color { ... }` becomes `material1.color = obj17;`, and in
+  mi 80548 (`ViscosityVorticityJob.Execute`) the extra unknowns push
+  expressions over `_mk`'s cap, replacing computed stores with `= 0`
+  placeholders (57 -> 37 lines).
+- 6 of 64 goldens move; their A/B diffs were read and include a
+  float -> double type shift (mi 32832) that needs proof before
+  acceptance.
+
+A first attempt at **SHUFPS/PSHUFD/UNPCKHPS lane modeling** over the
+existing `_parts` provenance was also written and reverted: it selected
+the wrong lanes (all four Color channels rendered from `.a` on Blinker),
+so the `_piece_value` slicing there needs its own investigation.
+
+Direction stands, ordering changes: model the struct-construction lane
+ops first (they are what the stale reads were silently reconstructing),
+then invalidate what remains genuinely unmodelled. F1's invalidation
+half stays open with this evidence.
 
 ## Current work: F1 slice -- MAXSS/MINSS arithmetic (2026-09-28, LANDED)
 
