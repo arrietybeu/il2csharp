@@ -922,3 +922,51 @@ def test_phi_disagreeing_bytes_decline():
     lift._stack_store(0x20, 16, Expr('v999', None, 'float'))
     lift._phi_bytes = {(7, 'v999'): {3: red, 5: green}}
     assert lift._stack_struct(0x20, V3) is None
+
+
+# The fixture's IsInst helper (thunk 0x180434690 -> 0x180479f80), copied
+# byte for byte. The recognizer must prove the body, never the address.
+ISINST_BODY = bytes.fromhex(
+    '48895c24104889742418574883ec20488bda488bf94885c90f84e3000000'
+    '488b31488bcb488bd6e81470010084c00f85ba000000f6863601000010'
+    '0f84c0000000f6831801000020750c807b2a137406807b2a1e757b4883'
+    '7b70007474488b4370488b70284885f67467488bd6488bcfe89b52fdff'
+    '48894424304885c0756f488b47104c8d442430488b4f10488b10488b02'
+    '488bd6ffd085c078364c8b442430488bd6488bcfe80514fdff84c07518'
+    '488b4c2430488b01ff5010488bd6488bcfe84b52fdffeb05488b442430'
+    '4885c0751d33c0483b1dc6eca003480f44c7488b5c2438488b74244048'
+    '83c4205fc3488bc7488b5c2438488b7424404883c4205fc3488b5c2438'
+    '33c0488b7424404883c4205fc3')
+
+
+def isinst_helper_lifter(body):
+    target = 0x5000
+    il = NS(
+        types=[INT],
+        _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+        function_extent=lambda va: (target, target + len(body)),
+        addr_candidates={},
+    )
+    lift = lifter(il=il)
+    lift.bin = NS(
+        read=lambda va, n: body if va == target and n == len(body) else None,
+        is_exec_va=lambda va: va == target,
+        exports={},
+    )
+    return lift, target
+
+
+def test_isinst_helper_recognized_structurally():
+    lift, target = isinst_helper_lifter(ISINST_BODY)
+    assert lift._is_isinst_helper(target)
+
+
+def test_isinst_helper_rejects_a_mutated_body():
+    bad = bytearray(ISINST_BODY)
+    bad[0] ^= 0xFF                      # the prologue is the proof
+    lift, target = isinst_helper_lifter(bytes(bad))
+    assert not lift._is_isinst_helper(target)
+    bad2 = bytearray(ISINST_BODY)
+    bad2[ISINST_BODY.find(bytes.fromhex('480f44c7'))] ^= 0xFF   # cmove
+    lift2, target2 = isinst_helper_lifter(bytes(bad2))
+    assert not lift2._is_isinst_helper(target2)

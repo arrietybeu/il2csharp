@@ -215,12 +215,15 @@ program recognizes nullary interface dispatch structurally
 the return from the interface instantiation, and binds the result at the
 call; full strict build `r12_out1` is 696/11,276 files changed with 0
 failed / 0 fallbacks, brace 0, parse 0/0/0, and Assembly-CSharp's helper
-sites are 55 -> 0 with `?.Dispose()` folds. Open, by payoff: the rest of
-the codegen families (isinst/castclass 8,271 sites, alloc/box 2,446,
-class-init 861, Interlocked 582, bounds-checked element address 745,
-parameterized interface dispatch), unmodelled-instruction invalidation
-(`insn.py`'s silent fall-through leaves a stale destination live),
-ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`),
-`op_Implicit` return-type subset (tens of sites), Cpp2IL declaration
-cross-check (unfiled); then the sidecar program and a full-tree promotion
-(user call).
+sites are 55 -> 0 with `?.Dispose()` folds. Landing 2 recognizes IsInst
+structurally: the `typeof(T)` subset renders `obj as T` (9 AC calls),
+opaque klass expressions keep `sub_`. Open, by payoff: the rest of
+the codegen families (isinst/castclass klass-expr 5,802 sites, alloc/box
+2,446, class-init 861, Interlocked 582, bounds-checked element address
+745, parameterized interface dispatch), unmodelled-instruction
+invalidation (`insn.py`'s silent fall-through leaves a stale destination
+live; probed, needs lane modeling first), F2's sibling `_aggregate_load`
+work (landed), ToString/op_Implicit spray probe (865 sites, 1 VA
+`0x1825b1150`), `op_Implicit` return-type subset (tens of sites), Cpp2IL
+declaration cross-check (unfiled); then the sidecar program and a
+full-tree promotion (user call).

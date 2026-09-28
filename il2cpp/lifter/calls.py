@@ -2311,6 +2311,23 @@ class _CallsMixin:
             self.regs.pop('XMM%d' % i, None)
         self._fresh_unknowns()
 
+        # --- IsInst intrinsic: sub_x(obj, typeof(T)) -> obj as T
+        if target is not None and target in getattr(self, 'rt_isinst', ()) \
+                and len(arg_exprs) >= 2:
+            _obj, _klass = arg_exprs[0], arg_exprs[1]
+            if _obj is not None and _klass is not None \
+                    and _klass.kind == 'klass' \
+                    and isinstance(_klass.text, str) \
+                    and _klass.text.startswith('typeof(') \
+                    and _klass.text.endswith(')'):
+                _tname = _klass.text[len('typeof('):-1]
+                _e = self._mk('(%s as %s)' % (_obj.text, _tname),
+                              _klass.ty, 'obj')
+                self.regs['RAX'] = _e
+                if self.asm_comments and asm:
+                    self.emit(ins.ip, '', asm)
+                return
+
         # --- object allocation helper: sub_x(typeof(T)) -> new T()
         if target is not None and target == self.rt_alloc and recv is not None                 and recv.kind == 'klass':
             tn = self.il.type_name(recv.ty)

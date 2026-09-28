@@ -175,6 +175,35 @@ class _StateMixin:
             return 1 if reads_r9 else 0
         return None
 
+    def _is_isinst_helper(self, target):
+        """Recognize the IsInst helper `(obj, klass) -> obj-or-null`.
+
+        The fixture's hot thunk 0x180434690 forwards to 0x180479f80, but the
+        address is never the proof: the body must have the fixed prologue
+        (klass in RDX, object in RCX, null check), the `call` to
+        Class::IsAssignableFrom, exactly one indirect `call qword [rax+10h]`
+        on the interface fallback, the System.Object short-circuit
+        `cmp rbx,[rip]; cmove rax,rdi`, and return. A different runtime keeps
+        the honest `sub_` fallback.
+        """
+        if not HAVE_ICED or not target or not self.bin.is_exec_va(target):
+            return False
+        if self.il.addr_candidates.get(target) or target in self.bin.exports:
+            return False
+        start, finish = self.il.function_extent(target)
+        if start != target or finish is None or not 0x40 < finish - target <= 0x400:
+            return False
+        code = self.bin.read(target, finish - target)
+        if not code:
+            return False
+        if not code.startswith(bytes.fromhex(
+                '48895c24104889742418574883ec20488bda488bf94885c9')):
+            return False
+        return (code.count(bytes.fromhex('483b1d')) >= 1
+                and code.count(bytes.fromhex('480f44c7')) == 1
+                and code.count(bytes.fromhex('ff5010')) == 1
+                and code.rstrip(b'\xcc').endswith(b'\xc3'))
+
     # ---- unregistered pure-FP32-unary leaves ---------------------------
     # Ground truth: 0x1804cdb00, the CRT log10f behind AudioVolumeSliders'
     # `sub_1804cdb00(volume)` (mi 23548/23549). The lift sprayed four stale
@@ -999,6 +1028,17 @@ class _StateMixin:
         self.rt_sqrt = sqrt_helpers[0] if len(sqrt_helpers) == 1 else None
         self._thunk_cache = {}
         self._twin_cache = {}
+        # IsInst intrinsic (obj, klass): the hot thunk 0x180434690
+        # forwards to 0x180479f80. `typeof(T)` sites render `obj as T`;
+        # opaque klass expressions keep the honest `sub_` fallback.
+        self.rt_isinst = set()
+        for _t in sorted(set(cnt) | set(stats)):
+            _fin = self._thunk_final(_t)
+            if self._is_isinst_helper(_t) or (_fin and _fin != _t
+                                              and self._is_isinst_helper(_fin)):
+                self.rt_isinst.add(_t)
+                if _fin:
+                    self.rt_isinst.add(_fin)
         self._cls_init_export = next(
             (va for va, nm0 in b.exports.items()
              if nm0 == 'il2cpp_runtime_class_init'), None)

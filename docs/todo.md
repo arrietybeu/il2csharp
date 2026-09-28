@@ -9,11 +9,13 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 `docs/public_release.md`).
 
 **Open, by payoff:**
-- Codegen-intrinsic recognition (program; landing 1 landed 2026-09-28):
+- Codegen-intrinsic recognition (program; landings 1-2 landed 2026-09-28):
   a census of plain `sub_` calls found 38,254 sites / 2,663 targets,
   **36,313 sites (95%) with zero metadata candidates** -- IL2CPP runtime
   helpers that metadata can never name. Open families by sites:
-  isinst/castclass thunk `0x180479f80` (8,271), alloc/box
+  isinst/castclass thunk `0x180479f80` -- the `typeof(T)` subset now
+  renders `obj as T` (9 AC calls; 2,388 tree-wide), the opaque klass
+  expressions (5,802) still need element-class provenance; alloc/box
   `0x18043dc60` (2,446), class-init `0x18043e360` (861),
   `Interlocked.CompareExchange` `0x18043f880` (582), bounds-checked
   element address `0x1803ed830`/`0x1803ed860` (745), parameterized
@@ -49,6 +51,8 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   no-match exit.
 
 **Landed/closed pointers (sections below; not open work):**
+- Codegen intrinsics landing 2: IsInst `typeof(T)` sites render
+  `obj as T` (2026-09-28; one golden moved and was read, mi 86310).
 - F2 value-type fragments + consumer lane slicing (2026-09-28; one
   golden moved and was read, mi 72576).
 - F1 slice (MAXSS/MINSS arithmetic): hardware-exact max/min; one golden
@@ -80,6 +84,34 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: codegen intrinsics, landing 2 -- IsInst `as` (2026-09-28, LANDED)
+
+`_is_isinst_helper` recognizes the IsInst body structurally, never by
+address: fixed prologue (klass in RDX, object in RCX, null check), the
+`Class::IsAssignableFrom` call, exactly one indirect `call qword
+[rax+10h]`, the System.Object short-circuit `cmp rbx,[rip]; cmove
+rax,rdi`, and a return. Both the thunk (`0x180434690`) and the real body
+(`0x180479f80`) land in `rt_isinst`; `_call` then renders a `typeof(T)`
+klass argument as `obj as T` -- the exact hardware semantics. Opaque
+klass expressions (5,802 tree-wide) keep the honest `sub_` fallback
+until element-class provenance lands.
+
+Measured on Assembly-CSharp: 9 call sites across 3 files
+(`FusionNetworkManager`, `MainMenu`, `MicAudioCanvas`) now render
+`delegate as Action_1<...>`; remaining `sub_180434690(` calls: 60. One
+golden moved and was read: mi 86310 `DateTimeStorage.Set`, where two
+duplicate helper calls collapse into `System.IConvertible convertible1 =
+value as System.IConvertible;` and the downstream call consumes the
+typed value; goldens regenerated against the scoped clean sweep.
+
+Gates (Assembly-CSharp only, `--workers 1`): 490 types / 6,622 bodies /
+0 failed / 0 fallbacks; brace 0/490; parse 0 bad / 0 ERROR / 0 MISSING;
+portable suite 963 passed.
+
+Tests: +2 portable (`tests/test_recovery_followup.py`: structural proof,
+mutated prologue/marker decline) and +1 game
+(`tests/test_game_isinst.py`: mi 26309 renders the cast).
 
 ## Current work: F2 landed -- whole value-type loads and lane slicing (2026-09-28, LANDED)
 
