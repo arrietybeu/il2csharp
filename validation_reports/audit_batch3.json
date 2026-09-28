@@ -19,7 +19,7 @@
   "il2cpp/arm64_dec.py": "324c58a2da6f3c340aaa7746093a27b7ccf9fb0f75ec043e70da5b1d653f7d08",
   "il2cpp/binary.py": "50d795723811a3b1a54067e1fc4fbddffa8ba2b6f05117e66ad81756a10ad84f",
   "il2cpp/cfg.py": "5b475d23ce6b902f8db315c73537c9af8c88ed6ecd0b8a547df4aa6aa000f271",
-  "il2cpp/cli.py": "6d5b2b7478b8f435c0f828eef423e00855151a781844bcb5815f250deac3cd7e",
+  "il2cpp/cli.py": "6f3ec3ea40b1b0e9075eddc0daa265051f24ff0290fc17363ec126de1f230a1e",
   "il2cpp/common.py": "22e90429c9412b6b0f95cca7b05b8d3e0ff0e16ff608abd23a93418f9990ff55",
   "il2cpp/csharp.py": "efe96ff669b2d789780b905eab61866166a9e16ac0910e20486eabf17e6cce1b",
   "il2cpp/dec/__init__.py": "9f678c95ba6c7e390558a96d65dec18708ed45613071fbbcece2af04567847f6",
@@ -33,7 +33,7 @@
   "il2cpp/dec/structure.py": "07aed325f67909841f1dbee15448d0819c2159a1db298580972429b6a379d8fb",
   "il2cpp/dec/sugar.py": "e77998545e3af805115a64de4a1758c969791967dd8966e8d52e03195505ba56",
   "il2cpp/dec/textpass.py": "6d981fe119c1b1f4dd895f216c40fe49f2484e6a84fe4112bcf1800c88a3e65a",
-  "il2cpp/emitter.py": "2e688f028b43e0c9c294c3ebe241f95885d02ef0dfef27b68ce9efa0f1304433",
+  "il2cpp/emitter.py": "3e599e0495266985e82070fc9b374029b7184cb8fee726002dcb023291c0be13",
   "il2cpp/expr.py": "5d3eacecb4262d704c7eb96924d7c3cfc136d06dfa4826562f1718c1e6bb5f5e",
   "il2cpp/headers.py": "a976e3337f6a21fb56b67ed370972b8bef90b95f76c8e0c70f68eb713b69f7e3",
   "il2cpp/lifter/__init__.py": "e76a5c053880af143736891cddf472cb2021e4000791f99b56bd51daca68ec6f",
@@ -155,5 +155,5 @@
   ],
   "review": "comments keep raw t1000/v46 names (the rename pass is now literal/comment-safe), which stops renamed comment text from feeding the later DCE: a dead pure cluster (real1..real12, self-referential) drops; all 6 stores and the array bases' renumbering survive. Regenerated with tools/make_goldens.py from this sweep+parse evidence."
  },
- "suite": "1114 passed / 0 failed (914 portable + 200 game)"
+ "suite": "1117 passed / 0 failed on the merged tree (917 portable + 200 game; 1114 before rebasing onto e3763a8's three CLI tests)"
 }

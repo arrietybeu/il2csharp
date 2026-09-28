@@ -105,8 +105,9 @@ stops the renamed comment text from feeding the later DCE, so a dead pure
 cluster (real1..real12, self-referential; terminal real5/real12 read
 nowhere) drops; all 6 store lines survive, only the array bases renumber.
 Goldens regenerated after the gates with `tools/make_goldens.py`; the diff
-is exactly that one body. Suite: **1114 passed / 0 failed** (914 portable
-+ 200 game).
+is exactly that one body. Suite: **1117 passed / 0 failed** on the merged
+tree (917 portable + 200 game; 1114 before the rebase onto `e3763a8`'s
+three CLI tests).
 
 Tests: +14 portable shared-slot classes +4 game, +14 portable icall
 overloads, +5 portable cache isolation, +5 portable literal safety +2
