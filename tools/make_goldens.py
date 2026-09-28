@@ -45,6 +45,9 @@ def main():
     ap.add_argument("--output", default=str(Path(__file__).resolve().parents[1] / "tests/goldens_review84.json"))
     ap.add_argument("--description", default="Focused native regressions plus a deterministic corpus spread; not a semantic oracle.")
     ap.add_argument("--replace", action="store_true")
+    ap.add_argument("--full", action="store_true",
+                    help="write full bodies (local review only); the default "
+                         "is hash-only, the public-safe form")
     args = ap.parse_args()
     import os
     if os.environ.get("PYTHONHASHSEED") != "0":
@@ -97,9 +100,15 @@ def main():
         "focus_indices": focus,
         "methods": snapshots,
     }
+    if not args.full:
+        # Public-safe default: pins stay (mi/va/type/name + body sha256),
+        # the game-derived text does not. `--full` writes it for local review.
+        from goldens_hash_only import hash_only
+        result = hash_only(result)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"Wrote {len(snapshots)} snapshots, keyed by MethodDef row, to {target}")
+    print(f"Wrote {len(snapshots)} {'full-body' if args.full else 'hash-only'} "
+          f"snapshots, keyed by MethodDef row, to {target}")
 
 
 if __name__ == "__main__":

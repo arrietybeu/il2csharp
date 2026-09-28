@@ -7,6 +7,11 @@ brace + parse gates, paired sweep, golden review), then `../docs/todo.md`
 (Current work). `promotion_r9.json` is the previous promoted tree;
 everything older is history.
 
+The 2026-09-28 public scrub removed the licensed fixture plus every raw
+log, `.diff`, focused/structural body dump, `*.tail-args.jsonl.gz` and
+the old golden archives from git history (see `../docs/public_release.md`);
+the summaries and JSON reports below remain.
+
 The promoted tree lives at `../final_out/` (git-ignored and derived from
 the licensed fixture — never publish it). The `.zip` release artifact
 (`docs/reviews/REPLACEMENT.md`) describes the Review 84 handoff ZIP; for

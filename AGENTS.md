@@ -40,9 +40,9 @@ start there, then `docs/todo.md` (Current work section).
   `corpus_common.py` (fixture loader). Add `tools/` to `PYTHONPATH`.
 - `work/` — scratch runners (`work/lib/`: `sweep_audit.py`,
   `tree_brace_audit.py`, `ts_gate.py`; routing in `work/README.md`).
-- `testgame/` — licensed fixtures via Git LFS (private repo; never
-  redistribute, never go public without removing them).
-- `final_out/` — last promoted tree (2026-09-19). Read-only reference.
+- `testgame/` — local, git-ignored licensed fixture (never tracked or
+  redistributed; see `docs/public_release.md`).
+- `final_out/` — last promoted tree (r10, 2026-09-28). Read-only reference.
   Never edit, never rebuild into.
 - `validation_reports/` — frozen gate evidence. Don't touch.
 - Temp scratch: `C:\Users\crax\AppData\Local\Temp\opencode` (outside repo).
@@ -87,14 +87,15 @@ unproven shape keeps today's spelling; raw is always honest.
 - PowerShell 5.1: no `head`/`tail`/`grep`/`rm`/`||`/`&&`; no `>` redirect
   (writes UTF-16); quote paths with spaces. `PYTHONHASHSEED=0` always —
   set iteration order leaks into temp names otherwise.
-- GitHub is the history authority (old backup trees were reaped). Never
-  commit secrets/fixtures churn; never regen snapshots or promote output
+- GitHub is the history authority for the post-scrub history. The
+  2026-09-28 scrub removed the licensed fixture and every full-body /
+  disassembly artifact from all of it and pruned LFS, so every pre-scrub
+  commit hash changed; that older history survives only in a local bundle
+  (see `docs/public_release.md`). Never track or publish game data or
+  decompiled output (`testgame/`, `final_out/`, `work/` are all ignored),
+  never commit secrets, and never regen snapshots or promote output
   without an explicit user call. Stash-prove-clean before attributing a
   break to your change.
-- Never make the repo public as-is: `testgame/` is licensed game data in
-  Git LFS history, and `final_out/` is decompiled game output. The
-  scrubbed-export checklist (fixture purge, hash-only goldens, license
-  scope) is `docs/public_release.md`.
 
 ## Current state (2026-09-28, `main` clean; `final_out/` = r10)
 
@@ -111,10 +112,20 @@ per-instance runtime caches (the audit-batch-1 class). Strict rebuild:
 11,183 files / 114,458 bodies / 0 failed / 0 fallbacks / 0 type-emission
 failures in 1,465,953 ms (contended box); brace 0; parse 0/0/0/0; paired
 sweep 0 crashes both sides, into_block 8,075/2,046 unchanged, unknown -57;
-one golden moved (mi 80548) and reviewed; suite 1117 passed / 0 failed.
+one golden moved (mi 80548) and reviewed; suite 1118 passed / 0 failed.
 Deferred audit findings (stale destinations on unmodelled instructions,
 value-type fragment discard, XMM0 clobber, array stride) are filed in
 `docs/todo.md` with evidence.
+
+Also on 2026-09-28 the repository history was scrubbed for public release:
+`git filter-repo` removed the licensed fixture and every full-body /
+disassembly artifact (golden archives, focused/structural dumps, raw
+logs and diffs, `*.tail-args.jsonl.gz`), LFS objects were pruned, and the
+history was force-pushed. Every pre-scrub commit hash changed; the old
+history lives only in `il2csharp_prepurge_backup.bundle` (parent folder).
+`testgame/` is local + git-ignored, and the tracked golden is hash-only
+(`tools/make_goldens.py` defaults to hash-only; `--full` is local-only).
+Checklist: `docs/public_release.md`.
 
 ## Previous state (2026-09-26, `main` clean; `final_out/` = r9)
 

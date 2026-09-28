@@ -22,7 +22,7 @@ via System.Array, rename barrier + param exclusion, interface dispatch
 naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
 direct calls), each decline-by-default with portable + game pins; plus
 documented disproofs (hinted receivers, ?addr tightening,
-receiver-driven generics). 1117 tests pass (917 portable + 200 game),
+receiver-driven generics). 1118 tests pass (918 portable + 200 game),
 suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
 both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
 and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
@@ -338,24 +338,24 @@ fix-123 in `validation_reports/review123_*`.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test
-(`tests/test_source_format.py`) enforces this contract. **1117 tests pass** (917 portable + 200 game;
+(`tests/test_source_format.py`) enforces this contract. **1118 tests pass** (918 portable + 200 game;
 64 golden snapshots, all green).
-`goldens_review77.json`, `goldens_review79.json`,
-`goldens_review80.json`, `goldens_review82.json`, and `goldens_review83.json` are
-archived unchanged. Current `goldens_review84.json` uses the same 64 MethodDefs:
-53 bodies are unchanged from Review 83 and eleven reviewed bodies recover exact
-constructor/allocation behavior (Reviews 85–89 regenerate with only name-only deltas,
-fix 97 with declaration-only deltas, fix 97e with 0 body changes, fix 99 with 6 reviewed
-dead-typeof removals, 32837 dead-spill removal, 104428 recovered aggregates,
-67525 float2 composites: see `docs/todo.md` Current work).
+`tests/goldens_review84.json` is **hash-only**: each of the 64 snapshots
+keeps its MethodDef row, VA, owner and name plus `body_sha256` /
+`body_lines`; `tests/test_game_goldens.py` compares hashes when bodies are
+absent and bodies when present. The older `goldens_review77/79/80/82/83`
+archives and every full-body snapshot were removed from history in the
+2026-09-28 public scrub (see `docs/public_release.md`); regenerate a local
+full-body file with `tools/make_goldens.py --full` (never commit it).
 
 Use `tools/csharp_smoke.py` for the .NET 8 compiled-pattern checks, including the
 actual loop emitter. They passed for Review 80 but were not rerun for Reviews
 81–97 (or the package split, which `work/split/rebuild_verify.py` proves byte-identical)
 because this environment has no .NET SDK; they are never a build of the
-complete recovered game. The supplied game fixtures are tracked via Git LFS
-while this repo stays private; they were added at the user's request —
-never make the repo public without removing them first.
+complete recovered game. The supplied game fixtures live in the local,
+git-ignored `testgame/` only (licensed game data; never track or distribute
+them — the 2026-09-28 scrub removed them from history; see
+`docs/public_release.md`).
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -391,8 +391,8 @@ Every public name is re-exported from `il2cpp/__init__.py`, so
 Project root is `il2csharp/` itself. The old parent folder held a sibling
 `work/` (20 files, now merged into `work/`), five loose scripts (now in
 `tools/`: `compare_content.py`, `compare_outputs.py`, `count_diffs.py`,
-`test_import.py`, `test_import2.py`), and the game folder (now
-`testgame/`, tracked via Git LFS in this private repo). Pre-consolidation history in `docs/archive/`
+`test_import.py`, `test_import2.py`), and the game folder (now the local,
+git-ignored `testgame/`; never tracked). Pre-consolidation history in `docs/archive/`
 still refers to `../work/`, `il2csharp/final_out/`, sibling `bXX_out1`
 trees, and `Shift At Midnight` at the old root — read those as `work/`,
 `final_out/`, reaped batch trees, and `testgame/`. Backup zips live in the
@@ -440,9 +440,9 @@ then write once; make backups once and never re-derive them from the
 live file.
 
 **The real target for validation** is a licensed Windows build of *Shift At
-Midnight* (Kwalee), metadata v31, x64, kept in `testgame/`
-(tracked via Git LFS; private repo only — never publicly redistributed
-and never make the repo public without removing the fixtures). A Unity 2022 sample
+Midnight* (Kwalee), metadata v31, x64, kept in the local, git-ignored
+`testgame/` (never tracked, never redistributed; the 2026-09-28 history
+scrub removed every earlier trace — see `docs/public_release.md`). A Unity 2022 sample
 (`Simple_2022_3_35`) under `temptools/Cpp2IL/TestFiles/` is a second,
 smaller data point when that external checkout is present (it is not
 bundled with this repo). There's no synthetic/bundled test fixture — every claim

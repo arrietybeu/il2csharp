@@ -40,8 +40,8 @@ Thumbs.db
 Desktop.ini
 
 # Repo-specific: large generated trees, private fixtures, backups
-# NOTE: testgame/ fixtures ARE tracked via Git LFS (private repo only —
-# never make this repo public without removing them first).
+# testgame/ is LOCAL ONLY (licensed game data; removed from git in the
+# 2026-09-28 history scrub — see docs/public_release.md). Never track it.
 work/
 work/logs/
 work/*_out/
@@ -50,13 +50,7 @@ work/*.err
 work/*.pid
 final_out/
 bckups/
-testgame/*
-!testgame/README.md
-!testgame/GameAssembly.dll
-!testgame/ShiftAtMidnight_Data/
-!testgame/ShiftAtMidnight_Data/il2cpp_data/
-!testgame/ShiftAtMidnight_Data/il2cpp_data/Metadata/
-!testgame/ShiftAtMidnight_Data/il2cpp_data/Metadata/global-metadata.dat
+testgame/
 temptools/
 il2csharp_out/
 il2csharp_out*/

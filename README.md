@@ -15,7 +15,7 @@ the declaring type's own interface list, namespace-qualified spellings feed
 a uniquely-proven receiver call take their owner's type, and using-strip
 keeps ambiguous heads qualified.
 
-The full test suite passes **1117 tests** (917 portable + 200 native-fixture
+The full test suite passes **1118 tests** (918 portable + 200 native-fixture
 regressions). The strict build covered 11,183 files / 114,458 bodies with
 0 failures or structured fallbacks; the brace audit and the tree-sitter
 parse gate are clean. The last whole-tree Roslyn compiler probe (fix-123
@@ -209,11 +209,13 @@ repository** — the surviving scripts and gate reports are provenance, not ship
 `tests/`, `validation_reports/` (current evidence: `promotion_r10.json` +
 `audit_batch3.json`; older files are historical), `final_out/` (the complete
 r10 strict-built/syntax-gated output, promoted 2026-09-28; git-ignored), and
-`testgame/` — the supplied Shift At Midnight DLL/metadata, tracked via Git
-LFS. It is licensed game data: never redistribute it, and it (plus its LFS
-objects and any decompiled output such as `final_out/`) must be removed
-from the working tree **and git history** before this repository can be
-made public. Backup zips live in the parent folder. Pre-consolidation
+`testgame/` — the supplied Shift At Midnight DLL/metadata, **local only and
+git-ignored**. It is licensed game data: never redistribute it, and never
+track it or any decompiled output such as `final_out/`. The 2026-09-28
+scrub removed every earlier trace of the fixture and of full-body /
+disassembly artifacts from this repository's history and pruned its LFS
+objects (all pre-scrub commit hashes changed; the older history lives only
+in a local bundle — see `docs/public_release.md`). Pre-consolidation
 history in `docs/archive/` still refers to `../work/`, sibling `bXX_out1`
 trees, and `Shift At Midnight` at the old root — read those as `work/`,
 reaped batch trees, and `testgame/`.
@@ -486,7 +488,7 @@ competing for CPU).
 
 ## Validation
 
-Current gates (r10 tree): **1117 tests (917 portable + 200 game)**;
+Current gates (r10 tree): **1118 tests (918 portable + 200 game)**;
 a strict 11,183-file/114,458-body build with no failures or fallbacks; a
 0-error syntax parse of every C# file; and a paired 116,178-method direct
 sweep with 0 crashes and structural metrics unchanged (into_block

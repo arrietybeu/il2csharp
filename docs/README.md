@@ -18,6 +18,9 @@ by the move. All repo paths below are root-relative.
   fixture, decompiled trees) and the scrubbed-export checklist.
 - `docs/reviews/` — per-release notes: `REVIEW.md` (Review 77) and
   `REVIEW78.md`–`REVIEW87.md`, plus `REPLACEMENT.md` (release handoff).
+  These are historical records: the 2026-09-28 public scrub removed the
+  older golden archives, raw logs and body dumps they reference (see
+  `docs/public_release.md`).
 - `../README.md` (repo root) — native-construct mapping: what recovers
   as what C#.
 - `../CLAUDE.md` (repo root) — architecture and mandatory

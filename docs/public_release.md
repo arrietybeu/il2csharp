@@ -1,47 +1,51 @@
 # Public release checklist
 
-Status 2026-09-28: the repository is **private**. The chosen route is a
-fresh, scrubbed public copy; this file records what is publishable and how
-the pieces were prepared.
+Status 2026-09-28: the scrub is **executed** and force-pushed. This file
+records what was removed, what remains before flipping visibility, and how
+to verify.
 
-## Never publish (licensed game data or derived output)
+## Done (2026-09-28)
 
-- `testgame/` — the supplied Shift At Midnight `GameAssembly.dll` and
-  `global-metadata.dat`. Tracked via Git LFS, so the blobs live in the
-  remote's LFS storage: deleting the folder in a new commit does **not**
-  remove them from history or from GitHub. Purge with `git filter-repo`
-  plus an LFS cleanup, or (preferred) never flip this repo and export a
-  scrubbed copy instead.
-- `final_out/` — the promoted decompiled tree (r10), git-ignored, ~153 MB.
-- `work/` — local scratch and provenance, git-ignored (~16 MB after the
-  2026-09-28 cleanup).
+- `testgame/` removed from every commit; the local copy is kept and
+  git-ignored (`testgame/` rule in `.gitignore`).
+- Full scrub via `git filter-repo`: the golden archives and full-body
+  snapshots, review78/79/80 focused + structural JSONs, every `.diff`,
+  `*.log`, `*.log.gz`, `*.diff.gz`, `*.tail-args.jsonl.gz` artifact, and
+  `SHA256SUMS.presplit_20260912.txt`.
+- LFS objects pruned locally (`.git/lfs` 0 MB; `git lfs ls-files --all`
+  empty); LFS lines removed from `.gitattributes`.
+- Tracked `tests/goldens_review84.json` is **hash-only**
+  (`tools/goldens_hash_only.py`); `tools/make_goldens.py` now defaults to
+  hash-only and takes `--full` for local-only bodies.
+- Blob-level verification over every ref: 0 fixture paths, 0 body/asm
+  JSONs, 0 disassembly bulk.
+- MIT `LICENSE` added (source, tests, tools, docs only — never game data
+  or decompiled output).
 
-## Scrubbed export
+## Before flipping visibility
 
-1. Copy the tracked file set, excluding `testgame/**`; `git ls-files` is
-   the authoritative list.
-2. Hash the golden snapshots:
-   `python tools/goldens_hash_only.py tests/goldens_review84.json --output <export>/tests/goldens_review84.json`.
-   `tests/test_game_goldens.py` compares hashes for hash-only snapshots
-   and skips entirely when no fixture env is set.
-3. Remove the two `filter=lfs` lines from `.gitattributes` (no LFS
-   objects exist in the export).
-4. Regenerate `validation_reports/SHA256SUMS.txt` with
-   `python work/split/refresh_manifest.py --write` — the shipped one
-   hashes `testgame/` and `final_out/` paths from the private tree — or
-   drop it.
-5. Scan for fixture references (`testgame`, `final_out`,
-   `Shift At Midnight`). Prose may stay; binaries and output trees may
-   not.
-6. `python -m pytest -q -m "not game"` must pass with no fixture env
-   set; the game-marked tests skip.
-7. Keep `LICENSE` (MIT) and its scope note: it covers the decompiler
-   source only, never game-derived content.
+1. **Remote LFS storage.** Rewriting local history cannot erase LFS
+   objects already uploaded to GitHub. Recreate the GitHub repository
+   (delete + create) and push the rewritten history, or ask GitHub support
+   to purge its LFS storage; force-pushing alone leaves the old blobs
+   there.
+2. Optionally re-run `python tools/validate_corpus.py sweep`/`parse` for
+   fresh evidence under the rewritten hashes (the frozen evidence is still
+   valid for the source; only commit ids changed).
+3. `python -m pytest -q -m "not game"` must pass without fixture env vars;
+   the game-marked tests skip.
+4. Keep the license scope note with any redistribution.
+
+## Pre-scrub history
+
+The only copy of the pre-scrub history (fixture included) is the local
+bundle `C:\Users\crax\Downloads\il2csharp_prepurge_backup.bundle` (18 MB,
+all refs; LFS pointers only — the fixture bytes are the local `testgame/`
+copy). Every commit hash in docs written before 2026-09-28 refers to that
+bundle, not to GitHub.
 
 ## Decisions recorded 2026-09-28
 
-- Fixture: keep the repository private for now; no history rewrite
-  performed.
-- Golden snapshots: hash-only in the public copy (user call); the tool
-  and test support land here.
+- Fixture: purged from history; local + ignored (user call).
+- Golden snapshots: hash-only (user call).
 - License: MIT for the source (user delegated the choice).
