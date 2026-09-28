@@ -42,6 +42,7 @@ class Emitter:
         self.failed = 0
         self.fallbacks = 0
         self.emit_failed = 0
+        self.bodies = {}
 
     # -- type header ------------------------------------------------------
     def _type_generic_params(self, td: TypeDef) -> str:
@@ -974,9 +975,10 @@ class Emitter:
         structured_error = None
         if self.decompiler is not None:
             try:
-                body = self.decompiler.lift_method(m, td)
+                body = self._void_tail_strip(self.decompiler.lift_method(m, td), m)
                 self.lifted += 1
-                return self._void_tail_strip(body, m)
+                self._record_body(m, body)
+                return body
             except Exception as ex:
                 structured_error = ex
         self.fallbacks += 1
@@ -991,7 +993,9 @@ class Emitter:
             # The linear fallback has no type analysis: object, not var.
             body = [re.sub(r'^(\s*)var (\w+)( = )', r'\1object \2\3', l)
                     for l in body]
-            return self._void_tail_strip(body, m)
+            body = self._void_tail_strip(body, m)
+            self._record_body(m, body)
+            return body
         except Exception as ex:
             self.failed += 1
             return ['/* lift failed: %s */' % ex]
@@ -1505,4 +1509,15 @@ class Emitter:
                 for i in range(len(self.meta.string_literals))]
         with open(path, 'w', encoding='utf-8') as fh:
             json.dump(lits, fh, indent=1, ensure_ascii=False)
+
+    def _record_body(self, m, body):
+        if not getattr(m, 'addr', 0) or not body:
+            return
+        self.bodies[m.addr] = '\n'.join(l.rstrip() for l in body)
+
+    def write_bodies(self, path):
+        import json
+        payload = {'0x%x' % addr: text for addr, text in sorted(self.bodies.items())}
+        with open(path, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh, indent=1, ensure_ascii=False)
 

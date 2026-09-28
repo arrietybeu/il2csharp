@@ -142,6 +142,11 @@ python il2csharp.py <game-dir-or-metadata> [options]
       --asm           include native asm comments in bodies
       --max-methods N cap lifted bodies (debug)
       --probe         diagnostics: registrations + modules, no output files
+      --bodies [FILE] write address-keyed C# bodies (default: <out>/bodies.json)
+                      for Sunshine `recover --rival il2csharp=bodies.json`
+      --manifest FILE write a JSON summary (files/lifted/failed/ms/bodies)
+      --json          print that summary as one JSON line on stdout
+  -q, --quiet         suppress progress; still prints errors and --json
   -v, --verbose       progress details
 ```
 

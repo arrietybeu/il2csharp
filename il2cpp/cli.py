@@ -90,6 +90,15 @@ def main(argv):
     ap.add_argument('--emit-h', action='store_true',
                     help='also emit an il2cpp.h-style C header (Il2CppDumper format)')
     ap.add_argument('-v', '--verbose', action='store_true')
+    ap.add_argument('-q', '--quiet', action='store_true',
+                    help='suppress progress; still prints errors and --json')
+    ap.add_argument('--json', action='store_true',
+                    help='print a one-line JSON summary on stdout')
+    ap.add_argument('--manifest', metavar='FILE',
+                    help='write the same JSON summary to FILE')
+    ap.add_argument('--bodies', nargs='?', const='bodies.json', metavar='FILE',
+                    help='write address-keyed C# bodies for Sunshine --rival '
+                         '(default: <out>/bodies.json)')
     args = ap.parse_args(argv[1:])
 
     if args.max_methods is not None and args.max_methods < 0:
@@ -104,14 +113,17 @@ def main(argv):
     if not gmd:
         print('error: could not locate global-metadata.dat under', args.target)
         return 1
-    print('metadata:', gmd)
-    print('binary  :', bp)
+    def say(*parts):
+        if not args.quiet:
+            print(*parts)
+    say('metadata:', gmd)
+    say('binary  :', bp)
     try:
         meta = Metadata(gmd)
     except (OSError, ValueError, struct.error) as ex:
         print('error: could not read metadata:', ex)
         return 1
-    print('metadata v%d | %d types | %d methods | %d images | %d string literals' % (
+    say('metadata v%d | %d types | %d methods | %d images | %d string literals' % (
         meta.version, len(meta.typedefs), len(meta.methods), len(meta.images),
         len(meta.string_literals)))
     if not bp:
@@ -125,7 +137,7 @@ def main(argv):
     if bin_ is None:
         print('error: unsupported binary format')
         return 1
-    print('binary loaded: %d sections, %d exports%s' % (len(bin_.sections), len(bin_.exports), (' | relocs: %d' % bin_.reloc_applied) if getattr(bin_, 'reloc_applied', 0) else ''))
+    say('binary loaded: %d sections, %d exports%s' % (len(bin_.sections), len(bin_.exports), (' | relocs: %d' % bin_.reloc_applied) if getattr(bin_, 'reloc_applied', 0) else ''))
     il = Il2Cpp(meta, bin_)
     il.verbose = args.verbose
     t0 = time_ms()
@@ -150,7 +162,7 @@ def main(argv):
         return 1
     il._mod_ptr_cache.clear()  # free raw pointer arrays
     n_addr = sum(1 for m in meta.methods if m.addr)
-    print('registrations ok | %d/%d methods have native code | %d ms' % (
+    say('registrations ok | %d/%d methods have native code | %d ms' % (
         n_addr, len(meta.methods), time_ms() - t0))
 
     if args.probe:
@@ -160,16 +172,16 @@ def main(argv):
 
     if not args.decls_only:
         if is_arm64_binary(bin_) and not HAVE_CAPSTONE:
-            print('warning: Capstone not installed; ARM64 bodies disabled (pip install capstone)')
+            say('warning: Capstone not installed; ARM64 bodies disabled (pip install capstone)')
         elif not is_arm64_binary(bin_) and not HAVE_ICED:
-            print('warning: iced-x86 not installed; x64 bodies disabled (pip install iced-x86)')
+            say('warning: iced-x86 not installed; x64 bodies disabled (pip install iced-x86)')
 
     os.makedirs(args.out, exist_ok=True)
     if args.emit_h:
         t0 = time_ms()
         hpath = os.path.join(args.out, 'il2cpp.h')
         n_types = HeaderEmitter(il, hpath).write()
-        print('il2cpp.h: %d types in %d ms -> %s' % (n_types, time_ms() - t0, hpath))
+        say('il2cpp.h: %d types in %d ms -> %s' % (n_types, time_ms() - t0, hpath))
     em = Emitter(il, args.out, asm_comments=args.asm, with_bodies=not args.decls_only,
                  max_methods=args.max_methods, verbose=args.verbose, type_filter=args.types)
 
@@ -181,13 +193,41 @@ def main(argv):
             continue
         n = em.write_assembly_split(img)
         total_files += n
-        print('  %-52s %5d types  (%d bodies, %d failed)' % (
+        say('  %-52s %5d types  (%d bodies, %d failed)' % (
             img.name, n, em.lifted, em.failed))
     em.write_script_json(os.path.join(args.out, 'script.json'))
     em.write_string_literals(os.path.join(args.out, 'stringliteral.json'))
-    print('done: %d type files in %d ms | bodies lifted: %d, failed: %d | '
-          'structured fallbacks: %d, type emit failures: %d' % (
-        total_files, time_ms() - t0, em.lifted, em.failed, em.fallbacks, em.emit_failed))
+    bodies_path = None
+    if args.bodies:
+        bodies_path = args.bodies if os.path.isabs(args.bodies) else os.path.join(args.out, args.bodies)
+        parent = os.path.dirname(os.path.abspath(bodies_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        em.write_bodies(bodies_path)
+        say('bodies: %d -> %s' % (len(em.bodies), bodies_path))
+    elapsed = time_ms() - t0
+    summary = {
+        'out': os.path.abspath(args.out),
+        'files': total_files,
+        'lifted': em.lifted,
+        'failed': em.failed,
+        'fallbacks': em.fallbacks,
+        'emit_failed': em.emit_failed,
+        'ms': elapsed,
+        'bodies': os.path.abspath(bodies_path) if bodies_path else None,
+    }
+    if args.manifest:
+        import json
+        os.makedirs(os.path.dirname(os.path.abspath(args.manifest)) or '.', exist_ok=True)
+        with open(args.manifest, 'w', encoding='utf-8') as fh:
+            json.dump(summary, fh, indent=1)
+        say('manifest:', os.path.abspath(args.manifest))
+    say('done: %d type files in %d ms | bodies lifted: %d, failed: %d | '
+        'structured fallbacks: %d, type emit failures: %d' % (
+        total_files, elapsed, em.lifted, em.failed, em.fallbacks, em.emit_failed))
+    if args.json:
+        import json
+        print(json.dumps(summary, separators=(',', ':')))
     failed = bool(em.failed or em.emit_failed)
     if args.strict and not args.decls_only:
         failed = failed or bool(em.fallbacks) or em.lifter is None
