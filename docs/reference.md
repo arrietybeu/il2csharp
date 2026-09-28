@@ -181,8 +181,9 @@ and the applied source patches `patch_*.py` kept as the record.
 
 Live authority has moved on: current baseline, gates, and file census
 are `docs/todo.md` (Current work), `validation_reports/promotion_r10.json`
-and `promotion_r9.json` (frozen evidence). `TODONOW.md` and the
-`promotion_r4*` files are history. What
+and `promotion_r9.json` (frozen evidence). The former root `TODONOW.md`
+(now an appendix of `docs/todo.md`) and the `promotion_r4*` files are
+history. What
 follows is a batch-19 snapshot, kept for its "known artifacts"
 list below — all promotion status here is historical, not Review 79 authority.
 The batch-19-era baseline chain it originally described

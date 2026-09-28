@@ -11,7 +11,8 @@ sources are untouched by the move. All repo paths below are root-relative.
 - `docs/todo.md` — current work (codegen-intrinsic landing 1, r10
   promoted tree), validation status, next priorities, replacement
   records.
-- `TODONOW.md` — 2026-09-22 failure-class inventory (historical, r4c era).
+- 2026-09-22 failure-class inventory (formerly root `TODONOW.md`) —
+  appendix of `docs/todo.md` (historical, r4c era).
 - `docs/handoff-2026-09-23.md` — 2026-09-23 stop record (historical).
 - `docs/reference.md` — working-loop rules (§4), baselines / promotion /
   known artifacts (§6), gotchas (§7), next-up families (§2), Batch 19

@@ -10,9 +10,10 @@ start there, then `docs/todo.md` (Current work section).
 1. `CLAUDE.md` — architecture, mandatory guardrails, validation gates.
 2. `docs/todo.md` — current work (top section is live), what's done,
    what's deferred with evidence.
-3. `TODONOW.md` (2026-09-22 failure-class inventory) and
-   `docs/handoff-2026-09-23.md` — historical stop records; live work is
-   `docs/todo.md`. `nowtodo.md` no longer exists.
+3. `docs/handoff-2026-09-23.md` — 2026-09-23 stop record (historical);
+   the 2026-09-22 failure-class inventory (the former root `TODONOW.md`)
+   is now an appendix of `docs/todo.md`. Live work is `docs/todo.md`;
+   the pre-reorg `nowtodo.md` no longer exists.
 4. `docs/README.md` — map of every doc and `§NN` cross-reference.
 5. `docs/construct-mapping.md` — what native constructs recover as what
    C#, plus the detailed internals/validation notes.
