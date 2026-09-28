@@ -157,6 +157,43 @@ def test_hop_fold_accepts_typed_def():
     assert out == ["this.count += 1;"]
 
 
+def test_hop_fold_declines_across_a_target_write():
+    dec = Decompiler.__new__(Decompiler)
+    lines = [
+        "int num5 = this.count + 1;",
+        "this.count += 1;",
+        "this.count = num5;",
+    ]
+    assert dec._compound_assign(list(lines)) == lines
+
+
+def test_hop_fold_declines_across_a_brace_or_label():
+    dec = Decompiler.__new__(Decompiler)
+    for mid in ("{", "}", "L_18057b25f:"):
+        lines = [
+            "int num5 = this.count + 1;",
+            mid,
+            "this.count = num5;",
+        ]
+        assert dec._compound_assign(list(lines)) == lines
+
+
+def test_fix_select_skips_null_operators():
+    dec = Decompiler.__new__(Decompiler)
+    for line in (
+        "obj1 = (obj2?.Foo());",
+        "obj1 = (obj2 ?? (object)obj3);",
+        "obj1 = (arr?[0]);",
+    ):
+        assert dec._fix_select(line) == line
+
+
+def test_fix_select_still_appends_to_a_real_mark():
+    dec = Decompiler.__new__(Decompiler)
+    assert dec._fix_select("obj1 = (cond1 ? obj2);") == \
+        "obj1 = (cond1 ? obj2 : default);"
+
+
 def test_struct_zero_literal_becomes_default():
     assert rename(["t1 = 0f;"], var_types={"t1": HIT_T}) == [
         "UnityEngine.RaycastHit obj1 = default;"]

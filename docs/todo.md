@@ -40,12 +40,14 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 - Audit-batch-3 deferred findings, still open: F1 unmodelled-instruction
   invalidation (MAXSS/MINSS have operand-shape entries but no arithmetic
   in `insn.py`), F2 value-type fragment discard, F3 XMM0-5 clobber, Dec
-  F3-F6 (latent, 0 corpus hits), BSS name ties. F4 (array stride) and F5
-  (memory-size map) are fixed (section below), as are the runtime vtable
-  sentinel, the swapped PE/Android counters and the `--only` no-match
-  exit.
+  F5-F6 (latent, 0 corpus hits), BSS name ties. F4 (array stride), F5
+  (memory-size map) and Dec F3/F4 (hop-fold/select guards) are fixed
+  (sections below), as are the runtime vtable sentinel, the swapped
+  PE/Android counters and the `--only` no-match exit.
 
 **Landed/closed pointers (sections below; not open work):**
+- Dec F3/F4: hop-fold scope/label/write guards and null-operator skip in
+  the select pass (2026-09-28; latent, output-neutral).
 - F4 array stride + F5 memory-size map: stride-verified indices and true
   access widths on both the load and store paths (2026-09-28).
 - Post-r10 small fixes: vtable sentinel gate, classic PE counter order,
@@ -67,6 +69,28 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: Dec F3/F4 -- hop-fold and select guards (2026-09-28, LANDED)
+
+Two latent text-pass hazards, both 0 corpus hits, closed with
+decline-by-default guards:
+
+- `_compound_assign`'s hop fold now declines when any line between the
+  hop definition and its copy is a brace, a label, or any write to the
+  target (`x += 1`, `x.f = ...`, `x[i] = ...`); folding across one moved
+  the write across that statement. Unrelated lines and the pre-existing
+  hop-temp-use decline are unchanged.
+- `_fix_select` now skips null operators the way `_strip_dangling_default`
+  does: `?.`, `?[`, and `??` (both marks), so no `: default` is appended
+  inside a null-conditional/null-coalescing expression.
+
+Verified output-neutral: a scoped Assembly-CSharp build differs from
+`final_out` (r10) in exactly the same 15 files as the previous two
+batches (codegen landing + F4/F5), 490 types / 6,622 bodies / 0 failed /
+0 fallbacks; brace 0/490; parse 0 bad / 0 ERROR / 0 MISSING; all 64
+goldens pass.
+
+Tests: +4 portable in `tests/test_review97_bare_decls.py`.
 
 ## Current work: F4/F5 -- array stride and true access widths (2026-09-28, LANDED)
 

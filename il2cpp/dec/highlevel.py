@@ -1143,6 +1143,10 @@ class _HighLevelMixin:
                                 drop.add(j)
                                 folded = True
                             break
+                        if st[j] in ('{', '}') or st[j].endswith(':'):
+                            break       # brace/label: never fold across a scope
+                        if re.match(r'^%s(?![\w])' % re.escape(x), st[j]):
+                            break       # compound/member write to the target
                         if re.search(r'(?<![\w.])%s(?![\w])' % re.escape(t), st[j]):
                             break       # another use of the hop temp appears
                     if not folded:

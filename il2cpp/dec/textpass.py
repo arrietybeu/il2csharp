@@ -288,6 +288,19 @@ class _TextPassMixin:
                 # ` : default` appended after the literal)
                 i = qi + 1
                 continue
+            nxt1 = ln[qi + 1] if qi + 1 < n else ''
+            prv1 = ln[qi - 1] if qi > 0 else ''
+            if nxt1 == '?':
+                # `??` -- the second `?` is part of the operator too
+                i = qi + 2
+                continue
+            if nxt1 in ('.', '[') or prv1 == '?':
+                # `?.`/`?[`/`??` are null operators, not the lifter's
+                # no-false-arm select mark (the same guard
+                # `_strip_dangling_default` uses); appending a false arm
+                # inside the parens corrupts the expression.
+                i = qi + 1
+                continue
             k = qi - 1
             depth = 0
             while k >= 0:
