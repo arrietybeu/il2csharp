@@ -43,13 +43,14 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 - Audit-batch-3 deferred findings, still open: F1's remaining half
   (invalidate the destination of genuinely unmodelled instructions --
   SHUFPS ~1,646, CVTDQ2PS ~197 live reads in Assembly-CSharp; **probed
-  and deferred, lane modeling first -- section below**) and Dec F5-F6
-  (latent, 0 corpus hits). F1's MAXSS/MINSS arithmetic family, F2
-  (value-type fragments), F3 (XMM0-5 clobber), F4 (array stride), F5
-  (memory-size map), Dec F3/F4 (hop-fold/select guards) and the BSS
-  ambiguous-name ties are fixed (sections below), as are the runtime
-  vtable sentinel, the swapped PE/Android counters and the `--only`
-  no-match exit.
+  and deferred, lane modeling first -- section below**) and Dec F5
+  (four more literal-blind token substitutions; latent, 0 corpus hits).
+  F1's MAXSS/MINSS arithmetic family, F2 (value-type fragments), F3
+  (XMM0-5 clobber), F4 (array stride), F5 (memory-size map), Dec F3/F4
+  (hop-fold/select guards), Dec F6 (the `_sfblob_dedupe` blob-offset
+  key) and the BSS ambiguous-name ties are fixed (sections below), as
+  are the runtime vtable sentinel, the swapped PE/Android counters and
+  the `--only` no-match exit.
 - Platform support (deferred; **not planned soon**, user call
   2026-09-28): Linux and macOS binaries (the ELF loader exists and the
   Android registration path is ELF-gated; Mach-O is unparsed), and better
@@ -64,6 +65,9 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   scan-name change stays unwritten.
 
 **Landed/closed pointers (sections below; not open work):**
+- Dec F6: `_sfblob_dedupe` is offset-aware -- a named static-field
+  store no longer drops a same-value blob twin at a different offset
+  (2026-09-28; latent, 0 corpus hits; 7 portable tests).
 - Pre-v31 metadata crash: the `<6i` method row bound `rt` while the
   shared `MethodDef` call read `rtok`, killing every real file below
   v31 on row one (2026-09-28; per-version synthetic tests pin v24-v31).
@@ -104,6 +108,29 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: Dec F6 -- static-field blob dedupe is offset-aware (2026-09-28, LANDED)
+
+`_sfblob_dedupe` treated (owner, value) as the twin's identity, so when
+two static fields of one type received the same value and a named store
+existed for that value, the second (real) blob/star/byte-cast store was
+dropped. The pass now collects the distinct offset spellings per key
+(all three blob render forms) and drops the twin only when the key has a
+single spelling; several spellings make the twin ambiguous, so all are
+kept (raw is honest). Latent on this corpus (0 hits); pinned by
+`tests/test_sfblob_dedupe_offsets.py` (7 cases: single offset drops,
+multi-offset blob/star/byte-cast kept, duplicate spelling at one offset
+still drops, offset-less still drops, two named fields with one offset
+still drop, different value untouched). Red/green: the two multi-offset
+cases fail on the pre-fix pass.
+
+Gates: portable suite 980 passed (973 + 7). Paired Assembly-CSharp
+builds (`--only Assembly-CSharp --workers 1`) with the fix vs. the fix
+stashed are byte-identical: 493/493 files, 0 mismatches; each side 490
+type files / 6,622 bodies / 0 failed / 0 structured fallbacks / 0
+type-emit failures (142.1 s / 135.9 s). Brace 0 unbalanced / 490; parse
+0 bad / 0 ERROR / 0 MISSING. Output-neutral on this corpus, so nothing
+follows for `final_out`.
 
 ## Current work: pre-v31 metadata method-table crash fixed (2026-09-28, LANDED)
 

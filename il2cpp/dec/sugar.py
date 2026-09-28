@@ -390,7 +390,8 @@ class _SugarMixin:
         field (`typeof(X).fieldName = v;`, from the klass chain) and once
         through the blob register (`typeof(X).__static_fields + N = v;`,
         the use-count re-render with the type dropped). Keep the named
-        one, drop the blob twin that assigns the same value."""
+        one, drop the blob twin that assigns the same value -- but only
+        when the key writes one unambiguous offset (Dec F6)."""
         # fix 72c: two-phase -- named twins are collected first, so
         # a blob/byte-cast twin is dropped wherever it sits relative
         # to its named twin (the old single pass kept both when the
@@ -400,13 +401,27 @@ class _SugarMixin:
             m = self._SF_NAMED_RX.match(s)
             if m and '.__static' not in m.group(2):
                 seen[(m.group(1), m.group(3))] = True
-        out = []
+        # Dec F6: (owner, value) alone is not the twin's identity -- two
+        # static fields of one type can receive the same value. The named
+        # store only proves the blob write redundant when that key has a
+        # single offset spelling; with several the twin is ambiguous, so
+        # keep them all (raw is honest).
+        offsets = {}       # (owner, value) -> set of offset spellings
+        blob = []          # one match per line, aligned with `lines`
         for s in lines:
             m = self._SF_BLOB_RX.match(s) or self._SF_BSTAR_RX.match(s) \
                 or self._SF_BCAST_RX.match(s)
+            blob.append(m)
             if m:
                 owner = m.group(1)[: -len('.__static_fields')]
-                if seen.get((owner, m.group(3))):
+                offsets.setdefault((owner, m.group(3)),
+                                   set()).add(m.group(2))
+        out = []
+        for s, m in zip(lines, blob):
+            if m:
+                owner = m.group(1)[: -len('.__static_fields')]
+                key = (owner, m.group(3))
+                if seen.get(key) and len(offsets.get(key, ())) <= 1:
                     continue
             out.append(s)
         return out
