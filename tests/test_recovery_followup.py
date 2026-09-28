@@ -987,3 +987,21 @@ def test_interlocked_helper_rejects_a_mutated_body():
     bad[12] ^= 0xFF                     # the lock cmpxchg opcode
     lift, target = isinst_helper_lifter(bytes(bad))
     assert not lift._is_interlocked_helper(target)
+
+
+# The out-of-line class-init helper body (56 bytes, three call displacements).
+CLASS_INIT_BODY = bytes.fromhex(
+    '40534883ec20488bd9e8e21d05004883bbd8000000007509488bc34883c4205bc3488b8b'
+    'd8000000e873620300488bc833d2e8d90f0100cc')
+
+
+def test_class_init_helper_recognized_structurally():
+    lift, target = isinst_helper_lifter(CLASS_INIT_BODY)
+    assert lift._is_class_init_helper(target)
+
+
+def test_class_init_helper_rejects_a_mutated_body():
+    bad = bytearray(CLASS_INIT_BODY)
+    bad[0x10] ^= 0xFF                   # the [klass+0xD8] fast-path compare
+    lift, target = isinst_helper_lifter(bytes(bad))
+    assert not lift._is_class_init_helper(target)

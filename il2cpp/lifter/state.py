@@ -222,6 +222,35 @@ class _StateMixin:
         return code is not None and code.startswith(prefix) \
             and code[len(prefix) + 4:] == suffix
 
+    def _is_class_init_helper(self, target):
+        """Recognize the out-of-line class-init helper (56 bytes).
+
+        `push rbx; sub rsp,20h; mov rbx,rcx; call Class::Init` then a
+        fast-path return of the klass and a slow path through the
+        `[klass+0xD8]` initializer cell. Only the three call displacements
+        vary; naming the target `il2cpp_runtime_class_init` lets the
+        existing one-argument class-init trim apply.
+        """
+        if not HAVE_ICED or not target or not self.bin.is_exec_va(target):
+            return False
+        if self.il.addr_candidates.get(target) or target in self.bin.exports:
+            return False
+        code = self.bin.read(target, 0x38)
+        if code is None:
+            return False
+        pos = 0
+        for lead, chunk, tail in (
+                (0, '40534883ec20488bd9e8', 4),
+                (0, '4883bbd8000000007509488bc34883c4205bc3488b8bd8000000e8', 0),
+                (4, '488bc833d2e8', 4),
+                (0, 'cc', 0)):
+            pos += lead
+            b = bytes.fromhex(chunk)
+            if code[pos:pos + len(b)] != b:
+                return False
+            pos += len(b) + tail
+        return True
+
     # ---- unregistered pure-FP32-unary leaves ---------------------------
     # Ground truth: 0x1804cdb00, the CRT log10f behind AudioVolumeSliders'
     # `sub_1804cdb00(volume)` (mi 23548/23549). The lift sprayed four stale
@@ -1067,6 +1096,16 @@ class _StateMixin:
                 self.rt_interlocked.add(_t)
                 if _fin:
                     self.rt_interlocked.add(_fin)
+        # Out-of-line class-init helper (861 tree-wide sites): naming it
+        # routes the site through the existing `il2cpp_runtime_class_init`
+        # arity trim (one argument).
+        for _t in sorted(set(cnt) | set(stats)):
+            _fin = self._thunk_final(_t)
+            if self._is_class_init_helper(_t) or (
+                    _fin and _fin != _t and self._is_class_init_helper(_fin)):
+                self.rt_names[_t] = 'il2cpp_runtime_class_init'
+                if _fin:
+                    self.rt_names[_fin] = 'il2cpp_runtime_class_init'
         self._cls_init_export = next(
             (va for va, nm0 in b.exports.items()
              if nm0 == 'il2cpp_runtime_class_init'), None)

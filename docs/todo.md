@@ -9,15 +9,16 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 `docs/public_release.md`).
 
 **Open, by payoff:**
-- Codegen-intrinsic recognition (program; landings 1-3 landed 2026-09-28):
+- Codegen-intrinsic recognition (program; landings 1-4 landed 2026-09-28):
   a census of plain `sub_` calls found 38,254 sites / 2,663 targets,
   **36,313 sites (95%) with zero metadata candidates** -- IL2CPP runtime
   helpers that metadata can never name. Landed families: nullary
   interface dispatch (55 AC helper sites -> 0), IsInst `typeof(T)`
   (9 AC calls -> `obj as T`), `Interlocked.CompareExchange` (21 AC calls
-  -> 0). Open families by sites: isinst/castclass klass expressions
-  (5,802; need element-class provenance), alloc/box `0x18043dc60`
-  (2,446), class-init `0x18043e360` (861), bounds-checked element
+  -> 0), out-of-line class-init (3 AC calls -> elided with the klass
+  value propagating; 861 tree-wide). Open families by sites:
+  isinst/castclass klass expressions (5,802; need element-class
+  provenance), alloc/box `0x18043dc60` (2,446), bounds-checked element
   address `0x1803ed830`/`0x1803ed860` (745), parameterized interface
   dispatch (the A-family that saves R9:
   `IUpdatableGraph.CanUpdateAsync` slot 3, `IAstarAI.set_OnSearchPath`
@@ -59,6 +60,8 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   work planned.
 
 **Landed/closed pointers (sections below; not open work):**
+- Codegen intrinsics landing 4: out-of-line class-init helper elided
+  (2026-09-28; 3 AC sites, 861 tree-wide; no golden moved).
 - Codegen intrinsics landing 3: `Interlocked.CompareExchange` renders as
   the managed call (2026-09-28; one golden moved and was read, mi 47817).
 - Codegen intrinsics landing 2: IsInst `typeof(T)` sites render
@@ -94,6 +97,30 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: codegen intrinsics, landing 4 -- class-init helper elided (2026-09-28, LANDED)
+
+`_is_class_init_helper` recognizes the 56-byte out-of-line class-init
+helper structurally: `push rbx; sub rsp,20h; mov rbx,rcx; call
+Class::Init`, the `[klass+0xD8]` fast-path compare, the slow-path
+initializer calls and the int3 tail -- only the three call displacements
+vary. Naming the target `il2cpp_runtime_class_init` routes the sites
+through the existing class-init bookkeeping, which drops the call and
+propagates the klass value (the helper returns its rcx argument).
+
+Measured on Assembly-CSharp: remaining `sub_18043e360(` calls 0 (3
+sites; 861 tree-wide). `PlayerLobbyHandler.Render`'s cluster collapses
+from the helper call plus four bookkeeping temps to `obj16 = obj15;`.
+No golden moved; goldens 64/64. Change-only vs `final_out` (r10): 115
+files (the prior 114 plus `PlayerLobbyHandler.cs`).
+
+Gates (Assembly-CSharp only, `--workers 1`): 490 types / 6,622 bodies /
+0 failed / 0 fallbacks; brace 0/490; parse 0 bad / 0 ERROR / 0 MISSING;
+portable suite 967 passed.
+
+Tests: +2 portable (`tests/test_recovery_followup.py`: structural proof,
+mutated fast-path compare decline) and +1 game
+(`tests/test_game_class_init.py`: mi 26673 elides the helper).
 
 ## Current work: codegen intrinsics, landing 3 -- Interlocked.CompareExchange (2026-09-28, LANDED)
 

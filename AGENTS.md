@@ -219,9 +219,11 @@ sites are 55 -> 0 with `?.Dispose()` folds. Landing 2 recognizes IsInst
 structurally: the `typeof(T)` subset renders `obj as T` (9 AC calls),
 opaque klass expressions keep `sub_`. Landing 3 recognizes the
 Interlocked helper's `lock cmpxchg` body and renders the managed
-`Interlocked.CompareExchange` (21 AC calls -> 0). Open, by payoff: the
+`Interlocked.CompareExchange` (21 AC calls -> 0). Landing 4 recognizes
+the out-of-line class-init helper and elides it, propagating the klass
+value (3 AC calls, 861 tree-wide). Open, by payoff: the
 rest of the codegen families (isinst klass-expr 5,802 sites, alloc/box
-2,446, class-init 861, bounds-checked element address 745, parameterized
+2,446, bounds-checked element address 745, parameterized
 interface dispatch), unmodelled-instruction
 invalidation (`insn.py`'s silent fall-through leaves a stale destination
 live; probed, needs lane modeling first), F2's sibling `_aggregate_load`
