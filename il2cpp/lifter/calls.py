@@ -522,6 +522,75 @@ class _CallsMixin:
                          + int(self.il.returns_sret(abi_rt3)))
         return max(wants) if wants else None
 
+    def _shared_slot_classes(self, cands, rty=None):
+        """All-candidate agreement on each argument slot's register class.
+
+        Every candidate names a call into the same compiled machine code,
+        so they consume the same argument registers.  `_shared_arity_cap`
+        bounds HOW MANY slots that is; this bounds WHICH LANE each slot
+        uses -- but only when every candidate is a readable non-generic
+        MethodDef that agrees on the class of every slot: 'g' for the
+        receiver, the hidden sret buffer, integers, pointers and byrefs,
+        'x' for a by-value float/double parameter (R4/R8).  A generic
+        spec, an unreadable row, or any disagreement returns None and the
+        caller keeps the raw GPR-first spelling.  The hidden sret buffer
+        is classified exactly like `_shared_arity_cap` does when `rty` is
+        the consensus return, so the two agree on the slot count.
+        """
+        if not cands:
+            return None
+        sigs = []
+        for c in cands:
+            if c[0] != 'method' or not 0 <= c[1] < len(self.meta.methods):
+                return None
+            m3 = self.meta.methods[c[1]]
+            rt3 = self.il.types[m3.return_type] \
+                if 0 <= m3.return_type < len(self.il.types) else None
+            abi_rt3 = rty if rty is not None else rt3
+            cls = []
+            if not m3.is_static:
+                cls.append('g')          # receiver in the first free GPR
+            if self.il.returns_sret(abi_rt3):
+                cls.append('g')          # hidden return buffer in RCX
+            for p in self.meta.method_params(m3):
+                if not 0 <= p.type < len(self.il.types):
+                    return None
+                bits = self.il.types[p.type][1]
+                te = (bits >> 16) & 0xFF
+                is_float = te in (0x0c, 0x0d) and not ((bits >> 29) & 1)
+                cls.append('x' if is_float else 'g')
+            sigs.append(''.join(cls))
+        if len(set(sigs)) != 1:
+            return None
+        return sigs[0]
+
+    def _shared_positional_args(self, args, classes):
+        """Rebuild a shared body's printed arguments by ABI position.
+
+        `args` is the raw GPR-first spray with any tracked XMM values
+        appended, so truncating it to the all-candidates arity cap prints
+        the stale RCX value where a float parameter lives and drops the
+        real XMM argument (mi 20081: the `op_Implicit` triple at
+        0x182da54f0 takes one float; the `mulss xmm0,xmm0` square leaf
+        0x1826e1660 likewise).  With `_shared_slot_classes` proving every
+        candidate agrees on the class sequence, position k is XMMk when
+        classes[k] == 'x' and the k-th GPR slot otherwise.  An untracked
+        slot prints the same `_` placeholder the raw path uses.
+        """
+        xmm = getattr(self, '_xmm_pending', None) or []
+        out = []
+        for k, cls in enumerate(classes):
+            if cls == 'x':
+                xe = None
+                for kk, e in xmm:
+                    if kk == k:
+                        xe = e
+                        break
+                out.append(xe.text if xe is not None and xe.text else '_')
+            else:
+                out.append(args[k] if k < len(args) else '_')
+        return out
+
     def _shared_tail_keep(self, target, args):
         """How many arguments an unresolved shared-body tail may print.
 
@@ -2268,7 +2337,11 @@ class _CallsMixin:
             # hidden-buffer slot when available; the raw MethodDef
             # signature cannot classify that ABI.
             want0 = self._shared_arity_cap(cands, rty if shared_rty else None)
-            if want0 is not None and len(args) > want0:
+            classes = self._shared_slot_classes(cands, rty if shared_rty else None)
+            if classes is not None and 'x' in classes \
+                    and len(classes) == want0 and len(classes) <= len(ARG_REGS):
+                args = self._shared_positional_args(args, classes)
+            elif want0 is not None and len(args) > want0:
                 args = args[:want0]
             shapes = set()
             for c in cands:

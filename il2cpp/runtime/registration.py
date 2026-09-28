@@ -581,14 +581,13 @@ class _RegistrationMixin:
                 return ptrs[idx]
         return 0
 
-    _mod_ptr_cache: Dict[int, List[int]] = {}
-
     def read_module_ptrs(self, mod: CodeGenModule) -> List[int]:
         key = mod.method_pointers
-        if key not in self._mod_ptr_cache:
-            self._mod_ptr_cache[key] = self.bin.read_qword_array(
+        cache = self.__dict__.setdefault('_mod_ptr_cache', {})
+        if key not in cache:
+            cache[key] = self.bin.read_qword_array(
                 mod.method_pointers, mod.method_pointer_count)
-        return self._mod_ptr_cache[key]
+        return cache[key]
 
     def method_image(self, method_index: int) -> int:
         m = self.meta.methods[method_index]

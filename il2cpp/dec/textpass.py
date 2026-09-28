@@ -397,11 +397,94 @@ class _TextPassMixin:
                         break
         return text
 
+    @staticmethod
+    def _sanitize_dollar(ln: str) -> str:
+        """Replace `$` in code only; C# identifiers cannot carry it.
+
+        Metadata names can (Burst's `$BurstManaged`), so the char is
+        sanitized -- but a blanket line replace corrupted every string
+        literal it touched: JSON.NET's wire names became `_type`/`_id`/
+        `_values`, the UTF7 direct-character set lost its `$`, and a
+        money template became `MONEY: _`. Strings, chars and comments
+        keep their bytes.
+        """
+        out = []
+        n = len(ln)
+        i = 0
+        while i < n:
+            if ln.startswith('//', i):
+                out.append(ln[i:])
+                break
+            if ln.startswith('/*', i):
+                j = ln.find('*/', i + 2)
+                if j < 0:
+                    out.append(ln[i:])
+                    break
+                out.append(ln[i:j + 2])
+                i = j + 2
+                continue
+            if ln.startswith('$@"', i):
+                j = i + 3
+                while j < n:
+                    if ln.startswith('""', j):
+                        j += 2
+                        continue
+                    if ln[j] == '"':
+                        j += 1
+                        break
+                    j += 1
+                out.append(ln[i:j])
+                i = j
+                continue
+            if ln.startswith('$"', i):
+                j = i + 2
+                while j < n:
+                    if ln[j] == '\\':
+                        j += 2
+                        continue
+                    if ln[j] == '"':
+                        j += 1
+                        break
+                    j += 1
+                out.append(ln[i:j])
+                i = j
+                continue
+            if ln.startswith('@"', i):
+                j = i + 2
+                while j < n:
+                    if ln.startswith('""', j):
+                        j += 2
+                        continue
+                    if ln[j] == '"':
+                        j += 1
+                        break
+                    j += 1
+                out.append(ln[i:j])
+                i = j
+                continue
+            c = ln[i]
+            if c in ('"', "'"):
+                j = i + 1
+                while j < n:
+                    if ln[j] == '\\':
+                        j += 2
+                        continue
+                    if ln[j] == c:
+                        j += 1
+                        break
+                    j += 1
+                out.append(ln[i:j])
+                i = j
+                continue
+            out.append('_' if c == '$' else c)
+            i += 1
+        return ''.join(out)
+
     def _render(self, raw: List[str]) -> List[str]:
         # residual pointer syntax: `*(E + N)` -> `((byte*)E + N)[0]`,
         # `&objN` args -> `ref objN`; files with any of it get wrapped
         # in an unsafe block below (C# permits pointer ops only there)
-        raw = [ln.replace('$', '_') for ln in raw]
+        raw = [self._sanitize_dollar(ln) for ln in raw]
         raw = [self._DATA_ADDR_RX.sub(r'\1', ln) for ln in raw]
         # `typeof(X) = 0;` (a static-field blob store whose offset 0 has no
         # field name to attach) cannot be an lvalue; keep the fact as a

@@ -37,6 +37,116 @@ own status tag rules.
   12-worker process pool predicts ~102 s (10.8x, 11% imbalance) at
   513 MB/worker. Not started.
 
+## Current work: audit batch 3 — five landings, three layers (2026-09-28, LANDED)
+
+Read-only audits of the lifter, dec+emitter, and runtime layers plus a
+base/post corpus census produced five defects of the same class -- silently
+wrong rather than honestly raw. All five are landed here; the deferred
+findings with their evidence follow.
+
+1. **Shared-body argument lanes** (`il2cpp/lifter/calls.py`). Every
+   candidate of a shared address names a call into the same machine code,
+   so `_shared_slot_classes` proves the register class of each argument
+   slot when all candidates are readable non-generic MethodDefs and agree
+   (receiver and consensus sret buffer = GPR, R4/R8 by-value params =
+   XMM); `_shared_positional_args` then rebuilds the printed list by ABI
+   position. The raw GPR-first spray truncated to the arity cap printed
+   the stale RCX value where a float parameter lives and dropped the real
+   XMM argument: mi 20081 `Angle/StyleFloat/TimeValue.op_Implicit`
+   (`(obj1)` -> `(0f)`), mi 20080 `Rotate(Quaternion)` (the dropped
+   `real1 * 57.29578f` conversion comes back), mi 65682's `mulss
+   xmm0,xmm0` leaf (`(obj45)` -> `(radius)`). 217 agreeing VAs / 417
+   sites sized; generic/mixed/disagreeing sets and classes past the four
+   argument registers keep today's truncation.
+2. **icall overload selection** (`il2cpp/runtime/fields.py`). The old
+   name-only scan returned the first same-named metadata row, and `_call`
+   then trimmed to that overload's arity: `UnityEngine.Object::
+   FindObjectsOfType(System.Type,System.Boolean)` rendered `(type)`; the
+   AndroidJNI `To*Array(ptr,int)` family, `UnsafeUtility.IsBlittable`,
+   ObjectDispatcher and LightProbesQuery lost arguments or the receiver.
+   `_icall_sig_params` tokenizes the runtime signature's own parameter
+   list; `_icall_pick_overload` settles it by unique arity, else by
+   normalized parameter types (`_icall_type_key`: CLI primitives, `/`->`.`,
+   backtick arity, byref markers). 17 cells change, 0 identities lost, 0
+   gained.
+3. **Literal safety** (`il2cpp/dec/textpass.py`, `il2cpp/dec/highlevel.py`).
+   `_render`'s blanket `$` -> `_` corrupted every literal it touched --
+   JSON.NET wire names (`$type`/`$id`/`$values`), the UTF7 direct-character
+   set, a money template -- and `_rename_locals` renamed tokens inside
+   literals and comments, rewriting the ADO.NET diffgram namespace
+   (`urn:...-diffgram-v1` -> `...-obj83`). `_sanitize_dollar` skips
+   strings/chars/comments and `$"`/`$@"` prefixes; `_mask_literals`
+   NUL-blanks the same spans (length-preserving) for both the token scan
+   and the substitution.
+4. **Five per-instance runtime caches** (`_tn_cache`, `_slot_cache`,
+   `_fo_cache`, `_sf_infl_cache`, `_mod_ptr_cache`): the remaining members
+   of the audit-batch-1 class. TypeDef/field indices and slot VAs are
+   binary-local; all are now `self.__dict__.setdefault` maps, and cli.py /
+   `tools/corpus_common.py` free the pointer arrays through
+   `getattr(il, '_mod_ptr_cache', {})`. Output-neutral.
+
+**Gates.** Strict `r10_out1`: 11,183 type files / 114,458 bodies / 0 failed
+/ 0 structured fallbacks / 0 type-emission failures in 1,465,953 ms
+(24.4 min -- the box carried an unrelated `mc-wasm` build; r9's 1,085 s
+was an idle box); brace audit **0 unbalanced / 11,183 files**; parse gate
+**0 bad / 0 ERROR / 0 MISSING / 0 recovery nodes**. Paired corpus sweep
+(`tools/validate_corpus.py sweep` post vs the pre-change body dump):
+116,178 methods, **0 crashes both sides**, `brace_unclosed` 0,
+`brace_underflow` 0, `dangling_gotos` 0, `empty_args` 0,
+**into_block 8,075/2,046 identical** to the r9 baseline, lines 2,253,029
+-> **2,251,858**; 613 bodies changed, 0 added/removed. Tree diff
+`final_out/` (r9) -> `r10_out1`: 11,276 paths both sides, **302 files
+changed**, file set identical, **-1,171 lines** in changed files,
+`unknown` 5,225 -> 5,168, `"$..."` literals 1 -> 75, diffgram `-v1`
+0 -> 50, `shared` -1, `indirect`/`goto`/`memN`/`?addr`/`/* nothing */`
+flat. One golden moved, user-visible in review: mi 80548 `Execute` --
+comments are no longer renamed (they keep raw `t1000`/`v46` names), which
+stops the renamed comment text from feeding the later DCE, so a dead pure
+cluster (real1..real12, self-referential; terminal real5/real12 read
+nowhere) drops; all 6 store lines survive, only the array bases renumber.
+Goldens regenerated after the gates with `tools/make_goldens.py`; the diff
+is exactly that one body. Suite: **1114 passed / 0 failed** (914 portable
++ 200 game).
+
+Tests: +14 portable shared-slot classes +4 game, +14 portable icall
+overloads, +5 portable cache isolation, +5 portable literal safety +2
+game.
+
+**Deferred findings, evidence recorded (not landed).**
+- Lifter F1: unmodelled instructions fall through silently and leave a
+  stale destination live (MAXSS/MINSS mistyped as `0.0f` in promoted
+  output; ~1,970 live destination reads in Assembly-CSharp alone, mostly
+  SHUFPS ~1,646, CVTDQ2PS ~197). Needs destination invalidation on the
+  fall-through plus the MAXSS/MINSS arithmetic family.
+- Lifter F2: `_aggregate_load` discards value-type fragments, so a
+  multi-byte struct load renders its first field (`this.particleColor =
+  newColor.r;`); 2,304 declining loads, 490 rendering narrower than the
+  access. An address-base guard is required (a naive fragment return
+  regresses `&x` bases).
+- Lifter F3: XMM0-5 get no fresh unknown after a call, so scalar SSE
+  arithmetic substitutes `0f` (35 sites in Assembly-CSharp; the
+  documented AudioVolumeSliders loss is the same mechanism).
+- Lifter F4/F5: constant-displacement array access divides by the access
+  width, not the element stride (`vector3Array1[0x3]` is really element
+  2); the `{1:1, 2:2, 4:4, 8:8}` memory-size map is wrong for the pinned
+  iced-x86 build (`MemorySizeExt.size` already exists).
+- Dec F3/F4 (latent, 0 corpus hits): `_compound_assign`'s hop fold can
+  cross writes/braces/labels; `_fix_select` appends `: default` to `?.`/
+  `??` inside parens (mirror `_strip_dangling_default`'s guard).
+- Dec F5/F6 (0 corpus hits): four more literal-blind token substitutions;
+  `_sfblob_dedupe` keys by owner+value, ignoring the blob offset.
+- Runtime: vtable sentinel raw `1` decodes as method row 0 whenever row 0
+  is not static (1,523 slots on this fixture, masked only because
+  `methods[0]` is static; `slot_max_arity` has no sentinel gate);
+  `reverse_p_invoke_count`/`_wrappers` are swapped in the classic PE
+  loader (unconsumed today); `--only` matching no assembly exits 0 after
+  writing an empty tree; BSS runtime-cell name ties break by first
+  metadata row.
+- Confirmed open, unchanged: the `0x1825b1150` ToString/op_Implicit pair
+  has slot class `g` for both candidates (instance receiver / by-ref
+  struct param), so the lane proof does not apply; identity still needs
+  receiver/use or instantiation proof.
+
 ## Current work: promotion r9 full tree (2026-09-26, PROMOTED)
 
 User-authorized (promotion on call). Strict full-tree rebuild `r9_out1` from

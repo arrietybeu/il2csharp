@@ -1199,8 +1199,13 @@ class _HighLevelMixin:
     def _rename_locals(self, lines: List[str], method=None) -> List[str]:
         import re as _re
         tokens = []
+        shadow = []
+        in_comment = False
         for st in lines:
-            tokens.extend(_re.findall(r'(?<![\w.])(?:v\d+|t\d+|s_[0-9a-fA-F]+)(?![\w])', st))
+            sh, in_comment = self._mask_literals(st, in_comment)
+            shadow.append(sh)
+            tokens.extend(_re.findall(
+                r'(?<![\w.])(?:v\d+|t\d+|s_[0-9a-fA-F]+)(?![\w])', sh))
         seen = set()
         # Parameters already declare their names in the signature
         # (mi 113041: body params v0/v1 renamed to obj5/obj6 while
@@ -1300,7 +1305,20 @@ class _HighLevelMixin:
                 candidate = '%s%d' % (self.PREFIX[k], cnt[k])
             names[tok] = candidate
         rx = _re.compile(r'(?<![\w.])(' + '|'.join(_re.escape(t) for t in names) + r')(?![\w])')
-        lines = [rx.sub(lambda mm: names[mm.group(1)], st) for st in lines]
+        renamed = []
+        for st, sh in zip(lines, shadow):
+            spans = [mm.span() for mm in rx.finditer(sh)]
+            if spans:
+                parts = []
+                last = 0
+                for a, b in spans:
+                    parts.append(st[last:a])
+                    parts.append(names[sh[a:b]])
+                    last = b
+                parts.append(st[last:])
+                st = ''.join(parts)
+            renamed.append(st)
+        lines = renamed
         # explicit declaration types: no `var` in the output, each local is
         # declared with its tracked il2cpp type (object when untracked); the
         # first `var NAME = rhs;` occurrence fixes the type, from the rhs
@@ -3831,6 +3849,69 @@ class _HighLevelMixin:
             stem += 'Ptr' if pointer_depth == 1 else 'Ptr%d' % pointer_depth
         stem = re.sub(r'[^A-Za-z0-9_]', '', stem)[:48]
         return stem if stem and stem != 'obj' else None
+
+    @staticmethod
+    def _mask_literals(line: str, in_block_comment: bool) -> Tuple[str, bool]:
+        """Blank string/char literals and comments with NULs, same length.
+
+        `_rename_locals` collected and substituted vN/tN/s_XX tokens over
+        the whole line, so a literal carrying such a token was rewritten
+        (the ADO.NET diffgram namespace rendered `...-obj83`) and a
+        literal-only token shifted the numbering. Masking keeps token
+        spans aligned with the original line while the scanners only
+        ever see code.
+        """
+        out = []
+        i = 0
+        n = len(line)
+        while i < n:
+            if in_block_comment:
+                j = line.find('*/', i)
+                if j < 0:
+                    out.append('\x00' * (n - i))
+                    return ''.join(out), True
+                out.append('\x00' * (j + 2 - i))
+                i = j + 2
+                in_block_comment = False
+                continue
+            if line.startswith('//', i):
+                out.append('\x00' * (n - i))
+                break
+            if line.startswith('/*', i):
+                in_block_comment = True
+                out.append('\x00' * 2)
+                i += 2
+                continue
+            if line.startswith('@"', i):
+                j = i + 2
+                while j < n:
+                    if line.startswith('""', j):
+                        j += 2
+                        continue
+                    if line[j] == '"':
+                        j += 1
+                        break
+                    j += 1
+                out.append('\x00' * (j - i))
+                i = j
+                continue
+            c = line[i]
+            if c in ('"', "'"):
+                j = i + 1
+                while j < n:
+                    if line[j] == '\\':
+                        j += 2
+                        continue
+                    if line[j] == c:
+                        j += 1
+                        break
+                    j += 1
+                out.append('\x00' * (j - i))
+                i = j
+                continue
+            out.append(c)
+            i += 1
+        return ''.join(out), in_block_comment
 
     @staticmethod
     def _replace_semantic_names(line: str, names: Dict[str, str],

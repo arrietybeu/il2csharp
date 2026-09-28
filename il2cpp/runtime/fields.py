@@ -17,8 +17,9 @@ from il2cpp.runtime.meta import meta_lit_repr
 class _FieldsMixin:
     def decode_slot(self, slot_va) -> Optional[dict]:
         """Decode a lazy metadata usage slot; returns annotation dict."""
-        if slot_va in self._slot_cache:
-            return self._slot_cache[slot_va]
+        cache = self.__dict__.setdefault('_slot_cache', {})
+        if slot_va in cache:
+            return cache[slot_va]
         q = self.bin.qword(slot_va)
         r = None
         if q and (q & 1) and (q >> 32) == 0:
@@ -64,7 +65,7 @@ class _FieldsMixin:
                         # `method` index, not only the rendered text
                         r = dict(ann)
                         r['icall'] = True
-        self._slot_cache[slot_va] = r
+        cache[slot_va] = r
         return r
 
     def scan_icall_cache(self):
@@ -255,8 +256,13 @@ class _FieldsMixin:
             tds = [i for i in (self._td_by_full.get(inner) or [])
                    if self._declaring_full(i) == outer] or None
         if tds:
-            for mi in self.meta.type_methods(self.meta.typedefs[tds[0]]):
-                if self.meta.methods[mi].name == mname:
+            cands = []
+            for td in tds:
+                cands.extend(
+                    mi for mi in self.meta.type_methods(self.meta.typedefs[td])
+                    if self.meta.methods[mi].name == mname)
+            mi = self._icall_pick_overload(sig, cands)
+            if mi is not None:
                     m = self.meta.methods[mi]
                     t2 = self.meta.typedefs[m.declaring] \
                         if 0 <= m.declaring < len(self.meta.typedefs) else None
@@ -282,11 +288,109 @@ class _FieldsMixin:
                 'text': '%s.%s' % (csharp_type_name(tpart),
                                    safe_ident(mname.lstrip('.')))}
 
-    _fo_cache: Dict[int, str] = {}
+    _ICALL_PRIM = {
+        'System.SByte': 'sbyte', 'System.Byte': 'byte',
+        'System.Int16': 'short', 'System.UInt16': 'ushort',
+        'System.Int32': 'int', 'System.UInt32': 'uint',
+        'System.Int64': 'long', 'System.UInt64': 'ulong',
+        'System.Single': 'float', 'System.Double': 'double',
+        'System.Boolean': 'bool', 'System.Char': 'char',
+        'System.Void': 'void',
+    }
+
+    @staticmethod
+    def _icall_sig_params(sig):
+        """Top-level parameter tokens of an icall signature, or None.
+
+        The runtime's own resolve string spells the callee's full
+        parameter list (`Type::Method(System.Type,System.Boolean)`); a
+        plain comma split must respect the nesting of generic arguments,
+        arrays and pointer groups.
+        """
+        if not sig:
+            return None
+        i = sig.find('(')
+        if i < 0 or not sig.endswith(')'):
+            return None
+        inner = sig[i + 1:-1].strip()
+        if not inner:
+            return []
+        out, depth, cur = [], 0, ''
+        for ch in inner:
+            if ch in '<[(':
+                depth += 1
+            elif ch in '>])':
+                depth -= 1
+            if ch == ',' and depth == 0:
+                out.append(cur.strip())
+                cur = ''
+            else:
+                cur += ch
+        out.append(cur.strip())
+        return out
+
+    def _icall_type_key(self, text, byref=False):
+        """Normalize one parameter type for signature comparison.
+
+        The signature spells CLI primitives (`System.Int32`) where
+        metadata renders C# keywords (`int`), nested types with `/`
+        where metadata uses `.`, and generic arity with a backtick
+        (`Action`6`) where metadata uses an underscore. The primitive
+        substitution runs on token boundaries so nested generic
+        arguments and pointer/byref markers stay attached: a pointer is
+        not an array, and a byref is not a value.
+        """
+        t = (text or '').replace('/', '.').replace(' ', '')
+        t = re.sub(r'`(\d+)', r'_\1', t)
+        for cli, kw in self._ICALL_PRIM.items():
+            t = re.sub(r'(?<![\w.])' + re.escape(cli) + r'(?!\w)', kw, t)
+        if byref and not t.endswith('&'):
+            t += '&'
+        return t
+
+    def _icall_pick_overload(self, sig, cands):
+        """The one same-named overload whose parameter list matches `sig`.
+
+        The old scan returned the first metadata row with the name, so an
+        overload with a different arity seated `_call`'s trim and a real
+        native argument disappeared (`UnityEngine.Object::
+        FindObjectsOfType(System.Type,System.Boolean)` rendered
+        `FindObjectsOfType(type)`; mi 124214's `(sbyte*, int)` rendered
+        `ToSByteArray(array)`). The signature string carries the exact
+        parameter list, so an overload set is settled by a unique arity,
+        or -- among same-arity candidates -- by normalized parameter
+        types. Anything else declines to the text-only annotation rather
+        than guessing an identity.
+        """
+        if not cands:
+            return None
+        want = self._icall_sig_params(sig)
+        if want is None:
+            return None
+        same = [mi for mi in cands
+                if 0 <= mi < len(self.meta.methods)
+                and self.meta.methods[mi].param_count == len(want)]
+        if len(same) == 1:
+            return same[0]
+        if not same:
+            return None
+        want_keys = [self._icall_type_key(t) for t in want]
+        typed = []
+        for mi in same:
+            got = []
+            for p in self.meta.method_params(self.meta.methods[mi]):
+                ty = self.types[p.type] if 0 <= p.type < len(self.types) else None
+                got.append(self._icall_type_key(
+                    self.type_name(ty) if ty is not None else None,
+                    byref=bool(ty is not None and (ty[1] >> 29) & 1)))
+            if got == want_keys:
+                typed.append(mi)
+        return typed[0] if len(typed) == 1 else None
 
     def _field_owner(self, field_index) -> str:
-        if field_index in self._fo_cache:
-            return self._fo_cache[field_index]
+        cache = self.__dict__.setdefault('_fo_cache', {})
+        if field_index in cache:
+            return cache[field_index]
         owner = '?'
         lo, hi = 0, len(self.meta.typedefs) - 1
         while lo <= hi:
@@ -299,7 +403,7 @@ class _FieldsMixin:
             else:
                 owner = self.typedef_full(mid)
                 break
-        self._fo_cache[field_index] = owner
+        cache[field_index] = owner
         return owner
 
     def field_offset_map(self, td_index) -> Optional[Dict[int, str]]:
@@ -665,8 +769,9 @@ class _FieldsMixin:
         (the fix-74 rule); VAR field types substituted through `args`.
         Cached per (td, args) -- failures too."""
         key = ('c', td_index, args)
-        if key in self._sf_infl_cache:
-            return self._sf_infl_cache[key]
+        cache = self.__dict__.setdefault('_sf_infl_cache', {})
+        if key in cache:
+            return cache[key]
         td = self.meta.typedefs[td_index]
         cur = 0
         m = {}
@@ -682,14 +787,14 @@ class _FieldsMixin:
             sa = self._sf_ty_size_align(st, args, 0) \
                 if st is not None else None
             if sa is None:
-                self._sf_infl_cache[key] = None
+                cache[key] = None
                 return None
             sz, al = sa
             al = min(max(al, 1), 8)
             cur = (cur + al - 1) // al * al
             m.setdefault(cur, (_storage_name(self, fi), st))
             cur += sz
-        self._sf_infl_cache[key] = m
+        cache[key] = m
         return m
 
     def _sf_closed_static_disp(self, td_index, disp, ty):
@@ -729,8 +834,6 @@ class _FieldsMixin:
         if sub is None:
             return None
         return ('%s.%s' % (nm, sub[0]), sub[1])
-
-    _sf_infl_cache: Dict = {}
 
     def _sf_ty_of(self, ent_ty):
         """a chain entry's type: instance chains carry the field-table
@@ -858,8 +961,9 @@ class _FieldsMixin:
         VAR fields need `args`, so an open type without them fails
         honest. Cached per (td, args)."""
         key = ('a', td_index, args)
-        if key in self._sf_infl_cache:
-            return self._sf_infl_cache[key]
+        cache = self.__dict__.setdefault('_sf_infl_cache', {})
+        if key in cache:
+            return cache[key]
         if depth > 6:
             return None
         td = self.meta.typedefs[td_index]
@@ -878,7 +982,7 @@ class _FieldsMixin:
                 return None
             al = max(al, sa[1])
         al = min(al, 8)
-        self._sf_infl_cache[key] = al
+        cache[key] = al
         return al
 
     def _sf_infl_chain(self, td_index, args, depth):
@@ -892,8 +996,9 @@ class _FieldsMixin:
         field's host layout needs it). Cached per (td, args) --
         failures too."""
         key = ('l', td_index, args)
-        if key in self._sf_infl_cache:
-            return self._sf_infl_cache[key]
+        cache = self.__dict__.setdefault('_sf_infl_cache', {})
+        if key in cache:
+            return cache[key]
         if depth > 4:
             return None
         td = self.meta.typedefs[td_index]
@@ -930,11 +1035,11 @@ class _FieldsMixin:
             cur = off + sz
             maxa = max(maxa, al)
         if bad or not chain:
-            self._sf_infl_cache[key] = None
+            cache[key] = None
             return None
         size = (cur + maxa - 1) & ~(maxa - 1)
         res = (chain, size, min(maxa, 8))
-        self._sf_infl_cache[key] = res
+        cache[key] = res
         return res
 
     def _sf_field_size(self, fty, depth):

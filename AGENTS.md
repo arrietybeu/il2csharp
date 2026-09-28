@@ -91,7 +91,25 @@ unproven shape keeps today's spelling; raw is always honest.
   without an explicit user call. Stash-prove-clean before attributing a
   break to your change.
 
-## Current state (2026-09-26, `main` clean; `final_out/` = r9)
+## Current state (2026-09-28, `main` clean; `final_out/` = r9, r10 candidate)
+
+Landed 2026-09-28 (audit batch 3, five fixes across three layers; unpromoted):
+shared-body argument lanes (the all-candidates slot classes rebuild the
+printed list, so a float-parameter body no longer prints the stale RCX value
+and drops the real XMM argument), icall overload selection from the runtime
+signature's own parameter list (17 cells), literal-safe `$` sanitize +
+`_rename_locals` masking (JSON.NET wire names and diffgram URIs survive), and
+five per-instance runtime caches (the audit-batch-1 class). Strict rebuild
+`r10_out1`: 11,183 files / 114,458 bodies / 0 failed / 0 fallbacks / 0
+type-emission failures in 1,465,953 ms (contended box); brace 0; parse
+0/0/0/0; paired sweep 0 crashes both sides, into_block 8,075/2,046 unchanged,
+unknown -57; 302 files changed vs r9, -1,171 lines; one golden moved
+(mi 80548) and reviewed. `final_out/` still holds r9 -- promotion is a user
+call. Deferred audit findings (stale destinations on unmodelled
+instructions, value-type fragment discard, XMM0 clobber, array stride) are
+filed in `docs/todo.md` with evidence.
+
+## Previous state (2026-09-26, `main` clean; `final_out/` = r9)
 
 Promoted 2026-09-26 (**r9**, full tree, all 88 images, from `e20f82f`):
 strict rebuild 11,183 type files / 114,458 bodies / 0 failed / 0 structured

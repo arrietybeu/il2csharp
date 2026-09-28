@@ -20,7 +20,7 @@ def load(source, metadata, binary):
         il.find_registrations_android()
     il.load_function_bounds()
     il.resolve_method_addrs()
-    il._mod_ptr_cache.clear()
+    il.__dict__.setdefault('_mod_ptr_cache', {}).clear()
     return il
 
 

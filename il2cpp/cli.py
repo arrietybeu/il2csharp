@@ -160,7 +160,7 @@ def main(argv):
             RuntimeError) as ex:
         print('error: could not read code/metadata registrations:', ex)
         return 1
-    il._mod_ptr_cache.clear()  # free raw pointer arrays
+    getattr(il, '_mod_ptr_cache', {}).clear()  # free raw pointer arrays
     n_addr = sum(1 for m in meta.methods if m.addr)
     say('registrations ok | %d/%d methods have native code | %d ms' % (
         n_addr, len(meta.methods), time_ms() - t0))

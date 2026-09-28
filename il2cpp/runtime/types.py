@@ -59,8 +59,6 @@ class _TypesMixin:
         self._type_by_ptr[ptr] = t
         return t
 
-    _tn_cache: Dict[int, str] = {}
-
     def type_name(self, type_tuple, depth=0) -> str:
         """C# name for an Il2CppType tuple (data, bits)."""
         if type_tuple is None or depth > 6:
@@ -68,7 +66,8 @@ class _TypesMixin:
         data, bits = type_tuple
         te = (bits >> 16) & 0xFF
         byref = (bits >> 29) & 1
-        name = self._tn_cache.get((data, bits, depth))
+        cache = self.__dict__.setdefault('_tn_cache', {})
+        name = cache.get((data, bits, depth))
         if name:
             return name
         if te in self.PRIM and te != 0x12:
@@ -115,7 +114,7 @@ class _TypesMixin:
         else:
             nm = 'object'
         nm = nm.replace('@', '_')
-        self._tn_cache[(data, bits, depth)] = nm
+        cache[(data, bits, depth)] = nm
         return nm
 
     @staticmethod
@@ -849,4 +848,3 @@ class _TypesMixin:
 
     USG_KINDS = {1: 'TypeInfo', 2: 'Il2CppType', 3: 'MethodDef',
                  4: 'FieldInfo', 5: 'StringLiteral', 6: 'MethodRef'}
-    _slot_cache: Dict[int, Optional[dict]] = {}

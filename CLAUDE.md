@@ -77,6 +77,14 @@ fix-123 in `validation_reports/review123_*`.
   dict's key spaces either: the two delegate answers are separate dicts
   precisely because an `int` key can only fail to collide with a
   `('viable', int)` key by accident.
+- The same rule covers the five runtime maps missed by audit batch 1:
+  `_tn_cache`, `_slot_cache`, `_fo_cache`, `_sf_infl_cache`, and
+  `_mod_ptr_cache` are per instance, created lazily through
+  `self.__dict__.setdefault` (TypeDef/field indices and slot VAs are
+  binary-local; a second fixture got the first binary's type names,
+  field owners, slot annotations and pointer arrays with no marker).
+  `cli.py` and `tools/corpus_common.py` free the module-pointer arrays
+  through `getattr(il, '_mod_ptr_cache', {})`, never a bare attribute.
 - `_shared_parameterless_ctor_target` is an exact constructor proof, not normal
   shared-call resolution. Require typed current-constructor `this` or exact
   fresh `_alloc` provenance, a reference-type inheritance match, zero declared
@@ -119,6 +127,25 @@ fix-123 in `validation_reports/review123_*`.
   registry-missed sharer that really reads the register (probed:
   `List<T>.CopyTo`'s R8 at `0x180df9c30`) is untouched. Never trim a
   *resolved* tail: an identified callee owns its own signature.
+- A shared body's printed argument list follows the all-candidates slot
+  classes when every candidate is a readable non-generic MethodDef that
+  agrees on the class sequence (`_shared_slot_classes`; receiver and the
+  consensus sret buffer count as GPR, R4/R8 by-value params as XMM).
+  `_shared_positional_args` then rebuilds the list by ABI position: the
+  raw GPR-first spray, truncated to the arity cap, printed the stale RCX
+  value where a float parameter lives and dropped the real XMM argument
+  (mi 20081 `Angle.op_Implicit` at 0x182da54f0; the `mulss xmm0,xmm0`
+  square leaf 0x1826e1660). A generic spec, an unreadable row,
+  disagreement, a class beyond the four argument registers, or a class
+  set without an XMM slot keeps today's truncation.
+- `_icall_annotation` picks a same-named overload by the runtime
+  signature's own parameter list: unique declared arity, else unique
+  normalized parameter-type match (CLI primitives, `/`->`.`, backtick
+  arity, byref markers; `_icall_type_key`). The old first-row scan seated
+  `_call`'s arity trim on the wrong overload and dropped real arguments
+  (`Object.FindObjectsOfType(Type,bool)` rendered `(type)`; the
+  AndroidJNI `To*Array(ptr,int)` family, `UnsafeUtility.IsBlittable`).
+  Ambiguity returns the text-only annotation, never a guess.
 - A consensus value type folds sret only when the individual call's first
   argument is an observed address. Require a known exact nonzero value-type
   size; generic value types, source-level ref returns, and unsupported opaque
@@ -152,6 +179,15 @@ fix-123 in `validation_reports/review123_*`.
 - Semantic names are method-wide unique, collision-checked against every body
   identifier and every metadata parameter name (even unused parameters), and
   replaced outside string/character literals and line/block comments only.
+- The same literal/comment barrier covers `_render`'s `$` -> `_` sanitize
+  (`_sanitize_dollar`; `$"`/`$@"` prefixes included) and
+  `_rename_locals`' vN/tN/s_XX pass (`_mask_literals` NUL-blanks the
+  spans for both the token scan and the substitution, keeping spans
+  aligned with the original line). A blanket replace corrupted JSON.NET's
+  wire names (`$type`/`$id`/`$values`), the UTF7 direct-character set,
+  and the ADO.NET diffgram namespace (`...-v1` -> `...-obj83`); renaming
+  comment tokens also kept a dead pure cluster of mi 80548 alive, which
+  the post-render DCE now drops.
 - `_refine_explicit_object_locals` may strengthen `object` only for a
   single-definition array creation, string literal, or exact `typeof` RHS with
   no later write or ref/out/in/address escape. Do not add `new T()` without
