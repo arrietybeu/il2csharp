@@ -40,12 +40,14 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 - Audit-batch-3 deferred findings, still open: F1 unmodelled-instruction
   invalidation (MAXSS/MINSS have operand-shape entries but no arithmetic
   in `insn.py`), F2 value-type fragment discard, Dec F5-F6 (latent, 0
-  corpus hits), BSS name ties. F3 (XMM0-5 clobber), F4 (array stride), F5
-  (memory-size map) and Dec F3/F4 (hop-fold/select guards) are fixed
-  (sections below), as are the runtime vtable sentinel, the swapped
-  PE/Android counters and the `--only` no-match exit.
+  corpus hits). F3 (XMM0-5 clobber), F4 (array stride), F5 (memory-size
+  map), Dec F3/F4 (hop-fold/select guards) and the BSS ambiguous-name
+  ties are fixed (sections below), as are the runtime vtable sentinel,
+  the swapped PE/Android counters and the `--only` no-match exit.
 
 **Landed/closed pointers (sections below; not open work):**
+- BSS ambiguous-name ties: decline the annotation instead of first-row
+  luck (2026-09-28; output-neutral on the fixture, 3 cells).
 - F3 XMM0-5 clobber: missing SSE operands render an honest unknown
   instead of a fabricated `0f` (2026-09-28).
 - Dec F3/F4: hop-fold scope/label/write guards and null-operator skip in
@@ -71,6 +73,23 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: BSS ambiguous-name ties decline (2026-09-28, LANDED)
+
+`_runtime_cell_usage` resolved a BSS runtime-cell name through
+`by_name` and, when several same-named typedefs existed with no
+System-namespace candidate, took the first metadata row. The fixture
+has 3 such cells (`Pointer`, `Value` x2, of 1,582 cells total), and the
+stored name string alone does not prove which row the runtime lookup
+used, so the annotation is now declined on any multi-candidate
+non-System tie.
+
+Output-neutral on Assembly-CSharp (the same 49-file tree as the F3
+batch); build 490 types / 6,622 bodies / 0 failed / 0 fallbacks; brace
+0/490; parse 0 bad / 0 ERROR / 0 MISSING.
+
+Tests: +1 game (`tests/test_game_bss_ties.py`) pinning that no cell
+keeps an annotation whose simple name is ambiguous.
 
 ## Current work: F3 -- missing SSE operands are unknown, not `0f` (2026-09-28, LANDED)
 

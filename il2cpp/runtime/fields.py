@@ -195,11 +195,19 @@ class _FieldsMixin:
                 if '::' in s:
                     return self._icall_annotation(s)
                 continue
-            td_idx = tds[0]
+            td_idx = None
             for cand in tds:
                 if self.meta.typedefs[cand].namespace == 'System':
                     td_idx = cand
                     break
+            if td_idx is None:
+                if len(tds) != 1:
+                    # Several same-named typedefs and no System candidate:
+                    # the stored name string alone does not prove which row
+                    # the runtime lookup used, so first-row luck is a
+                    # plausible-wrong annotation. Decline it.
+                    return None
+                td_idx = tds[0]
             td = self.meta.typedefs[td_idx]
             full = ('%s.%s' % (td.namespace, td.name)) if td.namespace else td.name
             # 71c: ty_of_td can miss this type entirely (System.String
