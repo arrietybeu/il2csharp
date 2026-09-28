@@ -1,18 +1,19 @@
 # il2csharp — TODO (open work and historical triage)
 
-## Open work index (2026-09-28; history below untouched)
+## Work index (2026-09-28; history below untouched)
 
-By payoff. `## Current work` headers farther down are chronological log
-labels, not live status -- newest section is on top and each section's
-own status tag rules. Commit hashes cited in sections written before the
-2026-09-28 public scrub are pre-scrub ids and no longer resolve in this
-history (see `docs/public_release.md`).
-- Codegen-intrinsic recognition (program, **first landing 2026-09-28**):
+`## Current work` headers farther down are chronological log labels, not
+live status -- newest section is on top and each section's own status tag
+rules. Commit hashes cited in sections written before the 2026-09-28
+public scrub are pre-scrub ids and no longer resolve in this history (see
+`docs/public_release.md`).
+
+**Open, by payoff:**
+- Codegen-intrinsic recognition (program; landing 1 landed 2026-09-28):
   a census of plain `sub_` calls found 38,254 sites / 2,663 targets,
   **36,313 sites (95%) with zero metadata candidates** -- IL2CPP runtime
-  helpers that metadata can never name. Nullary interface dispatch is
-  landed (section below; `0x180002210`/`0x180002380`). Open families by
-  sites: isinst/castclass thunk `0x180479f80` (8,271), alloc/box
+  helpers that metadata can never name. Open families by sites:
+  isinst/castclass thunk `0x180479f80` (8,271), alloc/box
   `0x18043dc60` (2,446), class-init `0x18043e360` (861),
   `Interlocked.CompareExchange` `0x18043f880` (582), bounds-checked
   element address `0x1803ed830`/`0x1803ed860` (745), parameterized
@@ -26,35 +27,44 @@ history (see `docs/public_release.md`).
 - `op_Implicit` return-type subset (tens of sites, e.g.
   Angle/StyleFloat/TimeValue at `0x182da54f0`): needs a typed-use
   scan; sole caller sampled (13332) declines on `object`.
-- GetHashCode mixed VA (LANDED, section below): the stale trailing `0` is
-  gone from unresolved shared tails; 529 method bodies tree-wide.
 - Cpp2IL declaration cross-check gate (proposed, not yet filed):
   diff emitted declarations against Cpp2IL-reconstructed DLLs.
 - Sidecar program (large, deferred by design): method+generic mixes
   (5.6k), different-name mega-shared (3.9k), same-typedef overloads,
   struct-field folding, per-arm Color, Navigation merge-side,
   instantiation proof.
+- Parallel-build residual: the wall is total work and box load, not tail
+  order -- TextMeshPro/TextCore are the longest single images (159.9 s /
+  113.3 s) despite low method counts, and no cheap static proxy (count,
+  code bytes, max/top-5 extent) ranks them high.
+- Audit-batch-3 deferred findings, all **re-verified still open against
+  the source on 2026-09-28** (evidence in the audit-batch-3 section
+  below): F1 unmodelled-instruction invalidation (MAXSS/MINSS have
+  operand-shape entries but no arithmetic in `insn.py`), F2 value-type
+  fragment discard, F3 XMM0-5 clobber, F4 array stride, F5 the two
+  remaining `{1: 1, 2: 2, 4: 4, 8: 8}` sites (`insn.py:1400/1501`), Dec
+  F3-F6 (latent, 0 corpus hits), the runtime vtable sentinel
+  (`slot_max_arity` has no gate), the swapped PE/Android
+  reverse-p-invoke counters, `--only` no-match exit 0, BSS name ties.
+
+**Landed/closed pointers (sections below; not open work):**
+- Codegen intrinsics landing 1: nullary interface dispatch (2026-09-28).
+- Parallel full-tree build: re-landed 2026-09-28, heaviest-image-first
+  schedule, byte-identical r10 tree (275.0 s at 8 workers; 0.93 worker
+  efficiency at 6).
 - Full-tree promotion: **DONE at r10** (2026-09-28, all 91 images,
   aggregate `b0c87509…b9fe`, 302 files changed vs r9, per-file sha256
   proof, 0 mismatches); `final_out/` holds r10 everywhere and r9/r8/r7
-  are history. A post-parallel codegen candidate (`r12_out1`, 696 of
-  11,276 files changed) is built and gated but **not promoted** (user
-  call).
+  are history. The post-parallel codegen candidate (`r12_out1`, 696 of
+  11,276 files changed) was built and gated but **not promoted**; its
+  scratch tree is removed (user call).
+- GetHashCode mixed VA landed: the stale trailing `0` is gone from
+  unresolved shared tails; 529 method bodies tree-wide.
+- Audit batch 2 landed (`mov rbp,rsp` frame lost at a CFG merge +
+  `slot_var`'s three sign conventions); audit batch 3 landed/promoted
+  (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
-  (~1.9k) and constant-zero fold (239/2). Evidence in the two
-  DOCUMENTED sections directly below.
-- Parallel full-tree build: **re-landed 2026-09-28** (the 2026-09-26
-  `--workers N` process pool was reverted bare by `8fdbea2`; re-landed
-  merged with the sunshine CLI flags and given a heaviest-image-first
-  schedule). Full 8-worker tree byte-identical to `final_out` r10
-  (11,276/11,276 files; 275.0 s vs 1,085 s serial this session, box at
-  ~30% external load); a 6-worker instrumented run is **0.93 worker
-  efficient**. Open: the residual wall is total work and box load, not
-  tail order -- TextMeshPro/TextCore are the longest single images
-  (159.9 s / 113.3 s) despite low method counts, and no cheap static
-  proxy (count, code bytes, max/top-5 extent) ranks them high.
-- Audit batch 2 (LANDED, section below): the `mov rbp,rsp` frame lost
-  at a CFG merge + `slot_var`'s three sign conventions.
+  (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
 
 ## Current work: codegen intrinsics, landing 1 -- interface dispatch (2026-09-28, LANDED)
 
