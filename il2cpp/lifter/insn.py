@@ -1397,7 +1397,10 @@ class _InsnMixin:
         base = reg_name(ins.memory_base) if ins.memory_base != IReg.NONE else None
         idxr = reg_name(ins.memory_index) if ins.memory_index != IReg.NONE else None
         disp = ins.memory_displacement
-        size = {1: 1, 2: 2, 4: 4, 8: 8}.get(ins.memory_size, 8)
+        # iced reports a MemorySize enum here, not a byte count:
+        # ask MemorySizeExt for the true width (an unknown/unmapped
+        # size keeps the old 8-byte default).
+        size = MemorySizeExt.size(ins.memory_size) or 8
         _cbe = self.reg(base) if base and base != 'RBP' else None
         _caddr = self._stack_address(ins) \
             if _cbe is not None and getattr(_cbe, '_stack_offset', None) is not None \
@@ -1498,7 +1501,10 @@ class _InsnMixin:
         base = reg_name(ins.memory_base) if ins.memory_base != IReg.NONE else None
         idxr = reg_name(ins.memory_index) if ins.memory_index != IReg.NONE else None
         disp = ins.memory_displacement
-        size = {1: 1, 2: 2, 4: 4, 8: 8}.get(ins.memory_size, 8)
+        # iced reports a MemorySize enum here, not a byte count:
+        # ask MemorySizeExt for the true width (an unknown/unmapped
+        # size keeps the old 8-byte default).
+        size = MemorySizeExt.size(ins.memory_size) or 8
         _cbe = self.reg(base) if base and base != 'RBP' else None
         _caddr = self._stack_address(ins) \
             if _cbe is not None and getattr(_cbe, '_stack_offset', None) is not None \
@@ -1546,6 +1552,18 @@ class _InsnMixin:
         fe = self._field_expr(be, disp, size)
         if fe.kind == 'klass' and fe.text.endswith('.getClass()'):
             return None            # object-header klass store -- bookkeeping
+        if be.kind == 'arr' and disp >= 0x20:
+            # `_field_expr` already decided: a stride-verified element
+            # access (possibly with a primitive-kind element, which the
+            # generic branch below would miss) or a raw deref. Never
+            # re-derive the index from the ACCESS WIDTH here -- that
+            # legacy formula is the F4 bug's second home and would
+            # override the stride-correct result.
+            self._lv_ty = fe.ty if fe.kind != 'ptr' else None
+            if fe.kind == 'ptr':
+                self._lv_width = MemorySizeExt.size(ins.memory_size)
+                self._lv_raw_parts = (be.text, disp_add(disp))
+            return fe.text
         if fe.kind in ('obj', 'arr', 'str') or ('.' in fe.text) \
                 or ('->' in fe.text):
             self._lv_ty = fe.ty
@@ -1557,8 +1575,6 @@ class _InsnMixin:
                 self._lv_width = MemorySizeExt.size(ins.memory_size)
                 self._lv_raw_parts = (be.text, disp_add(disp))
             return fe.text
-        if be.kind == 'arr' and disp >= 0x20:
-            return '%s[%#x]' % (be.text, (disp - 0x20) // max(size, 1))
         self._lv_width = MemorySizeExt.size(ins.memory_size)
         self._lv_raw_parts = (be.text, disp_add(disp))
         return '*(%s %s)' % (be.text, disp_add(disp))

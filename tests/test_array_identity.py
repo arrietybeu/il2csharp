@@ -113,3 +113,34 @@ def test_allocation_reference_is_reused_across_native_register_copies():
     assert text.count("new string[2]") == 1
     assert 't0[0x0] = "value";' in text
     assert 't0[0x1] = "value";' in text
+
+
+VECTOR = (0, 0x11 << 16)
+
+
+def stride_lifter(stride):
+    """Array of a 12-byte (or given-stride) element type."""
+    lift = string_array_lifter()
+    lift.il.type_from_ptr = lambda ptr: VECTOR if ptr == ARRAY[0] else None
+    lift.il._sf_field_size = lambda fty, depth: stride if fty == VECTOR else None
+    return lift
+
+
+def test_array_constant_offset_divides_by_element_stride():
+    # 12-byte elements: [arr+0x2c] is element 1, regardless of the 8-byte
+    # access width the instruction reads it with.
+    lift = stride_lifter(12)
+    e = lift._field_expr(Expr("t0", ARRAY, "arr"), 0x2C, 8)
+    assert e.text == "t0[0x1]"
+
+
+def test_array_mid_element_offset_keeps_the_raw_deref():
+    lift = stride_lifter(12)
+    e = lift._field_expr(Expr("t0", ARRAY, "arr"), 0x26, 8)
+    assert e.text == "*(t0 + 0x26)"
+
+
+def test_array_unknown_stride_keeps_the_raw_deref():
+    lift = stride_lifter(None)
+    e = lift._field_expr(Expr("t0", ARRAY, "arr"), 0x2C, 8)
+    assert e.text == "*(t0 + 0x2c)"

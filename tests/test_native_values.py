@@ -19,7 +19,9 @@ def lifter(regs=None, fields=None, field_types=None):
     chain = fields if fields is not None else {0x10: ('first', 0), 0x11: ('second', 1)}
     il = NS(types=types, _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
             instance_field_chain=lambda td: chain,
-            type_from_ptr=lambda ptr: INT if ptr == ARRAY[0] else None)
+            type_from_ptr=lambda ptr: INT if ptr == ARRAY[0] else None,
+            # array element stride: references are 8 bytes
+            _sf_field_size=lambda fty, depth: 8 if fty is not None else None)
     meta = NS(typedefs=[NS(is_valuetype=False)])
     lift = Lifter.__new__(Lifter)
     lift.il, lift.meta = il, meta

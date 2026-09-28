@@ -37,17 +37,17 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   order -- TextMeshPro/TextCore are the longest single images (159.9 s /
   113.3 s) despite low method counts, and no cheap static proxy (count,
   code bytes, max/top-5 extent) ranks them high.
-- Audit-batch-3 deferred findings, all **re-verified still open against
-  the source on 2026-09-28** (evidence in the audit-batch-3 section
-  below): F1 unmodelled-instruction invalidation (MAXSS/MINSS have
-  operand-shape entries but no arithmetic in `insn.py`), F2 value-type
-  fragment discard, F3 XMM0-5 clobber, F4 array stride, F5 the two
-  remaining `{1: 1, 2: 2, 4: 4, 8: 8}` sites (`insn.py:1400/1501`), Dec
-  F3-F6 (latent, 0 corpus hits), BSS name ties. The runtime vtable
+- Audit-batch-3 deferred findings, still open: F1 unmodelled-instruction
+  invalidation (MAXSS/MINSS have operand-shape entries but no arithmetic
+  in `insn.py`), F2 value-type fragment discard, F3 XMM0-5 clobber, Dec
+  F3-F6 (latent, 0 corpus hits), BSS name ties. F4 (array stride) and F5
+  (memory-size map) are fixed (section below), as are the runtime vtable
   sentinel, the swapped PE/Android counters and the `--only` no-match
-  exit are fixed (section below).
+  exit.
 
 **Landed/closed pointers (sections below; not open work):**
+- F4 array stride + F5 memory-size map: stride-verified indices and true
+  access widths on both the load and store paths (2026-09-28).
 - Post-r10 small fixes: vtable sentinel gate, classic PE counter order,
   `--only` no-match error (2026-09-28).
 - Codegen intrinsics landing 1: nullary interface dispatch (2026-09-28).
@@ -67,6 +67,39 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: F4/F5 -- array stride and true access widths (2026-09-28, LANDED)
+
+The two remaining `{1: 1, 2: 2, 4: 4, 8: 8}` memory-size maps are gone:
+the load path (`insn.py` `_read_mem`) and the store lvalue path
+(`_mem_lvalue`) both take the width from `MemorySizeExt.size`. Constant
+array accesses divide by the ELEMENT STRIDE, not the access width, in
+both `_field_expr` and its second home in `_mem_lvalue`; a mid-element
+offset or an unknown stride keeps the raw deref rather than a
+plausible-wrong index.
+
+Measured against a baseline at HEAD (the codegen landing, same scoped
+build) on Assembly-CSharp: **4 files changed, 17 insertions / 13
+deletions**:
+
+- `ScrollRectFollowSelection`: `vector3Array1[0x3]` -> `[0x2]` (the
+  audit's example; Vector3 stride 12).
+- `ServerBrowserManager.AddFakeLobbiesForTesting`: native
+  `mov dword [rax+24h],1` / `[rax+28h],2` now render `[0x1]` / `[0x2]`
+  (was `[0x0]` / `[0x1]`).
+- `ShelfItemManager`: two float-array indices corrected.
+- `WFX_BulletHoleDecal` static ctor: boundary stores index by stride 8;
+  mid-element dwords stay `((int*)arr + 0xNN)[0]` (honest).
+
+Gates (Assembly-CSharp only, per this session's CPU rule): strict
+scoped build at `--workers 1`: 490 types / 6,622 bodies / **0 failed /
+0 fallbacks**; brace **0/490**; parse **0 bad / 0 ERROR / 0 MISSING**;
+portable suite **949 passed**. The tree-wide effect is not rebuilt in
+this batch; a promotion-time full build will size it.
+
+Tests: +3 portable (`tests/test_array_identity.py`: stride division,
+mid-element deref, unknown-stride deref) and `_sf_field_size` added to
+the two lightweight `il` doubles that previously never needed it.
 
 ## Current work: post-r10 small fixes -- vtable sentinel, counters, `--only` (2026-09-28, LANDED)
 

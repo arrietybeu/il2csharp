@@ -49,6 +49,8 @@ def fixture():
         value_type_size=lambda td: 12 if td == 0 else None,
         base_chain_tds=lambda td: [td],
         instance_field_chain=lambda td: {},
+        # element stride: VECTOR is 12 bytes, references/strings 8
+        _sf_field_size=lambda fty, depth: 12 if fty == VECTOR else (8 if fty is not None else None),
     )
     lift.meta, lift.bin = meta, NS()
     lift.regs, lift.out = {}, []

@@ -641,8 +641,19 @@ class _ValuesMixin:
                 return Expr('%s.Length' % _recv_fold(text), _INT_TY, 'int')
             if disp >= 0x20:
                 ety = self._elem_type(base.ty)
-                return Expr('%s[%#x]' % (_recv_fold(text), (disp - 0x20) // max(size, 1)),
-                            ety, self._ty_kind(ety))
+                # the index divides by the ELEMENT STRIDE, never the
+                # access width: an 8-byte read from [arr+0x2c] of a
+                # 12-byte Vector3 element is element 1, not element 4.
+                # An unknown stride or a mid-element offset keeps the
+                # raw deref instead of a plausible-wrong index.
+                _sf = getattr(self.il, '_sf_field_size', None)
+                stride = _sf(ety, 0) if (_sf is not None and ety is not None) else None
+                if stride:
+                    k = disp - 0x20
+                    if k % stride == 0:
+                        return Expr('%s[%#x]' % (_recv_fold(text), k // stride),
+                                    ety, self._ty_kind(ety))
+                return Expr('*(%s %s)' % (text, disp_add(disp)), None, 'ptr')
         if base.kind == 'str':
             if disp in (0x10, 0x18):
                 return Expr('%s.Length' % _recv_fold(text), _INT_TY, 'int')
