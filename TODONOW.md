@@ -1,5 +1,10 @@
 # TODO NOW — exact remaining output failures and source ownership
 
+> **HISTORICAL (2026-09-22, r4c era).** Live work, current gates and the
+> promoted tree (r10, 2026-09-28) are in `docs/todo.md` and
+> `validation_reports/promotion_r10.json`. Kept for the failure-class
+> inventory and source anchors; line numbers may have moved.
+
 Generated 2026-09-22 from the current promoted tree. This is a handoff for
 the next agent. The generated C# tree is `final_out/`; do not edit it by hand.
 The source of truth is the decompiler under `il2cpp/`. Fixture inputs are

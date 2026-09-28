@@ -7,10 +7,10 @@ by the move. All repo paths below are root-relative.
 
 ## Start here (live)
 
-- `docs/todo.md` — current work (post-123 residue), validation status, next priorities, current
-  replacement record.
-- `docs/handoff-2026-09-23.md` — latest stop state, landed commits,
-  uncommitted scalar-copy work, validation needed to resume.
+- `docs/todo.md` — current work (audit batch 3, r10 promoted tree),
+  validation status, next priorities, replacement records.
+- `TODONOW.md` — 2026-09-22 failure-class inventory (historical, r4c era).
+- `docs/handoff-2026-09-23.md` — 2026-09-23 stop record (historical).
 - `docs/reference.md` — working-loop rules (§4), baselines / promotion /
   known artifacts (§6), gotchas (§7), next-up families (§2), Batch 19
   gate methodology (§5). Read §4 and §7 before any nontrivial change.

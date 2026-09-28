@@ -1,5 +1,10 @@
 # Replace the project folder — Review 84
 
+> **HISTORICAL (Review 84 era, 2026-08).** This describes a private ZIP
+> handoff whose contents included the licensed game fixtures and the
+> decompiled `final_out/` tree. No public artifact may contain them; live
+> state is `docs/todo.md`.
+
 This ZIP contains a complete `il2csharp/` folder: updated source/tests/tools,
 all existing development notes/work files, current validation evidence, the
 supplied game DLL/metadata unchanged, and a freshly rebuilt `final_out/` with

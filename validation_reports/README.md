@@ -1,25 +1,29 @@
 # Validation evidence
 
-**Current live tree: fix 97 (Review 84 baseline + fixes 85–97, package split).**
-Start with `review84/summary.json` (baseline), `review97e_sweep.json` +
-`review97e_vs97.json` + `review97e_parse.json` + `review97e_promotion_verification.json`
-(promoted tree, 11,200 files, `93a4eb7b…9d87a2`,
-0 mismatches) and `../docs/reviews/REVIEW84.md`–`REVIEW87.md` + `../docs/todo.md` (Current work).
-The strict build has 0 failures/fallbacks, the syntax gate 0 bad files, the direct sweep
-0 crashes. The `.zip` release artifact (`docs/reviews/REPLACEMENT.md`) still describes the
-Review 84 handoff ZIP; for the live tree see `../README.md` and `validation_reports/SHA256SUMS.txt`
-(`tools/verify_release.py`). The Review 89 tree is kept at `../bckups/final_out_review89`,
-the fix-94 tree at `../bckups/final_out_review94`.
+**Current live tree: r10 (2026-09-28, audit batch 3).** Start with
+`promotion_r10.json` (11,276 files, aggregate `b0c87509…b9fe`, 0
+mismatches) and `audit_batch3.json` (landing evidence: strict build,
+brace + parse gates, paired sweep, golden review), then `../docs/todo.md`
+(Current work). `promotion_r9.json` is the previous promoted tree;
+everything older is history.
+
+The promoted tree lives at `../final_out/` (git-ignored and derived from
+the licensed fixture — never publish it). The `.zip` release artifact
+(`docs/reviews/REPLACEMENT.md`) describes the Review 84 handoff ZIP; for
+the live tree see `../README.md`, `validation_reports/SHA256SUMS.txt`
+and `tools/verify_release.py`. The `../bckups/` archival copies were
+deleted 2026-09-19 — GitHub is the history authority.
 
 Earlier releases — Review 84 (`review84/`), Review 80 (`review80/`), Reviews 79/78
 (`review79/`, `review78/`) — are preserved below. Their old bundling/"current"
 descriptions are not the state of this replacement.
 
 Historical note: **Review 80 was the last release whose validation ZIP was
-regenerated for the archive.** Later promotions (Reviews 84–89, fixes 93–97) keep their
-evidence in `review84/`, `review85/`, `split_rebuild_verification.json`,
-`review93_*`/`review94_*`, and `review97*/review97e_*` report files; the
-`review80/` record below remains the last fully-bundled per-file evidence set.
+regenerated for the archive.** Later promotions (Reviews 84–89, fixes 93–97, r4–r10)
+keep their evidence in `review84/`, `review85/`, `split_rebuild_verification.json`,
+`review93_*`/`review94_*`, `review97*/review97e_*`, and the `promotion_r*.json`
+report files; the `review80/` record below remains the last fully-bundled
+per-file evidence set.
 
 # Review 77 validation evidence
 

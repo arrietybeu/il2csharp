@@ -180,8 +180,9 @@ and the applied source patches `patch_*.py` kept as the record.
 ## 6. Baselines, promotion, known artifacts
 
 Live authority has moved on: current baseline, gates, and file census
-are `TODONOW.md` (top sections), `docs/todo.md` (Current work), and
-`validation_reports/promotion_r4a.json` + `promotion_r4c.json`. What
+are `docs/todo.md` (Current work), `validation_reports/promotion_r10.json`
+and `promotion_r9.json` (frozen evidence). `TODONOW.md` and the
+`promotion_r4*` files are history. What
 follows is a batch-19 snapshot, kept for its "known artifacts"
 list below — all promotion status here is historical, not Review 79 authority.
 The batch-19-era baseline chain it originally described
@@ -245,9 +246,10 @@ The batch-19-era baseline chain it originally described
 - `PYTHONHASHSEED`: fix it before comparing builds.
 - Syntax-check package modules (`python -m compileall il2cpp`) before any
   rebuild — instant, catches typos before a multi-minute build.
-- Builds 18.1 min measured (1,085 s, 114,458 bodies, all 88 images at
-  r9); gate ~2 min; sweep ~5 min; sim re-gate ~2 min. The old `~7-9 min`
-  and `1,359 s` figures are pre-r9 and stale.
+- Builds: 18.1 min measured idle (1,085 s, 114,458 bodies, all 88 images
+  at r9); r10 measured 24.4 min (1,465,953 ms) with an unrelated build
+  competing for CPU. Gate ~2 min; validator sweep ~23 min; sim re-gate
+  ~2 min. The old `~7-9 min` and `1,359 s` figures are pre-r9 and stale.
 - Census by the RENDERED NAME, not by scanning method heads for CALL
   instructions (the class-init twin is tail-jmp-reached — a call
   census never sees it).

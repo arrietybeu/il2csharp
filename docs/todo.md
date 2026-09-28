@@ -27,16 +27,14 @@ own status tag rules.
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2). Evidence in the two
   DOCUMENTED sections directly below.
-- Parallel full-tree build (`cli.py` loops 88 images serially): measured
-  **1,085 s** for 114,458 bodies at r9 (two builds, 1,085/1,086 s); a
-  12-worker process pool predicts ~102 s (10.8x, 11% imbalance) at
-  513 MB/worker. Not started.
+- Parallel full-tree build (`cli.py` loops 88 images serially; 18.1 min
+  idle / 24.4 min contended per gate): the `--workers N` process pool
+  landed as `72d08e7` (262.9 s with 8 workers) and was reverted by
+  `35b4c7e` (bare revert, no reason recorded) — the feature, its tests
+  and its measurements live in those two commits. Re-landing plus a
+  longest-image-first schedule is the open lead.
 - Audit batch 2 (LANDED, section below): the `mov rbp,rsp` frame lost
   at a CFG merge + `slot_var`'s three sign conventions.
-- Parallel full-tree build (`cli.py` loops 88 images serially): measured
-  **1,085 s** for 114,458 bodies at r9 (two builds, 1,085/1,086 s); a
-  12-worker process pool predicts ~102 s (10.8x, 11% imbalance) at
-  513 MB/worker. Not started.
 
 ## Current work: promotion r10 (2026-09-28, PROMOTED)
 

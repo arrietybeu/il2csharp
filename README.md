@@ -1,25 +1,32 @@
 # il2csharp
 
-**Current source: fix 123 (promoted)**, following the legal-type-declaration fixes in
-fix 113. See [current work](docs/todo.md) for validation and remaining errors.
-Method declarations now decode virtual, abstract, final and new-slot metadata
-flags correctly, generic constructors match their declaring type names, every
-pointer-typed declaration carries `unsafe`, generic references spell the
-declared `_N` identifier, explicit interface qualifiers resolve through the
-declaring type's own interface list, namespace-qualified spellings feed
-`using` generation, nested types render their owner paths, stub temps with a
-uniquely-proven receiver call take their owner's type, and using-strip keeps
-ambiguous heads qualified.
-The full test suite passes **759 tests**, including 118 native-fixture
-regressions and a Roslyn compilation of generated declaration patterns. The
-strict build covered 11,181 files / 113,938 bodies with 0 failures, the syntax
-gate is clean, and the whole-tree compiler probe stands at **10,602 errors**
-(down from 34,262 across fixes 115–123 with every delta attributed; CS0115,
-CS0214, CS0246, CS0540 and CS9334 fully zero).
+**Current source: r10 (promoted 2026-09-28)** — the audit-batch-3 tree:
+shared-body argument lanes, icall overload selection from the runtime
+signature, literal-safe `$`/local-rename passes, and five per-instance
+runtime caches. See [current work](docs/todo.md) for validation and
+remaining errors.
 
-`final_out/` is the fix-123 output promoted 2026-09-17 (11,274 files). The complete
-recovered game **does not yet compile**. Clean parsing and passing regression
-tests do not establish semantic equivalence or a working drop-in source tree.
+Method declarations decode virtual, abstract, final and new-slot metadata
+flags correctly, generic constructors match their declaring type names,
+every pointer-typed declaration carries `unsafe`, generic references spell
+the declared `_N` identifier, explicit interface qualifiers resolve through
+the declaring type's own interface list, namespace-qualified spellings feed
+`using` generation, nested types render their owner paths, stub temps with
+a uniquely-proven receiver call take their owner's type, and using-strip
+keeps ambiguous heads qualified.
+
+The full test suite passes **1117 tests** (917 portable + 200 native-fixture
+regressions). The strict build covered 11,183 files / 114,458 bodies with
+0 failures or structured fallbacks; the brace audit and the tree-sitter
+parse gate are clean. The last whole-tree Roslyn compiler probe (fix-123
+era) stood at **10,602 errors** with every delta attributed; CS0115,
+CS0214, CS0246, CS0540 and CS9334 are fully zero there. The remaining
+compiler backlog is tracked in `docs/todo.md`.
+
+`final_out/` is the r10 output promoted 2026-09-28 (11,276 paths). The
+complete recovered game **does not yet compile**. Clean parsing and
+passing regression tests do not establish semantic equivalence or a
+working drop-in source tree.
 
 A .NET SDK is available. Run the reproducible compiler diagnostic probe with:
 
@@ -193,18 +200,23 @@ Project root is `il2csharp/` itself: `il2csharp.py` (a thin launcher) plus the
 output (`il2cpp/metadata.py` + `binary.py` frontends, `il2cpp/runtime/` for
 `Il2Cpp`, `il2cpp/lifter/` for the `Lifter`, `il2cpp/dec/` for the
 `Decompiler`, and `emitter.py`/`headers.py`/`cli.py` for output assembly),
-`work/` (probes, censuses, gates, goldens — now grouped into `lib/`, `runners/`, `review81/`–`review89/`,
+`work/` (probes, censuses, gates, goldens — grouped into `lib/`, `runners/`, `review81/`–`review89/`,
 `split/`, etc.; routing table in `work/README.md`; includes the sibling `../work/` files merged
-2026-09-08), `tools/` (validator kit plus the former loose `compare_*`/`count_diffs`/`test_import*` scripts;
+2026-09-08). **`work/` is git-ignored local scratch and is not part of the published
+repository** — the surviving scripts and gate reports are provenance, not shipped code.
+`tools/` (validator kit plus the former loose `compare_*`/`count_diffs`/`test_import*` scripts;
 `scan_stale.py` lives in `tools/`, `SHA256SUMS.txt` in `validation_reports/`),
-`tests/`, `validation_reports/` (current evidence in `review122_*`; older files
-are historical), `final_out/` (the complete fix-123 strict-built/
-syntax-gated output, promoted from `work/review123_out/`), and `testgame/` (the supplied Shift At
-Midnight DLL/metadata, tracked via Git LFS and included only in this private repo
-at the user's request; do not redistribute them or make the repo public). Backup zips live in
-the parent folder. Pre-consolidation history in `docs/archive/` still
-refers to `../work/`, sibling `bXX_out1` trees, and `Shift At Midnight` at
-the old root — read those as `work/`, reaped batch trees, and `testgame/`.
+`tests/`, `validation_reports/` (current evidence: `promotion_r10.json` +
+`audit_batch3.json`; older files are historical), `final_out/` (the complete
+r10 strict-built/syntax-gated output, promoted 2026-09-28; git-ignored), and
+`testgame/` — the supplied Shift At Midnight DLL/metadata, tracked via Git
+LFS. It is licensed game data: never redistribute it, and it (plus its LFS
+objects and any decompiled output such as `final_out/`) must be removed
+from the working tree **and git history** before this repository can be
+made public. Backup zips live in the parent folder. Pre-consolidation
+history in `docs/archive/` still refers to `../work/`, sibling `bXX_out1`
+trees, and `Shift At Midnight` at the old root — read those as `work/`,
+reaped batch trees, and `testgame/`.
 
 ## How it works (original implementation)
 
@@ -467,23 +479,22 @@ cross-check in a debugger or Ghidra.
 ## Performance
 
 Shift At Midnight (metadata v31, 16,916 types / 128,954 methods, 116,178
-with native code) dumps fully in ~790 s single-threaded pure Python
-(Review-77 source: 11,107 type files, 115,658/115,658 bodies lifted, 0
-failed).
+with native code) dumps fully in ~1,085 s (18.1 min) single-threaded pure
+Python on an idle box (r9: 11,183 type files, 114,458/114,458 bodies
+lifted, 0 failed; r10 measured 1,465,953 ms with an unrelated build
+competing for CPU).
 
 ## Validation
 
-Current gates (fix-123 tree): **759 tests (641 portable + 118 game)**;
-a strict 11,181-file/113,938-body build with no failures or fallbacks, a 0-error syntax parse
-of every C# file, and a 116,178-method direct sweep
-with 0 crashes or structural-metric changes. Exact reports are in
-`validation_reports/review84/` (baseline), `validation_reports/review123_sweep.json`,
-`review123_vs122.json`, `review123_parse.json` (fix-123 gates; every fix
-100–123 has its own `reviewNN_*` set — see `docs/todo.md` for the log),
-`validation_reports/review123_promotion_verification.json` (11,274 files,
-aggregate `45711645…3791d3c6`, 0 mismatches — `final_out/` holds the
-promoted fix-123 tree); the older trajectories below are
-historical. At Review 84 the same strict build held with **358 tests**.
+Current gates (r10 tree): **1117 tests (917 portable + 200 game)**;
+a strict 11,183-file/114,458-body build with no failures or fallbacks; a
+0-error syntax parse of every C# file; and a paired 116,178-method direct
+sweep with 0 crashes and structural metrics unchanged (into_block
+8,075/2,046, identical to r9). Exact reports: `validation_reports/
+promotion_r10.json` (promotion proof, aggregate `b0c87509…b9fe`, 0
+mismatches), `validation_reports/audit_batch3.json` (landing evidence),
+and the older `review84`/`review123` sets plus `promotion_r9.json` for
+history. At Review 84 the same strict build held with **358 tests**.
 
 Two independent corpus gates, run against the built tree:
 
