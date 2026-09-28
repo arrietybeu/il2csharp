@@ -216,3 +216,21 @@ def test_missing_sse_operand_is_an_unknown_not_zero():
     e = lift.regs['XMM0']
     assert 'real5' in e.text and '0f' not in e.text
     assert e.text.startswith('v')   # unknown left operand, honest vN
+
+
+def test_maxss_minss_render_hardware_semantics():
+    lift = lifter({'XMM0': Expr('real1', FLOAT, 'float'),
+                   'XMM1': Expr('real2', FLOAT, 'float')})
+    execute(lift, 'f30f5fc1')       # maxss xmm0, xmm1
+    assert lift.regs['XMM0'].text == '(real1 > real2 ? real1 : real2)'
+    lift = lifter({'XMM0': Expr('real1', FLOAT, 'float'),
+                   'XMM1': Expr('real2', FLOAT, 'float')})
+    execute(lift, 'f30f5dc1')       # minss xmm0, xmm1
+    assert lift.regs['XMM0'].text == '(real1 < real2 ? real1 : real2)'
+
+
+def test_maxss_missing_operand_is_unknown_not_zero():
+    lift = lifter({'XMM1': Expr('real2', FLOAT, 'float')})
+    execute(lift, 'f30f5fc1')       # maxss xmm0, xmm1 with xmm0 absent
+    t = lift.regs['XMM0'].text
+    assert '0f' not in t and 'real2' in t and t.startswith('(v')

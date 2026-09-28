@@ -37,15 +37,19 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   order -- TextMeshPro/TextCore are the longest single images (159.9 s /
   113.3 s) despite low method counts, and no cheap static proxy (count,
   code bytes, max/top-5 extent) ranks them high.
-- Audit-batch-3 deferred findings, still open: F1 unmodelled-instruction
-  invalidation (MAXSS/MINSS have operand-shape entries but no arithmetic
-  in `insn.py`), F2 value-type fragment discard, Dec F5-F6 (latent, 0
-  corpus hits). F3 (XMM0-5 clobber), F4 (array stride), F5 (memory-size
-  map), Dec F3/F4 (hop-fold/select guards) and the BSS ambiguous-name
-  ties are fixed (sections below), as are the runtime vtable sentinel,
-  the swapped PE/Android counters and the `--only` no-match exit.
+- Audit-batch-3 deferred findings, still open: F1's remaining half
+  (invalidate the destination of genuinely unmodelled instructions --
+  SHUFPS ~1,646, CVTDQ2PS ~197 live reads in Assembly-CSharp), F2
+  value-type fragment discard, Dec F5-F6 (latent, 0 corpus hits).
+  F1's MAXSS/MINSS arithmetic family, F3 (XMM0-5 clobber), F4 (array
+  stride), F5 (memory-size map), Dec F3/F4 (hop-fold/select guards) and
+  the BSS ambiguous-name ties are fixed (sections below), as are the
+  runtime vtable sentinel, the swapped PE/Android counters and the
+  `--only` no-match exit.
 
 **Landed/closed pointers (sections below; not open work):**
+- F1 slice (MAXSS/MINSS arithmetic): hardware-exact max/min; one golden
+  moved and was read (mi 23931), goldens regenerated (2026-09-28).
 - BSS ambiguous-name ties: decline the annotation instead of first-row
   luck (2026-09-28; output-neutral on the fixture, 3 cells).
 - F3 XMM0-5 clobber: missing SSE operands render an honest unknown
@@ -73,6 +77,36 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: F1 slice -- MAXSS/MINSS arithmetic (2026-09-28, LANDED)
+
+MAXSS/MINSS had operand-shape rows but no handler, so the destination
+kept a stale live value (usually a fabricated `0f`). The SSE branch now
+models MAXSS/MINSS/MAXSD/MINSD as the hardware-exact conditional
+`(a > b ? a : b)` -- the second operand on equal/unordered, which is not
+`Math.Max`'s NaN behavior. Long operand texts are bound to temps first
+so a nested chain cannot double its way into `_mk`'s overflow
+placeholder (77 such lines exist tree-wide; the count is unchanged
+before/after).
+
+Observed recovery (`FIMSpace/FColorMethods`): the old body tested and
+divided by the stale `hdrColor.a`; the new one recovers the full
+max(r,g,b,a) chain and divides by it. One golden moved and was read:
+mi 23931 `FPSDisplay.Update` (28 -> 30 lines), which now carries the
+`min()` the old body dropped; goldens regenerated with
+`tools/make_goldens.py` against the scoped (Assembly-CSharp) clean sweep.
+
+Measured on Assembly-CSharp vs `final_out` (r10): **59 files changed**
+(the 49 before this slice + 10); `for (`/`while (` unchanged; brace
+0/490; parse 0 bad / 0 ERROR / 0 MISSING; goldens 64/64 after
+regeneration.
+
+F1's other half -- invalidating the destination of genuinely unmodelled
+instructions (SHUFPS ~1,646, CVTDQ2PS ~197 live reads in AC) -- remains
+open.
+
+Tests: +2 portable (`tests/test_native_values.py`: exact max/min render,
+missing operand is an unknown).
 
 ## Current work: BSS ambiguous-name ties decline (2026-09-28, LANDED)
 

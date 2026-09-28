@@ -773,6 +773,38 @@ class _InsnMixin:
             # disturbing the pair itself (which ordinary je/jne
             # consumers still read).
             return
+        if mn in (Mnemonic.MAXSS, Mnemonic.MINSS, Mnemonic.MAXSD, Mnemonic.MINSD):
+            # MAXSS/MINSS were absent from every handler, so the destination
+            # kept a stale live value (usually a fabricated `0f`). Hardware
+            # semantics: return the SECOND operand on equal or unordered
+            # (NaN), which is exactly this conditional -- not Math.Max,
+            # which propagates NaN differently.
+            dst = reg_name(ins.op0_register)
+            a = self.reg(dst)
+            if A(1) == OpKind.REGISTER:
+                be = self.reg(reg_name(ins.op1_register))
+            else:
+                be = self._read_mem(ins, asm)
+            fty = _R4_TY if mn in (Mnemonic.MAXSS, Mnemonic.MINSS) else _R8_TY
+            self._hint_tok(a, fty)
+            self._hint_tok(be, fty)
+            av = self._fp_operand(a)
+            bv = self._fp_operand(be)
+            if len(av.text) + len(bv.text) > 40:
+                # a nested max/min doubles both operand texts at every
+                # level; bind long operand expressions to real temps once
+                # (never the fabricated = 0 overflow placeholder that
+                # _mk emits past its cap).
+                for _e in (av, bv):
+                    if len(_e.text) > 12 and not _e._unk:
+                        self._bind(_e)
+            cmp_op = '>' if mn in (Mnemonic.MAXSS, Mnemonic.MAXSD) else '<'
+            e = self._mk('(%s %s %s ? %s : %s)' % (
+                av.text, cmp_op, bv.text, av.text, bv.text),
+                av.ty if (av is not None and isinstance(av.ty, tuple)) else fty,
+                'float')
+            self.set_reg(dst, e)
+            return
         if mn in (Mnemonic.ADDSS, Mnemonic.ADDSD, Mnemonic.SUBSS, Mnemonic.SUBSD,
                   Mnemonic.MULSS, Mnemonic.MULSD, Mnemonic.DIVSS, Mnemonic.DIVSD):
             dst = reg_name(ins.op0_register)
