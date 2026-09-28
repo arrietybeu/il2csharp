@@ -14,6 +14,8 @@ by the move. All repo paths below are root-relative.
 - `docs/reference.md` — working-loop rules (§4), baselines / promotion /
   known artifacts (§6), gotchas (§7), next-up families (§2), Batch 19
   gate methodology (§5). Read §4 and §7 before any nontrivial change.
+- `docs/construct-mapping.md` — what native constructs recover as what C#,
+  implementation notes, the detailed validation gates and limitations.
 - `docs/public_release.md` — what must never be published (licensed
   fixture, decompiled trees) and the scrubbed-export checklist.
 - `docs/reviews/` — per-release notes: `REVIEW.md` (Review 77) and
@@ -21,8 +23,8 @@ by the move. All repo paths below are root-relative.
   These are historical records: the 2026-09-28 public scrub removed the
   older golden archives, raw logs and body dumps they reference (see
   `docs/public_release.md`).
-- `../README.md` (repo root) — native-construct mapping: what recovers
-  as what C#.
+- `../README.md` (repo root) — quick start: install, usage, output shape,
+  supported targets, testing, limitations.
 - `../CLAUDE.md` (repo root) — architecture and mandatory
   correctness/validation guardrails.
 

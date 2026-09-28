@@ -383,8 +383,9 @@ in the `il2cpp/` package (split out of the former `il2csharp.py` +
 
 Every public name is re-exported from `il2cpp/__init__.py`, so
 `from il2cpp import Lifter, Decompiler, Il2Cpp` works.
-`README.md` documents, in detail, what native constructs recover as what C#
-— read it before assuming a construct is unhandled.
+`docs/construct-mapping.md` documents, in detail, what native constructs
+recover as what C# — read it before assuming a construct is unhandled
+(the root `README.md` is the quick start).
 
 ## Repo layout (2026-09-08 consolidation)
 

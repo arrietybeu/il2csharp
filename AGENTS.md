@@ -14,7 +14,8 @@ start there, then `docs/todo.md` (Current work section).
    `docs/handoff-2026-09-23.md` — historical stop records; live work is
    `docs/todo.md`. `nowtodo.md` no longer exists.
 4. `docs/README.md` — map of every doc and `§NN` cross-reference.
-5. Root `README.md` — what native constructs recover as what C#.
+5. `docs/construct-mapping.md` — what native constructs recover as what
+   C#, plus the detailed internals/validation notes.
 
 ## Code map
 
