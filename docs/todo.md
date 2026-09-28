@@ -39,13 +39,15 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   code bytes, max/top-5 extent) ranks them high.
 - Audit-batch-3 deferred findings, still open: F1 unmodelled-instruction
   invalidation (MAXSS/MINSS have operand-shape entries but no arithmetic
-  in `insn.py`), F2 value-type fragment discard, F3 XMM0-5 clobber, Dec
-  F5-F6 (latent, 0 corpus hits), BSS name ties. F4 (array stride), F5
+  in `insn.py`), F2 value-type fragment discard, Dec F5-F6 (latent, 0
+  corpus hits), BSS name ties. F3 (XMM0-5 clobber), F4 (array stride), F5
   (memory-size map) and Dec F3/F4 (hop-fold/select guards) are fixed
   (sections below), as are the runtime vtable sentinel, the swapped
   PE/Android counters and the `--only` no-match exit.
 
 **Landed/closed pointers (sections below; not open work):**
+- F3 XMM0-5 clobber: missing SSE operands render an honest unknown
+  instead of a fabricated `0f` (2026-09-28).
 - Dec F3/F4: hop-fold scope/label/write guards and null-operator skip in
   the select pass (2026-09-28; latent, output-neutral).
 - F4 array stride + F5 memory-size map: stride-verified indices and true
@@ -69,6 +71,37 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: F3 -- missing SSE operands are unknown, not `0f` (2026-09-28, LANDED)
+
+Scalar-SSE and packed-logical handlers substituted a fabricated `0f` for
+an operand register that is simply absent (clobbered by an earlier call),
+so `real2 + 0f` and `(1.0f - 0f)` printed as if the value were zero.
+`_fp_operand` now mints a fresh unknown (`vN`, `_unk`) for the NAME only;
+the arithmetic around it still renders.
+
+**A rejected first attempt, recorded.** Seeding XMM0-5 into
+`_fresh_unknowns` after calls (the obvious reading of the item) was
+implemented, tested and **reverted**: the raw block statements were
+identical and only the `_u` temp numbering differed, yet the type
+inference regressed in 146 files -- mi 24212 `FixedUpdate` turned
+`for (int num2 = 0; ...)` into `object obj27 = 0; while (obj27 < ...)`.
+The leak was real (XMM0-5 are caller-saved); the lever was wrong. The
+narrow fix has no such coupling.
+
+Measured on Assembly-CSharp vs `final_out` (r10, so it also carries the
+earlier batches): **49 files changed** (the previous 15 plus 34
+F3-affected); `for (`/`while (` counts unchanged at 381/593 (no loop
+regressions); fabricated arithmetic drops: `+ 0f` 73 -> 47, `- 0f`
+64 -> 25, `* 0f` 28 -> 16, `/ 0f` 3 -> 0. All 64 goldens still pass.
+
+Gates (Assembly-CSharp only): strict scoped build at `--workers 1`: 490
+types / 6,622 bodies / 0 failed / 0 fallbacks; brace 0/490; parse
+0 bad / 0 ERROR / 0 MISSING.
+
+Tests: +2 portable (`tests/test_native_values.py`: GPR-only seeding plus
+the missing-`addss`-operand unknown), replacing the seeding test from
+the rejected attempt.
 
 ## Current work: Dec F3/F4 -- hop-fold and select guards (2026-09-28, LANDED)
 

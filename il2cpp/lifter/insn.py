@@ -793,10 +793,10 @@ class _InsnMixin:
                                      for _, v, _, _ in aparts):
                 self._hint_tok(a, fty)
                 self._hint_tok(be, fty)
-                b_txt = be.text if be else '0' + sfx
+                b_txt = self._fp_operand(be).text
                 if op == '+' and _int_lit(b_txt) is not None and _int_lit(b_txt) < 0:
                     op, b_txt = '-', str(-_int_lit(b_txt))
-                fe = self._mk(_bin_txt(a.text if a else '0f',
+                fe = self._mk(_bin_txt(self._fp_operand(a).text,
                                        (a._prec if a else None) or _ATOM_PREC,
                                        op, b_txt,
                                        (be._prec if be else None) or _ATOM_PREC),
@@ -815,10 +815,10 @@ class _InsnMixin:
             b0 = b0 or be
             self._hint_tok(a0, fty)
             self._hint_tok(b0, fty)
-            b_txt = b0.text if b0 else '0' + sfx
+            b_txt = self._fp_operand(b0).text
             if op == '+' and _int_lit(b_txt) is not None and _int_lit(b_txt) < 0:
                 op, b_txt = '-', str(-_int_lit(b_txt))
-            low = self._mk(_bin_txt(a0.text if a0 else '0f',
+            low = self._mk(_bin_txt(self._fp_operand(a0).text,
                                     (a0._prec if a0 else None) or _ATOM_PREC,
                                     op, b_txt,
                                     (b0._prec if b0 else None) or _ATOM_PREC),
@@ -884,8 +884,8 @@ class _InsnMixin:
                 return
             self._hint_tok(a, _R4_TY)
             self._hint_tok(be, _R4_TY)
-            b_txt = be.text if be else '0f'
-            fe = self._mk(_bin_txt(a.text if a else '0f', (a._prec if a else None) or _ATOM_PREC,
+            b_txt = self._fp_operand(be).text
+            fe = self._mk(_bin_txt(self._fp_operand(a).text, (a._prec if a else None) or _ATOM_PREC,
                                    op, b_txt, (be._prec if be else None) or _ATOM_PREC),
                           a.ty if (a is not None and isinstance(a.ty, tuple)) else _R4_TY, 'float')
             fe._prec = _BIN_PREC.get(op)

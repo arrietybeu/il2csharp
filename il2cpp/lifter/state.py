@@ -1831,6 +1831,18 @@ class _StateMixin:
             e._unk = True             # fix 58: clobbered, not re-written
             self.regs[r] = e
 
+    def _fp_operand(self, e):
+        """A missing register operand in an FP/SSE operation is an
+        unknown, never a fabricated `0f` zero. Only the NAME is
+        unknown; the arithmetic around it still renders."""
+        if e is not None:
+            return e
+        u = getattr(self, '_u', 0) + 1
+        self._u = u
+        e = Expr('v%d' % u, None, '?')
+        e._unk = True
+        return e
+
     def _mk(self, text, ty=None, kind='?', cap=240):
         """Build an Expr, materializing oversized expressions into a temp var
         to prevent exponential text growth from self-referential folds."""

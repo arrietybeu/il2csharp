@@ -199,3 +199,20 @@ def test_direct_loop_can_recover_memory_operand_after_header_replay():
     lift._memory_rhs_loop_guard = False
     execute(lift, '412b4c8020')
     assert lift.regs['RCX'].text == '30 - ammo[slot]'
+
+
+def test_fresh_unknowns_seed_volatile_gprs_only():
+    lift = lifter()
+    lift._fresh_unknowns()
+    assert lift.regs['RAX']._unk
+    # XMM registers are not seeded here: the SSE handlers substitute an
+    # unknown at the missing operand instead (temp numbering stays stable).
+    assert 'XMM0' not in lift.regs
+
+
+def test_missing_sse_operand_is_an_unknown_not_zero():
+    lift = lifter({'XMM1': Expr('real5', FLOAT, 'float')})
+    execute(lift, 'f30f58c1')       # addss xmm0, xmm1
+    e = lift.regs['XMM0']
+    assert 'real5' in e.text and '0f' not in e.text
+    assert e.text.startswith('v')   # unknown left operand, honest vN
