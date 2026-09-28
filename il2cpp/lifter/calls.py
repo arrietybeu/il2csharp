@@ -2328,6 +2328,21 @@ class _CallsMixin:
                     self.emit(ins.ip, '', asm)
                 return
 
+        # --- Interlocked.CompareExchange(ref loc, value, comparand)
+        if target is not None and target in getattr(self, 'rt_interlocked', ()) \
+                and len(arg_exprs) >= 3:
+            _loc, _val, _cmp = arg_exprs[0], arg_exprs[1], arg_exprs[2]
+            if _loc is not None and _val is not None and _cmp is not None \
+                    and isinstance(_loc.text, str) and _loc.text.startswith('&'):
+                _e = self._mk(
+                    'System.Threading.Interlocked.CompareExchange(ref %s, %s, %s)'
+                    % (_loc.text[1:], _val.text, _cmp.text),
+                    _val.ty if isinstance(_val.ty, tuple) else None, 'obj')
+                self.regs['RAX'] = _e
+                if self.asm_comments and asm:
+                    self.emit(ins.ip, '', asm)
+                return
+
         # --- object allocation helper: sub_x(typeof(T)) -> new T()
         if target is not None and target == self.rt_alloc and recv is not None                 and recv.kind == 'klass':
             tn = self.il.type_name(recv.ty)

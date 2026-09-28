@@ -204,6 +204,24 @@ class _StateMixin:
                 and code.count(bytes.fromhex('ff5010')) == 1
                 and code.rstrip(b'\xcc').endswith(b'\xc3'))
 
+    def _is_interlocked_helper(self, target):
+        """Recognize the Interlocked.CompareExchange helper.
+
+        Exact body: `lock cmpxchg [rcx],rdx` with the comparand staged in
+        RAX from R8, `cmovne` keeping the observed old value, a call (the
+        GC write barrier for reference stores), and the old value in RAX.
+        Only the write-barrier call displacement varies.
+        """
+        if not HAVE_ICED or not target or not self.bin.is_exec_va(target):
+            return False
+        if self.il.addr_candidates.get(target) or target in self.bin.exports:
+            return False
+        prefix = bytes.fromhex('40534883ec20498bd8498bc0f0480fb111480f45d8e8')
+        suffix = bytes.fromhex('488bc34883c4205bc3')
+        code = self.bin.read(target, len(prefix) + 4 + len(suffix))
+        return code is not None and code.startswith(prefix) \
+            and code[len(prefix) + 4:] == suffix
+
     # ---- unregistered pure-FP32-unary leaves ---------------------------
     # Ground truth: 0x1804cdb00, the CRT log10f behind AudioVolumeSliders'
     # `sub_1804cdb00(volume)` (mi 23548/23549). The lift sprayed four stale
@@ -1039,6 +1057,16 @@ class _StateMixin:
                 self.rt_isinst.add(_t)
                 if _fin:
                     self.rt_isinst.add(_fin)
+        # Interlocked.CompareExchange helper (lock cmpxchg [loc],value with
+        # the comparand in R8): 21 AC sites on the fixture, events/state.
+        self.rt_interlocked = set()
+        for _t in sorted(set(cnt) | set(stats)):
+            _fin = self._thunk_final(_t)
+            if self._is_interlocked_helper(_t) or (
+                    _fin and _fin != _t and self._is_interlocked_helper(_fin)):
+                self.rt_interlocked.add(_t)
+                if _fin:
+                    self.rt_interlocked.add(_fin)
         self._cls_init_export = next(
             (va for va, nm0 in b.exports.items()
              if nm0 == 'il2cpp_runtime_class_init'), None)

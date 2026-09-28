@@ -970,3 +970,20 @@ def test_isinst_helper_rejects_a_mutated_body():
     bad2[ISINST_BODY.find(bytes.fromhex('480f44c7'))] ^= 0xFF   # cmove
     lift2, target2 = isinst_helper_lifter(bytes(bad2))
     assert not lift2._is_isinst_helper(target2)
+
+
+# The Interlocked.CompareExchange helper body (lock cmpxchg core).
+INTERLOCKED_BODY = bytes.fromhex(
+    '40534883ec20498bd8498bc0f0480fb111480f45d8e846580300488bc34883c4205bc3')
+
+
+def test_interlocked_helper_recognized_structurally():
+    lift, target = isinst_helper_lifter(INTERLOCKED_BODY)
+    assert lift._is_interlocked_helper(target)
+
+
+def test_interlocked_helper_rejects_a_mutated_body():
+    bad = bytearray(INTERLOCKED_BODY)
+    bad[12] ^= 0xFF                     # the lock cmpxchg opcode
+    lift, target = isinst_helper_lifter(bytes(bad))
+    assert not lift._is_interlocked_helper(target)

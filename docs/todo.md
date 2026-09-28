@@ -9,17 +9,17 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 `docs/public_release.md`).
 
 **Open, by payoff:**
-- Codegen-intrinsic recognition (program; landings 1-2 landed 2026-09-28):
+- Codegen-intrinsic recognition (program; landings 1-3 landed 2026-09-28):
   a census of plain `sub_` calls found 38,254 sites / 2,663 targets,
   **36,313 sites (95%) with zero metadata candidates** -- IL2CPP runtime
-  helpers that metadata can never name. Open families by sites:
-  isinst/castclass thunk `0x180479f80` -- the `typeof(T)` subset now
-  renders `obj as T` (9 AC calls; 2,388 tree-wide), the opaque klass
-  expressions (5,802) still need element-class provenance; alloc/box
-  `0x18043dc60` (2,446), class-init `0x18043e360` (861),
-  `Interlocked.CompareExchange` `0x18043f880` (582), bounds-checked
-  element address `0x1803ed830`/`0x1803ed860` (745), parameterized
-  interface dispatch (the A-family that saves R9:
+  helpers that metadata can never name. Landed families: nullary
+  interface dispatch (55 AC helper sites -> 0), IsInst `typeof(T)`
+  (9 AC calls -> `obj as T`), `Interlocked.CompareExchange` (21 AC calls
+  -> 0). Open families by sites: isinst/castclass klass expressions
+  (5,802; need element-class provenance), alloc/box `0x18043dc60`
+  (2,446), class-init `0x18043e360` (861), bounds-checked element
+  address `0x1803ed830`/`0x1803ed860` (745), parameterized interface
+  dispatch (the A-family that saves R9:
   `IUpdatableGraph.CanUpdateAsync` slot 3, `IAstarAI.set_OnSearchPath`
   slot 26). The census script and report were local scratch (temp).
 - ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`):
@@ -59,6 +59,8 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   work planned.
 
 **Landed/closed pointers (sections below; not open work):**
+- Codegen intrinsics landing 3: `Interlocked.CompareExchange` renders as
+  the managed call (2026-09-28; one golden moved and was read, mi 47817).
 - Codegen intrinsics landing 2: IsInst `typeof(T)` sites render
   `obj as T` (2026-09-28; one golden moved and was read, mi 86310).
 - F2 value-type fragments + consumer lane slicing (2026-09-28; one
@@ -92,6 +94,33 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: codegen intrinsics, landing 3 -- Interlocked.CompareExchange (2026-09-28, LANDED)
+
+`_is_interlocked_helper` recognizes the helper by its exact body -- `lock
+cmpxchg [rcx],rdx` with the comparand staged in RAX from R8, `cmovne`
+keeping the observed old value, the barrier call, and the old value in
+RAX -- with only the barrier's call displacement varying. `_call`
+renders `System.Threading.Interlocked.CompareExchange(ref loc, value,
+comparand)` (the emitter strips to `Interlocked` and adds the using);
+the result keeps the value argument's type.
+
+Measured on Assembly-CSharp: **all 21 helper call sites converted**
+(`remaining sub_18043f880( calls: 0`), e.g. the event adds become
+`System.Threading.Interlocked.CompareExchange(ref
+FusionNetworkManager.__field_OnVoiceConnectionReady, ...)`. One golden
+moved and was read: mi 47817 `AwaitableSocketAsyncEventArgs.Reserve`,
+whose old body was a raw helper call plus a separate comparison and is
+now one managed call with the comparison preserved. Goldens regenerated
+against the scoped clean sweep and 64/64 pass.
+
+Gates (Assembly-CSharp only, `--workers 1`): 490 types / 6,622 bodies /
+0 failed / 0 fallbacks; brace 0/490; parse 0 bad / 0 ERROR / 0 MISSING;
+portable suite 965 passed.
+
+Tests: +2 portable (`tests/test_recovery_followup.py`: structural proof,
+mutated `lock cmpxchg` decline) and +1 game
+(`tests/test_game_interlocked.py`: mi 26409 renders the managed call).
 
 ## Current work: codegen intrinsics, landing 2 -- IsInst `as` (2026-09-28, LANDED)
 
