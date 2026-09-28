@@ -41,7 +41,8 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (invalidate the destination of genuinely unmodelled instructions --
   SHUFPS ~1,646, CVTDQ2PS ~197 live reads in Assembly-CSharp; **probed
   and deferred, lane modeling first -- section below**), F2 value-type
-  fragment discard, Dec F5-F6 (latent, 0 corpus hits).
+  fragment discard (**probed and deferred, consumer lane slicing first
+  -- section below**), Dec F5-F6 (latent, 0 corpus hits).
   F1's MAXSS/MINSS arithmetic family, F3 (XMM0-5 clobber), F4 (array
   stride), F5 (memory-size map), Dec F3/F4 (hop-fold/select guards) and
   the BSS ambiguous-name ties are fixed (sections below), as are the
@@ -78,6 +79,35 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (the r10 five).
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
+
+## Current work: F2 aggregate-load fragments -- probed and declined (2026-09-28, NOT LANDED)
+
+The audit's F2 (`_aggregate_load` discards whole value-type fragments, so a
+whole-struct read renders its first field: `this.particleColor =
+newColor.r`) was implemented and iterated three times on fixture evidence,
+then reverted:
+
+- The first pass returned every whole-size fragment. It fixed genuine
+  whole copies (BabyDoll `set` is `movups xmm0,[rdx]` + a 16-byte store;
+  the old body stored only `value.x`, dropping 12 bytes) but regressed
+  single-field structs: the two `InputInteractionContext` getters lost
+  their precise `this.m_State` spelling and mi 31664's InternedString
+  became `object obj5`.
+- Guarding "first field narrower than the load" fixed those, but the
+  tuple check was still needed: typedef 9862 is marked valuetype under a
+  0x12 CLASS tuple, so mi 80548 returned the whole job struct where the
+  method wanted `this.positions`. With `te in (0x11, 0x15)` the golden
+  stopped moving.
+- The remaining blocker is consumption, not loading: a whole 16-byte
+  Color read used by scalar arithmetic renders `hdrColor / real3` and
+  `(targetColor - real3)`, where the native consumes the low lane
+  (`hdrColor.r`, `targetColor.r`). The scalar-SSE and store consumers
+  slice `_parts` but not `_slice` fragments.
+
+Prerequisite: consumer-side lane slicing for `_slice` values in the
+scalar-SSE arithmetic and store paths (`_piece_value` already has the
+slicing logic). Then the whole-size fragment return (with the `&`-base,
+first-field and tuple guards above) can land.
 
 ## Current work: F1 invalidation -- probed and declined (2026-09-28, NOT LANDED)
 
