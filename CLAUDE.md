@@ -22,7 +22,7 @@ via System.Array, rename barrier + param exclusion, interface dispatch
 naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
 direct calls), each decline-by-default with portable + game pins; plus
 documented disproofs (hinted receivers, ?addr tightening,
-receiver-driven generics). 1118 tests pass (918 portable + 200 game),
+receiver-driven generics). 1140 tests pass (938 portable + 202 game),
 suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
 both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
 and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
@@ -338,7 +338,7 @@ fix-123 in `validation_reports/review123_*`.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test
-(`tests/test_source_format.py`) enforces this contract. **1118 tests pass** (918 portable + 200 game;
+(`tests/test_source_format.py`) enforces this contract. **1140 tests pass** (938 portable + 202 game;
 64 golden snapshots, all green).
 `tests/goldens_review84.json` is **hash-only**: each of the 64 snapshots
 keeps its MethodDef row, VA, owner and name plus `body_sha256` /
@@ -556,7 +556,14 @@ against one of these two real binaries, not asserted from reading code.
    on is one you introduced.
 4. A **full rebuild + brace audit** (`python il2csharp.py <target> -o
    <outdir>`, then `python work/lib/tree_brace_audit.py <outdir>`) is the
-   final gate before promoting a build to the baseline. Note its blind
+   final gate before promoting a build to the baseline. `--workers N`
+   emits the 88 images across a process pool, heaviest image (by native
+   method count) submitted first, and is the same tree byte-for-byte: the
+   full 8-worker r10 tree is 11,276/11,276 files identical to `final_out`
+   (275.0 s vs 1,085 s serial on 2026-09-28; 262.9 s on 2026-09-26), so
+   the determinism cross-check costs ~4.5 min instead of 18. `--workers 0`
+   is half the cores, max 8 -- a wide build takes the machine; and
+   `--max-methods` and `--bodies` force 1. Note its blind
    spot: it sums `{`/`}` counts per **file**, so a `try { } else { }`
    (individually balanced brace pairs, invalid C#) or two compensating
    errors in the same file both read as 0. Prefer the full-corpus

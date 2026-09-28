@@ -27,14 +27,58 @@ own status tag rules.
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2). Evidence in the two
   DOCUMENTED sections directly below.
-- Parallel full-tree build (`cli.py` loops 88 images serially; 18.1 min
-  idle / 24.4 min contended per gate): the `--workers N` process pool
-  landed as `72d08e7` (262.9 s with 8 workers) and was reverted by
-  `35b4c7e` (bare revert, no reason recorded) — the feature, its tests
-  and its measurements live in those two commits. Re-landing plus a
-  longest-image-first schedule is the open lead.
+- Parallel full-tree build: **re-landed 2026-09-28** (the 2026-09-26
+  `--workers N` process pool was reverted bare by `8fdbea2`; re-landed
+  merged with the sunshine CLI flags and given a heaviest-image-first
+  schedule). Full 8-worker tree byte-identical to `final_out` r10
+  (11,276/11,276 files; 275.0 s vs 1,085 s serial this session, box at
+  ~30% external load); a 6-worker instrumented run is **0.93 worker
+  efficient**. Open: the residual wall is total work and box load, not
+  tail order -- TextMeshPro/TextCore are the longest single images
+  (159.9 s / 113.3 s) despite low method counts, and no cheap static
+  proxy (count, code bytes, max/top-5 extent) ranks them high.
 - Audit batch 2 (LANDED, section below): the `mov rbp,rsp` frame lost
   at a CFG merge + `slot_var`'s three sign conventions.
+
+## Current work: parallel build re-land + heaviest-first schedule (2026-09-28, LANDED)
+
+`--workers N` (first landed 2026-09-26 as `fb90229`, reverted minutes
+later by `8fdbea2` with no reason recorded) is re-landed onto the r10
+source, merged with the sunshine CLI additions (`--quiet`, `--json`,
+`--manifest`, `--bodies`), and extended with a heaviest-image-first
+submission order.
+
+- **Schedule.** `_weighted_order` sorts the images by native method count
+  (`MethodDef.image`, filled by the parent's `assign_images`) before
+  submitting them; the executor hands queued work out in submission
+  order, so the largest task no longer sits at the tail. Reporting stays
+  in metadata order, so the log is the serial log; ties are stable, so
+  the schedule is deterministic.
+- **Integration declines.** `--bodies` now forces `--workers 1` with a
+  note (the payload is written by the parent's own Emitter; a pool would
+  write the empty dict), joining `--max-methods` and single-image
+  builds. `--quiet` suppresses progress and decline notes, never errors.
+- **Byte-identity, full tree.** Strict `r11_out1` build at `--workers 8`:
+  11,183 type files / 114,458 bodies / 0 failed / 0 structured fallbacks
+  / 0 type-emission failures; per-file sha256 against `final_out` (r10):
+  **11,276/11,276 identical**, 0 only-in-either-side. Neither the
+  re-land nor the schedule changes an emitted byte.
+- **Wall time, measured not asserted.** 275.0 s this session vs 262.9 s
+  (2026-09-26) vs 1,085 s serial. An instrumented 6-worker run measured
+  worker efficiency **0.93** (busy 3,046 s over a 546 s wall), i.e. the
+  tail costs <=8%, and the longest images are `Unity.TextMeshPro`
+  (159.9 s) and `TextCoreTextEngine` (113.3 s) -- under-ranked by method
+  count (1,739 / 719 methods). Code bytes, max method extent and top-5
+  extent all fail to rank them high, so the residual wall is real work
+  plus box load (the box carried ~30% external CPU load all session, and
+  the same 6-worker run measured ~2x the 8-worker build's per-image
+  times): the next lever is a cost model or splitting one image across
+  workers, not more reordering.
+- **Tests.** +13 portable (re-landed `tests/test_parallel_build.py`),
+  +7 portable (bodies decline, weighted-order stability/subset/ties,
+  quiet gating), +2 game (`tests/test_game_parallel_build.py`, serial vs
+  pool byte-identity). Suite **1140 passed / 0 failed** (938 portable +
+  202 game).
 
 ## Current work: promotion r10 (2026-09-28, PROMOTED)
 

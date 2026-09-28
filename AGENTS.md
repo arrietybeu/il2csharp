@@ -68,7 +68,9 @@ Goldens key on MethodDef row (`mi`), never VA (shared bodies alias).
 env above; suite is fully green — any failure is yours).
 
 **Rebuild a tree:** `python il2csharp.py testgame -o <name_out1> [--only
-Assembly-CSharp]`. Name output `*_out1/` (git-ignored). Gate with
+Assembly-CSharp] [--workers N]`. `--workers 0` = half the cores (max 8);
+the tree is byte-identical, only the schedule changes; `--max-methods`
+forces 1. Name output `*_out1/` (git-ignored). Gate with
 `python work/lib/tree_brace_audit.py <dir>` (must print 0 unbalanced).
 
 **Land a source fix:** repro first (probe script in temp dir, never in
@@ -113,10 +115,15 @@ per-instance runtime caches (the audit-batch-1 class). Strict rebuild:
 11,183 files / 114,458 bodies / 0 failed / 0 fallbacks / 0 type-emission
 failures in 1,465,953 ms (contended box); brace 0; parse 0/0/0/0; paired
 sweep 0 crashes both sides, into_block 8,075/2,046 unchanged, unknown -57;
-one golden moved (mi 80548) and reviewed; suite 1118 passed / 0 failed.
-Deferred audit findings (stale destinations on unmodelled instructions,
-value-type fragment discard, XMM0 clobber, array stride) are filed in
-`docs/todo.md` with evidence.
+one golden moved (mi 80548) and reviewed. Later the same day the
+2026-09-26 `--workers N` build was re-landed (it had been reverted bare)
+with a heaviest-image-first submission order: a full 8-worker build is
+byte-identical to `final_out` (11,276/11,276 files) and the instrumented
+6-worker run measures 0.93 worker efficiency, so the remaining wall is
+total work and box load, not tail order. Suite 1140 passed / 0 failed
+(938 portable + 202 game). Deferred audit findings (stale destinations on
+unmodelled instructions, value-type fragment discard, XMM0 clobber, array
+stride) are filed in `docs/todo.md` with evidence.
 
 Also on 2026-09-28 the repository history was scrubbed for public release:
 `git filter-repo` removed the licensed fixture and every full-body /
@@ -172,10 +179,11 @@ Assembly-CSharp, 3 of 60 changed files), a pre-existing lossy area.
 Also landed (batch 1, output-neutral): three class-level `td.index` caches
 made per-instance, `type_sizes` no longer negative (91 rows), Android
 registration fallback gated on ELF.
-A full-tree rebuild measures **1,085 s (18.1 min)** for 114,458 bodies
-(r9, two builds at 1,085/1,086 s), so the `~7-9 min` in `CLAUDE.md` and
-`docs/reference.md` is stale; the 88-image loop is embarrassingly parallel
-and still serial.
+A full-tree rebuild measures **1,085 s (18.1 min)** serial for 114,458
+bodies (r9, two builds at 1,085/1,086 s); `--workers 8` measured 262.9 s
+(2026-09-26) and 275.0 s (2026-09-28, box ~30% external load) with the
+tree byte-identical, so the `~7-9 min` in `CLAUDE.md` and
+`docs/reference.md` is stale.
 Landed before that: identical-render shared collapse (70 sites),
 shared-stub native disassembly comments, noreturn-shared forwarder
 returns (63 Neon `/* nothing */` -> `return Target(args)`), r8
@@ -186,9 +194,17 @@ to read.
 Documented (no source change, markers stay honest): same-name
 receiver-pick disproof (~1.9k sites need sidecar, not sig
 elimination), constant-zero fold disproof (239 sites, 2 VAs).
-Full suite: 1071 passed / 0 failed (877 portable + 194 game), verified
-against the fixture this session. Open, by payoff: parallel full-tree build
-(18.1 min -> ~1.7 min), unmodelled-instruction invalidation
+Full suite: 1140 passed / 0 failed (938 portable + 202 game), verified
+against the fixture this session. The parallel build is re-landed and
+scheduled: `--workers N` in `cli.py` (default 1), merged with the
+sunshine `--quiet`/`--json`/`--manifest`/`--bodies` flags, with heaviest
+images submitted first (`_weighted_order`, native-method count);
+`--workers 0` is half the cores (max 8); `--max-methods` and `--bodies`
+force 1. A full 8-worker build is byte-identical to `final_out` r10
+(11,276/11,276 files) and the instrumented 6-worker run measures 0.93
+worker efficiency, so the remaining wall is total work and box load, not
+tail order (TextMeshPro/TextCore are the longest images despite low
+method counts). Open, by payoff: unmodelled-instruction invalidation
 (`insn.py`'s silent fall-through leaves a stale destination live),
 ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`),
 `op_Implicit` return-type subset (tens of sites), Cpp2IL declaration

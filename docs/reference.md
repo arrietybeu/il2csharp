@@ -246,10 +246,14 @@ The batch-19-era baseline chain it originally described
 - `PYTHONHASHSEED`: fix it before comparing builds.
 - Syntax-check package modules (`python -m compileall il2cpp`) before any
   rebuild — instant, catches typos before a multi-minute build.
-- Builds: 18.1 min measured idle (1,085 s, 114,458 bodies, all 88 images
+- Builds: 18.1 min serial idle (1,085 s, 114,458 bodies, all 88 images
   at r9); r10 measured 24.4 min (1,465,953 ms) with an unrelated build
-  competing for CPU. Gate ~2 min; validator sweep ~23 min; sim re-gate
-  ~2 min. The old `~7-9 min` and `1,359 s` figures are pre-r9 and stale.
+  competing for CPU. `--workers 8` measured 262.9 s (2026-09-26, r9) and
+  275.0 s (2026-09-28, box ~30% external load), tree byte-identical on
+  both; a 6-worker instrumented run is 0.93 worker-efficient (tail costs
+  <=8%), so the residual wall is total work and box load, not tail order.
+  Gate ~2 min; validator sweep ~23 min; sim re-gate ~2 min. The old
+  `~7-9 min` and `1,359 s` figures are pre-r9 and stale.
 - Census by the RENDERED NAME, not by scanning method heads for CALL
   instructions (the class-init twin is tail-jmp-reached — a call
   census never sees it).
