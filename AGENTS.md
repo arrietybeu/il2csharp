@@ -91,6 +91,10 @@ unproven shape keeps today's spelling; raw is always honest.
   commit secrets/fixtures churn; never regen snapshots or promote output
   without an explicit user call. Stash-prove-clean before attributing a
   break to your change.
+- Never make the repo public as-is: `testgame/` is licensed game data in
+  Git LFS history, and `final_out/` is decompiled game output. The
+  scrubbed-export checklist (fixture purge, hash-only goldens, license
+  scope) is `docs/public_release.md`.
 
 ## Current state (2026-09-28, `main` clean; `final_out/` = r10)
 

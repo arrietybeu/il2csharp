@@ -14,6 +14,8 @@ by the move. All repo paths below are root-relative.
 - `docs/reference.md` — working-loop rules (§4), baselines / promotion /
   known artifacts (§6), gotchas (§7), next-up families (§2), Batch 19
   gate methodology (§5). Read §4 and §7 before any nontrivial change.
+- `docs/public_release.md` — what must never be published (licensed
+  fixture, decompiled trees) and the scrubbed-export checklist.
 - `docs/reviews/` — per-release notes: `REVIEW.md` (Review 77) and
   `REVIEW78.md`–`REVIEW87.md`, plus `REPLACEMENT.md` (release handoff).
 - `../README.md` (repo root) — native-construct mapping: what recovers

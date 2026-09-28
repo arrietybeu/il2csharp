@@ -4,6 +4,7 @@ The original goldens_review77.json is retained unchanged. Review 84 keeps the
 same 64 MethodDefs and freezes its constructor/allocation bodies only after the
 complete strict-build, parse, direct-sweep, and output-audit gates.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -44,4 +45,9 @@ def test_real_method_snapshot(game_decompiler, snapshot):
     m = il.meta.methods[snapshot["mi"]]
     assert hex(m.addr) == snapshot["va"]
     actual = dec.lift_method(m, il.meta.typedefs[m.declaring])
-    assert actual == snapshot["body"]
+    if "body" in snapshot:
+        assert actual == snapshot["body"]
+        return
+    # hash-only (public) variant: the same pin without the game-derived text
+    digest = hashlib.sha256("\n".join(actual).encode("utf-8")).hexdigest()
+    assert digest == snapshot["body_sha256"]

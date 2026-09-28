@@ -621,3 +621,11 @@ in this environment as of fix 111, but the smoke's compiled-pattern checks
 cover different ground than the whole-tree Roslyn probe above, which is the
 current compilation gate). See `docs/reviews/REVIEW84.md`, `docs/reviews/REVIEW87.md`,
 and `docs/todo.md` for current validation and compilation blockers.
+
+## License
+
+MIT — see `LICENSE`. The license covers the decompiler source, tests,
+tools and docs only; it does not cover any game data or decompiled output
+(`testgame/`, `final_out/`), which must not be redistributed. The
+repository is private; `docs/public_release.md` is the checklist for
+building a scrubbed public copy (fixture removal, hash-only goldens).
