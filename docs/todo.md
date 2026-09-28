@@ -20,9 +20,10 @@ own status tag rules.
   (5.6k), different-name mega-shared (3.9k), same-typedef overloads,
   struct-field folding, per-arm Color, Navigation merge-side,
   instantiation proof.
-- Full-tree promotion: **DONE at r9** (2026-09-26, all 88 images,
-  aggregate `73f4426d\u2026c8821`); `final_out/` holds r9 everywhere and
-  r7/r8 are history.
+- Full-tree promotion: **DONE at r10** (2026-09-28, all 88 images,
+  aggregate `b0c87509…b9fe`, 302 files changed vs r9, per-file sha256
+  proof, 0 mismatches); `final_out/` holds r10 everywhere and r9/r8/r7
+  are history.
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2). Evidence in the two
   DOCUMENTED sections directly below.
@@ -37,7 +38,20 @@ own status tag rules.
   12-worker process pool predicts ~102 s (10.8x, 11% imbalance) at
   513 MB/worker. Not started.
 
-## Current work: audit batch 3 — five landings, three layers (2026-09-28, LANDED)
+## Current work: promotion r10 (2026-09-28, PROMOTED)
+
+User-authorized ("promote without rebuilding"). The audit-batch-3 strict
+candidate `r10_out1` was promoted in place by rename with a per-file sha256
+proof: 11,276 files, candidate aggregate `b0c87509…b9fe` == promoted
+aggregate, **0 mismatches / 0 missing / 0 stale**, file set identical to r9
+(302 files differ). `final_out/` now holds r10 everywhere; the r9 backup
+and the emptied candidate path were removed. Evidence:
+`validation_reports/promotion_r10.json`. The candidate was built from the
+batch tree (commit `cbcbe3e` content, now `99d14bb` after rebasing onto
+`e3763a8`; that commit's CLI/emitter additions do not change any emitted
+`.cs` file).
+
+## Current work: audit batch 3 — five landings, three layers (2026-09-28, LANDED/PROMOTED)
 
 Read-only audits of the lifter, dec+emitter, and runtime layers plus a
 base/post corpus census produced five defects of the same class -- silently

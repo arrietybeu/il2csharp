@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-## Current source and validation authority — r4c promoted tree
+## Current source and validation authority — r10 promoted tree
 
 The working source contains fixes 114 (method dispatch flags, generic
 constructor names), 115 (unsafe on pointer-signature methods/ctors), 116
@@ -22,25 +22,28 @@ via System.Array, rename barrier + param exclusion, interface dispatch
 naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
 direct calls), each decline-by-default with portable + game pins; plus
 documented disproofs (hinted receivers, ?addr tightening,
-receiver-driven generics). 1071 tests pass (877 portable + 194 game),
+receiver-driven generics). 1117 tests pass (917 portable + 200 game),
 suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
 both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
 and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
 11,276 paths, aggregate `c0ee1b78…1236`). Promotions since (r4d, r5, r7, r8
-Assembly-CSharp) were superseded by **r9, 2026-09-26**: a full-tree strict
-rebuild from `e20f82f` -- 11,183 type files / 114,458 bodies / 0 failed /
-0 structured fallbacks / 0 type-emission failures in 1,085 s, brace 0,
-parse 0/0/0, an independent second build byte-identical, promoted by
-mirror copy (aggregate `73f4426d\u2026c8821`). `final_out/` now holds r9
-everywhere, so r7 and r8 are history; see `docs/todo.md` Current work and
-`validation_reports/promotion_r*.json`. The `bckups/` copies of prior
+Assembly-CSharp) were superseded by **r9, 2026-09-26** (aggregate
+`73f4426d…c8821`), and r9 by **r10, 2026-09-28**: the audit-batch-3 tree
+built strict (11,183 type files / 114,458 bodies / 0 failed / 0
+structured fallbacks / 0 type-emission failures in 1,465,953 ms under
+external CPU contention), brace 0 unbalanced, parse 0/0/0/0, paired
+sweep 0 crashes with `into_block` 8,075/2,046 unchanged, promoted by
+in-place move with a per-file sha256 proof (11,276 files, aggregate
+`b0c87509…b9fe`, 0 mismatches / 0 stale; `promotion_r10.json`).
+`final_out/` now holds r10 everywhere, so r9 and earlier are history; see
+`docs/todo.md` Current work and `validation_reports/promotion_r*.json`. The `bckups/` copies of prior
 promoted trees were deleted 2026-09-19 per user call — GitHub is now the
 history authority; any prior tree rebuilds from git history. See `docs/todo.md` for exact evidence and the
 remaining compiler backlog.
 
 Read `docs/reviews/REVIEW84.md`–`REVIEW87.md`, `docs/todo.md`'s Current work section, and
 `docs/archive/reviews-log.md` section 0bf first. `final_out/` is the complete strict-built
-tree (r9, all 88 images, 2026-09-26; every earlier aggregate below is history),
+tree (r10, all 88 images, 2026-09-28; every earlier aggregate below is history),
 not the Review 84 file set alone, b42/b76, or a partial candidate. Historical paragraphs below retain
 the reasoning behind older changes; their old "current" labels are not release authority.
 `validation_reports/review84/summary.json` (baseline) plus `validation_reports/followups_sweep.json`,
@@ -335,7 +338,7 @@ fix-123 in `validation_reports/review123_*`.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test
-(`tests/test_source_format.py`) enforces this contract. **1047 tests pass** (859 portable + 188 game;
+(`tests/test_source_format.py`) enforces this contract. **1117 tests pass** (917 portable + 200 game;
 64 golden snapshots, all green).
 `goldens_review77.json`, `goldens_review79.json`,
 `goldens_review80.json`, `goldens_review82.json`, and `goldens_review83.json` are
