@@ -5,7 +5,7 @@
 tree out, with every method body reconstructed from the native x64 code and
 cross-referenced against IL2CPP metadata.
 
-**Status: r10 (2026-09-28).** 1118 tests pass (918 portable + 200
+**Status: r10 (2026-09-28).** 1147 tests pass (943 portable + 204
 fixture-backed); the strict build covers 11,183 files / 114,458 bodies with
 0 failures or structured fallbacks; the brace audit and the tree-sitter
 parse gate are clean. The recovered game **does not yet compile** — clean
@@ -41,7 +41,8 @@ python il2csharp.py <game-dir-or-metadata> -o <outdir>
 `<target>` is a game folder (containing `<Data>/il2cpp_data` and
 `GameAssembly.dll`) or a direct path to `global-metadata.dat` / the binary.
 Common options: `--only Assembly-CSharp`, `--metadata FILE --binary FILE`,
-`--decls-only`, `--strict`, `--asm`, `--probe`; run with `--help` for the
+`--decls-only`, `--strict`, `--asm`, `--probe`, `--workers N` (parallel
+assembly emission; 0 = half the cores, max 8); run with `--help` for the
 full list.
 
 ## Output
@@ -130,7 +131,7 @@ python -m pytest -q -m "not game"   # portable
 python -m pytest -q                 # + fixture-backed (needs testgame/)
 ```
 
-Current: **1118 passed** (918 portable + 200 fixture-backed). Corpus gates
+Current: **1147 passed** (943 portable + 204 fixture-backed). Corpus gates
 on a built tree:
 
 ```text

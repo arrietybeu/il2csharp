@@ -1,9 +1,10 @@
 # Docs index
 
 Project notes live here since the 2026-09-12 reorg (previously loose
-`*.md` files at the repo root; the pre-reorg set is backed up at
-`bckups/docs_reorg_2026-09-12.zip`). The two Python sources are untouched
-by the move. All repo paths below are root-relative.
+`*.md` files at the repo root; the pre-reorg set was backed up at
+`bckups/docs_reorg_2026-09-12.zip` until the whole `bckups/` directory was
+deleted on 2026-09-19, so this history is the record). The two Python
+sources are untouched by the move. All repo paths below are root-relative.
 
 ## Start here (live)
 

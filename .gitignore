@@ -56,6 +56,8 @@ il2csharp_out/
 il2csharp_out*/
 b*_out1/
 *_out1/
+*_out2/
+*_dbg/
 *.zip
 
 # validation_reports: keep summaries/verification + SHA256SUMS, ignore big blobs

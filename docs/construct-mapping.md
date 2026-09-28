@@ -337,11 +337,11 @@ cross-check in a debugger or Ghidra.
   cap on one pathological method, not bugs. Worth re-running that sweep
   after any change to the post-processing pipeline: iterate every method,
   wrap `lift_method` in try/except, count — no file writes needed, so it's
-   fast (`work/sweep_audit.py` has the pattern).
+   fast (`work/lib/sweep_audit.py` has the pattern).
 
 ## Validation
 
-Current gates (r10 tree): **1118 tests (918 portable + 200 game)**;
+Current gates (r10 tree): **1147 tests (943 portable + 204 game)**;
 a strict 11,183-file/114,458-body build with no failures or fallbacks; a
 0-error syntax parse of every C# file; and a paired 116,178-method direct
 sweep with 0 crashes and structural metrics unchanged (into_block

@@ -429,6 +429,8 @@ Dependencies are pinned in `requirements.txt` / `requirements-dev.txt`
 ```
 python il2csharp.py <game-dir-or-metadata> -o <outdir> [options]   # or: python -m il2cpp
   --only NAMES     comma-separated assembly filters (substring), e.g. Assembly-CSharp
+  --workers N      emit assemblies in N processes (0 = half the cores, max 8);
+                   the tree is byte-identical, only the schedule changes
   --decls-only     signatures only, skip body lifting
   --max-methods N  cap lifted bodies (debug)
   --probe          diagnostics: registrations + modules, no output files
@@ -473,24 +475,19 @@ against one of these two real binaries, not asserted from reading code.
    the old sibling `../work/` was merged into this repo on 2026-09-08) for the pattern: load
    `Metadata`/`Il2Cpp`/`Lifter`/`Decompiler`, find a method by VA in
    `meta.methods`, call `dec.lift_method(m, td)`, print. No file I/O.
-1b. **Golden snapshot tests** (batch 38, backlog #6): `PYTHONHASHSEED=0
-   pytest work/lib/test_goldens.py` re-lifts ~50 frozen bodies (every
-   batch-writeup ground-truth VA + a deterministic spread) and diffs
-   them against `work/goldens.json` — ~13s including the metadata
-   load, and it sees wrong-but-parseable output the gates can't.
-   Regenerate with `work/lib/make_goldens.py` ONLY after a gated build,
-   and read the diff before accepting it; the goldens pin whatever the
-   current source produces, bugs included. Goldens key on the
-   MethodDef row (`mi`), never the VA — shared-body VAs are ambiguous.
-   Historical b76 suite: 50/50 at the gated `work/artifacts/ts_gate_b76_out1.txt` build (regenerated at b75;
-   batches 75-76 moved none of the 50 -- 75's 8 phi renumberings were
-   read then frozen, 76's classinst shapes are unsampled; pinned by
-   `work/batches/b76_test.py` 16/16 instead). Do NOT regenerate
-   off unbuilt source.
-   SAMPLE-SIZE CAVEAT (batch 42): the suite is 50 bodies — a
-   structural pass change touching ~6k methods (5% of the corpus)
-   moved only 5/50 of them. For statement-pass soundness changes, the
-   golden suite finds the SHAPE of a wrong transformation, the
+1b. **Golden snapshot tests:** `PYTHONHASHSEED=0 python -m pytest -q
+   tests/test_game_goldens.py` re-lifts the 64 frozen bodies in the
+   tracked, hash-only `tests/goldens_review84.json` (MethodDef row `mi`,
+   owner, name, `body_sha256`/`body_lines`) and sees wrong-but-parseable
+   output the gates can't. `tools/make_goldens.py` regenerates it ONLY
+   after a gated build; read the diff before accepting it — the goldens
+   pin whatever the current source produces, bugs included. `--full`
+   writes bodies for local review only; never commit it. Do NOT
+   regenerate off unbuilt source.
+   SAMPLE-SIZE CAVEAT (batch 42): the suite is 64 bodies — a
+   structural pass change touching ~6k methods (5% of the corpus) moved
+   only 5 of the then-50 bodies. For statement-pass soundness changes,
+   the golden suite finds the SHAPE of a wrong transformation, the
    full-corpus sweep (item 3) sizes it — run both before a build.
 2. A **tree-sitter parse gate** (`work/lib/ts_gate.py` in this repo, pip:
    `tree-sitter tree-sitter-c-sharp`) is the gate that sees what brace

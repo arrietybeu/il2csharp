@@ -27,7 +27,8 @@ start there, then `docs/todo.md` (Current work section).
     holds the class; `registration`/`types`/`fields`/`eh` mixins).
   - `lifter/` — symbolic x64 over iced-x86 (`state`, `values`, `insn`,
     `calls`, `render` mixins; `aggregates.py` = stack-tile/struct
-    provenance; `expr.py` = `Expr` values).
+    provenance).
+  - `expr.py` — `Expr` values (text + il2cpp type tuple + kind).
   - `dec/` — CFG + structured decompiler: `build` (blocks, site scans),
     `analyze` (dry/real exec, merges, phi copies), `structure`
     (the ~25-stage statement pipeline — pass order matters, read it
@@ -64,7 +65,7 @@ $env:PYTHONPATH = '<repo>;tools'
 Goldens key on MethodDef row (`mi`), never VA (shared bodies alias).
 
 **Portable tests:** `python -m pytest -q -m "not game" --disable-warnings`
-(836 pass). **Full suite:** `python -m pytest -q` (~3.5 min, needs fixture
+(943 pass). **Full suite:** `python -m pytest -q` (~7 min, needs fixture
 env above; suite is fully green — any failure is yours).
 
 **Rebuild a tree:** `python il2csharp.py testgame -o <name_out1> [--only
@@ -93,8 +94,9 @@ unproven shape keeps today's spelling; raw is always honest.
 - GitHub is the history authority for the post-scrub history. The
   2026-09-28 scrub removed the licensed fixture and every full-body /
   disassembly artifact from all of it and pruned LFS, so every pre-scrub
-  commit hash changed; that older history survives only in a local bundle
-  (see `docs/public_release.md`). Never track or publish game data or
+  commit hash changed; the intended local backup bundle is no longer
+  present (see `docs/public_release.md`), so hashes in older docs no
+  longer resolve anywhere. Never track or publish game data or
   decompiled output (`testgame/`, `final_out/`, `work/` are all ignored),
   never commit secrets, and never regen snapshots or promote output
   without an explicit user call. Stash-prove-clean before attributing a
@@ -120,8 +122,8 @@ one golden moved (mi 80548) and reviewed. Later the same day the
 with a heaviest-image-first submission order: a full 8-worker build is
 byte-identical to `final_out` (11,276/11,276 files) and the instrumented
 6-worker run measures 0.93 worker efficiency, so the remaining wall is
-total work and box load, not tail order. Suite 1140 passed / 0 failed
-(938 portable + 202 game). Deferred audit findings (stale destinations on
+total work and box load, not tail order. Suite 1147 passed / 0 failed
+(943 portable + 204 game). Deferred audit findings (stale destinations on
 unmodelled instructions, value-type fragment discard, XMM0 clobber, array
 stride) are filed in `docs/todo.md` with evidence.
 
