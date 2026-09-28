@@ -40,16 +40,17 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 - Audit-batch-3 deferred findings, still open: F1's remaining half
   (invalidate the destination of genuinely unmodelled instructions --
   SHUFPS ~1,646, CVTDQ2PS ~197 live reads in Assembly-CSharp; **probed
-  and deferred, lane modeling first -- section below**), F2 value-type
-  fragment discard (**probed and deferred, consumer lane slicing first
-  -- section below**), Dec F5-F6 (latent, 0 corpus hits).
-  F1's MAXSS/MINSS arithmetic family, F3 (XMM0-5 clobber), F4 (array
-  stride), F5 (memory-size map), Dec F3/F4 (hop-fold/select guards) and
-  the BSS ambiguous-name ties are fixed (sections below), as are the
-  runtime vtable sentinel, the swapped PE/Android counters and the
-  `--only` no-match exit.
+  and deferred, lane modeling first -- section below**) and Dec F5-F6
+  (latent, 0 corpus hits). F1's MAXSS/MINSS arithmetic family, F2
+  (value-type fragments), F3 (XMM0-5 clobber), F4 (array stride), F5
+  (memory-size map), Dec F3/F4 (hop-fold/select guards) and the BSS
+  ambiguous-name ties are fixed (sections below), as are the runtime
+  vtable sentinel, the swapped PE/Android counters and the `--only`
+  no-match exit.
 
 **Landed/closed pointers (sections below; not open work):**
+- F2 value-type fragments + consumer lane slicing (2026-09-28; one
+  golden moved and was read, mi 72576).
 - F1 slice (MAXSS/MINSS arithmetic): hardware-exact max/min; one golden
   moved and was read (mi 23931), goldens regenerated (2026-09-28).
 - BSS ambiguous-name ties: decline the annotation instead of first-row
@@ -80,7 +81,42 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 - Closed 2026-09-25, markers stay honest: same-name receiver pick
   (~1.9k) and constant-zero fold (239/2), both DISPROVED with evidence.
 
-## Current work: F2 aggregate-load fragments -- probed and declined (2026-09-28, NOT LANDED)
+## Current work: F2 landed -- whole value-type loads and lane slicing (2026-09-28, LANDED)
+
+The F2 decline below was superseded the same day: the missing piece was
+consumer-side lane slicing, and both halves land together.
+
+- `_aggregate_load` now returns a whole-size value-type fragment (the
+  value itself) instead of declining into `_field_expr`'s first field,
+  guarded four ways: exact whole-size load at offset 0, no `&x` address
+  base, the first field must be narrower than the load (a single-field
+  struct keeps its precise `this.m_State` spelling), and the type tuple
+  must be a genuine VALUETYPE/GENERICINST (a typedef marked valuetype
+  under a CLASS tuple -- mi 80548's `this` -- is type confusion, not a
+  value load).
+- Scalar-SSE arithmetic treats `_slice` fragments like `_parts`: the low
+  lane comes from `_piece_value`, so a whole Color used by `divss`/`subss`
+  renders `hdrColor.r`, not `hdrColor`.
+
+Verified change-only against a HEAD baseline (same scoped build):
+**88 Assembly-CSharp files**. Sampled and read: BabyDoll's `set` is a
+16-byte `movups` copy and now stores `value` (was `value.x`, dropping 12
+bytes); `FColorMethods.LerpMaterialColor` recovers per-field construction
+(`(targetColor.r - color1.r) * real2 + color1.r`); `AutosaveScreen`
+recovers `__t__builder.m_coreState.m_defaultContextAction` through the
+whole struct; `CameraTranslation` slices `initialPosition.x` where the old
+body subtracted a float from a Vector3. One golden moved and was read:
+mi 72576 `get_ywxx`, `object obj1` -> `half half1` (a typing
+improvement); goldens regenerated against the scoped clean sweep.
+
+Gates (Assembly-CSharp only, `--workers 1`): 490 types / 6,622 bodies / 0
+failed / 0 fallbacks; brace 0/490; parse 0 bad / 0 ERROR / 0 MISSING;
+goldens 64/64; portable suite 961 passed.
+
+Tests: +5 portable (`tests/test_native_values.py`: whole-value load,
+address-base decline, partial decline, scalar-SSE lane slicing).
+
+## Current work: F2 aggregate-load fragments -- probed and declined (2026-09-28, superseded by the landing above)
 
 The audit's F2 (`_aggregate_load` discards whole value-type fragments, so a
 whole-struct read renders its first field: `this.particleColor =

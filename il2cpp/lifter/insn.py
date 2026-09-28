@@ -821,8 +821,11 @@ class _InsnMixin:
             # SD on R8
             fty = _R4_TY if sfx == 'f' else _R8_TY
             aparts = getattr(a, '_parts', None)
-            if not aparts or not all(self.il._type_enum(v.ty) == 0x0c
-                                     for _, v, _, _ in aparts):
+            a_lane = getattr(a, '_slice', None) is not None
+            b_lane = getattr(be, '_slice', None) is not None
+            if (not aparts and not a_lane and not b_lane) or (
+                    aparts and not all(self.il._type_enum(v.ty) == 0x0c
+                                       for _, v, _, _ in aparts)):
                 self._hint_tok(a, fty)
                 self._hint_tok(be, fty)
                 b_txt = self._fp_operand(be).text

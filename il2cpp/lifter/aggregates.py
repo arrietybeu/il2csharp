@@ -382,10 +382,35 @@ class _AggregatesMixin:
         if td is None:
             return None
         offset = sdisp(ins.memory_displacement)
-        if self.meta.typedefs[td].is_valuetype:
+        _te0 = (base.ty[1] >> 16) & 0xFF if isinstance(base.ty, tuple) else None
+        if self.meta.typedefs[td].is_valuetype and _te0 in (0x11, 0x15):
             frag = self._fragment(base, offset, width)
             if frag.text != base.text:
                 return frag
+            # A load that covers EXACTLY the whole value type is the value:
+            # returning the fragment stops the fall-through to `_field_expr`,
+            # which resolves the first field and renders a narrower access
+            # than the instruction (audit F2). An `&x` base is an ADDRESS,
+            # not a value; a single field covering the whole load keeps its
+            # own precise spelling; and a typedef marked valuetype under a
+            # CLASS tuple is a type-confusion, not a value load.
+            try:
+                size = self.il._sf_field_size(base.ty, 0)
+            except Exception:
+                size = None
+            if size is not None and width == size and offset == 0 \
+                    and not str(base.text).startswith('&'):
+                fsize = None
+                try:
+                    td0 = self._td_of(base.ty)
+                    chain0 = self.il.instance_field_chain(td0) if td0 is not None else None
+                    first = (chain0 or {}).get(0x10)
+                    if first is not None:
+                        fsize = self.il._sf_field_size(self.il.types[first[1]], 0)
+                except Exception:
+                    fsize = None
+                if fsize != width:
+                    return frag
             return None
         chain = self.il.instance_field_chain(td) or {}
         if offset in chain:

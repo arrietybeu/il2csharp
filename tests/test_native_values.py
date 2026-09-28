@@ -234,3 +234,49 @@ def test_maxss_missing_operand_is_unknown_not_zero():
     execute(lift, 'f30f5fc1')       # maxss xmm0, xmm1 with xmm0 absent
     t = lift.regs['XMM0'].text
     assert '0f' not in t and 'real2' in t and t.startswith('(v')
+
+
+VEC8 = (0, 0x11 << 16)
+
+
+def whole_value_lifter(fields=None, field_types=None):
+    lift = lifter(fields=fields if fields is not None else {},
+                  field_types=field_types)
+    lift.meta.typedefs[0].is_valuetype = True
+    lift.il._sf_field_size = lambda ty, depth: 8 if ty == VEC8 else 4
+    lift.il._closed_type_key = lambda t: t
+    return lift
+
+
+def test_whole_valuetype_load_is_the_value_not_its_first_field():
+    lift = whole_value_lifter()
+    lift.regs = {'RBX': Expr('particleColor', VEC8, 'obj')}
+    execute(lift, '488b03')         # mov rax, [rbx] -- the whole 8-byte value
+    assert lift.regs['RAX'].text == 'particleColor'
+
+
+def test_whole_valuetype_load_from_an_address_base_declines():
+    lift = whole_value_lifter()
+    lift.regs = {'RBX': Expr('&s_8', VEC8, 'ptr')}
+    ins = Decoder(64, bytes.fromhex('488b03'), ip=0x1000).decode()
+    assert lift._aggregate_load(ins) is None
+
+
+def test_partial_valuetype_load_still_declines():
+    lift = whole_value_lifter()
+    lift.regs = {'RBX': Expr('particleColor', VEC8, 'obj')}
+    execute(lift, '8b03')           # mov eax, [rbx] -- 4 of 8 bytes
+    assert lift.regs['RAX'].text != 'particleColor'
+
+
+def test_scalar_sse_slices_a_whole_value_fragment():
+    # A whole-value fragment consumed by a scalar op must render its low
+    # lane (`particleColor.x`), not the whole struct.
+    lift = whole_value_lifter(fields={0x10: ('x', 0)},
+                              field_types=[FLOAT, FLOAT])
+    lift.regs = {'RBX': Expr('particleColor', VEC8, 'obj'),
+                 'XMM1': Expr('real2', FLOAT, 'float')}
+    execute(lift, '488b03')         # rax = particleColor (whole fragment)
+    lift.regs['XMM0'] = lift.regs['RAX']
+    execute(lift, 'f30f58c1')       # addss xmm0, xmm1
+    assert lift.regs['XMM0'].text == 'particleColor.x + real2'
