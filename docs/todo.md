@@ -1,5 +1,46 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: codegen intrinsics, landing 7 -- bounds-checked element address, slice A (2026-09-30, LANDED)
+
+`0x1803ed830` (stride 0x178 via imul) and `0x1803ed860` (stride
+0x60 via lea/shl) compute `RCX+0x20+index*stride` with an unsigned
+`cmp edx,[rcx+0x18]; jae fail` OOB guard -- the SZARRAY layout.
+`_is_array_addr_helper` pins every byte but the two displacements (the
+jae must land exactly on the fail call) and extracts the stride; naming
+`il2cpp_array_addr` with `RT_ARITY` 2 drops the spray residues:
+`sub_1803ed830(arr, idx, num7, num8)` ->
+`il2cpp_array_addr(arr, idx)`. 764 TextMeshPro/TextCore sites convert,
+0 residue. The stride rides in `rt_array_addr` for slice B.
+
+Coverage note: the cnt/stats sample behind `_init_runtime_ids` is
+Assembly-CSharp-only while these helpers serve TextMeshPro/TextCore,
+so `_call_name` consults a memoized lazy `_array_addr_name` on every
+otherwise-unresolved target (the class-init-twin precedent; per
+instance, binary-local). The parameterized-dispatch landing can reuse
+the seam.
+
+Measured on TextMeshPro+TextCore vs a stashed baseline (same scoped
+build): **6 files changed** -- call renames plus dead-spray DCE
+(TextGenerator -960 lines) and dead-switch-arm collapse (4
+`switch (vector31)` with pure-dead case arms -> if-chains).
+Soundness: trimmed args are provably unread by the callee (only RAX
+written); every removed temp name is fully absent from the new
+GenerateTextMesh body (dangling check: NONE); no removed line carries
+calls/branches/returns. Paired structural-token deltas are exactly the
+dead arms, stub entries (-2 addresses) and dropped
+`using static __SharedBodyStubs;` imports.
+
+Gates (TextMeshPro+2 TextCore images, `--workers 1`): 246 types /
+2,655 bodies / 0 failed / 0 fallbacks; brace 0/246; parse 0 bad /
+0 ERROR / 0 MISSING; all 764 converted sites carry exactly
+`(array, index)`; portable suite 1003 passed (+7); +2 game
+(`tests/test_game_array_addr.py`); goldens 64/64 unmoved.
+
+Slice B (open): render `&arr[i]` with stride == static element size
+(rank-1 only) -- consumer census: 662/764 (87%) feed immediate field
+derefs, the rest copies/wider-window uses. Needs the throw-edge and
+field-sugar interaction designed, not rushed.
+
 ## Current work: codegen intrinsics, landing 6 -- unanimous conversions at proven casts (2026-09-30, LANDED)
 
 A shared address whose every candidate is the same static
@@ -77,7 +118,7 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 `docs/public_release.md`).
 
 **Open, by payoff:**
-- Codegen-intrinsic recognition (program; landings 1-5 landed 2026-09-28/30):
+- Codegen-intrinsic recognition (program; landings 1-7 landed 2026-09-28/30):
   a census of plain `sub_` calls found 38,254 sites / 2,663 targets,
   **36,313 sites (95%) with zero metadata candidates** -- IL2CPP runtime
   helpers that metadata can never name. Landed families: nullary
@@ -87,10 +128,14 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   value propagating; 861 tree-wide), interface slow-path resolve
   `0x18043dc60` (26 AC calls -> named `il2cpp_interface_get_method`
   with the duplicated 4th arg dropped; 2,446 tree-wide -- the body
-  disproves the old alloc/box label). Open families by sites:
+  disproves the old alloc/box label), unanimous conversions at proven
+  casts (5 `Angle`/`StyleFloat` sites -> `T.op_Implicit`), and
+  bounds-checked element address slice A (764 TextMeshPro/TextCore
+  sites -> named `il2cpp_array_addr` with spray args trimmed; 745
+  tree-wide). Open families by sites:
   isinst/castclass klass expressions (5,802; need element-class
-  provenance), bounds-checked element
-  address `0x1803ed830`/`0x1803ed860` (745), parameterized interface
+  provenance), bounds-checked element address slice B (`&arr[i]`
+  indexed render), parameterized interface
   dispatch (the A-family that saves R9:
   `IUpdatableGraph.CanUpdateAsync` slot 3, `IAstarAI.set_OnSearchPath`
   slot 26). The census script and report were local scratch (temp).

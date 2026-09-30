@@ -29,6 +29,7 @@ class _StateMixin:
         'il2cpp_codegen_write_barrier': 2,
         'il2cpp_runtime_class_init': 1,
         'il2cpp_interface_get_method': 3,
+        'il2cpp_array_addr': 2,
     }
 
     @staticmethod
@@ -287,6 +288,90 @@ class _StateMixin:
                 and bytes.fromhex('48394310') in code
                 and b'\xc3' in code
                 and code.endswith(b'\xcc'))
+
+    def _is_array_addr_helper(self, target):
+        """Stride of the bounds-checked element-address helper, else None.
+
+        Ground truth: 0x1803ed830 (stride 0x178 via `imul
+        rax,rdx,imm32`) and 0x1803ed860 (stride 0x60 via
+        `lea rax,[rdx+rdx*2]; shl rax,5`). Both are
+        `(RCX=array, EDX=index) -> RAX = RCX+0x20+index*stride` with
+        an unsigned `cmp edx,[rcx+0x18]; jae fail` OOB guard -- the
+        Il2CppArray SZARRAY layout (length at +0x18, vector at +0x20).
+        The template pins every byte but the two displacements (the
+        jae must land exactly on the fail call, whose own displacement
+        varies like the write-barrier one in the interlocked proof).
+        Only the stride varies semantically; anything else keeps the
+        honest `sub_`. Never hardcodes an address.
+        """
+        if not HAVE_ICED or not target or not self.bin.is_exec_va(target):
+            return None
+        if self.il.addr_candidates.get(target) or target in self.bin.exports:
+            return None
+        start, finish = self.il.function_extent(target)
+        if start != target or finish is None or finish - target not in (34, 35):
+            return None
+        code = self.bin.read(target, finish - target)
+        if not code or len(code) not in (34, 35):
+            return None
+        if code[0:7] != bytes.fromhex('4883ec283b5118') or code[7] != 0x73:
+            return None
+        if len(code) == 34:
+            if code[9:12] != bytes.fromhex('4869c2'):
+                return None
+            stride = int.from_bytes(code[12:16], 'little')
+            tail = bytes.fromhex('4883c0204803c14883c428c3e8')
+            if code[16:29] != tail or len(code) != 34:
+                return None
+            call_off = 28
+        else:
+            if code[9:13] != bytes.fromhex('488d0452'):
+                return None
+            if code[13:16] != bytes.fromhex('48c1e0'):
+                return None
+            stride = 3 * (1 << code[16])
+            tail = bytes.fromhex('4883c0204803c14883c428c3e8')
+            if code[17:30] != tail or len(code) != 35:
+                return None
+            call_off = 29
+        if code[8] != (call_off - 9) & 0xFF or code[call_off] != 0xE8:
+            return None
+        if code[-1] != 0xCC:
+            return None
+        if not 0 < stride < 0x100000:
+            return None
+        return stride
+
+    def _array_addr_name(self, target):
+        """Memoized lazy name for the element-address helper.
+
+        The hot-target sample behind `_init_runtime_ids` is
+        Assembly-CSharp-only, but these helpers serve TextMeshPro /
+        TextCore -- so `_call_name` consults this on every otherwise
+        unresolved target (the class-init-twin precedent): one
+        structural proof per address, cached per instance (VAs are
+        binary-local). Never raises.
+        """
+        try:
+            cache = self.__dict__.setdefault('_array_addr_cache', {})
+            if target in cache:
+                return cache[target]
+            name = None
+            try:
+                if target and self.bin.is_exec_va(target) \
+                        and not (getattr(self.il, 'addr_candidates', None) or {}).get(target) \
+                        and target not in (getattr(self.bin, 'exports', None) or {}) \
+                        and target not in (getattr(self, 'rt_names', None) or {}):
+                    if self._is_array_addr_helper(target):
+                        self.rt_names[target] = 'il2cpp_array_addr'
+                        self.__dict__.setdefault('rt_array_addr', {})[target] = True
+                        name = 'il2cpp_array_addr'
+            except Exception:
+                name = None
+            cache[target] = name
+            return name
+        except Exception:
+            return None
 
     # ---- unregistered pure-FP32-unary leaves ---------------------------
     # Ground truth: 0x1804cdb00, the CRT log10f behind AudioVolumeSliders'
@@ -1156,6 +1241,21 @@ class _StateMixin:
                 self.rt_names[_t] = 'il2cpp_interface_get_method'
                 if _fin:
                     self.rt_names[_fin] = 'il2cpp_interface_get_method'
+        # Bounds-checked element-address helpers (0x1803ed830/860,
+        # 745 tree-wide sites): naming routes the sites through the
+        # `il2cpp_array_addr` arity trim (array, index). The stride
+        # rides in `rt_array_addr` for the indexed render follow-up.
+        self.__dict__.setdefault('rt_array_addr', {})
+        for _t in sorted(set(cnt) | set(stats)):
+            _fin = self._thunk_final(_t)
+            for _c in (_t,) if _fin in (None, _t) else (_t, _fin):
+                try:
+                    _st = self._is_array_addr_helper(_c)
+                except Exception:
+                    _st = None
+                if _st:
+                    self.rt_names[_c] = 'il2cpp_array_addr'
+                    self.__dict__.setdefault('rt_array_addr', {})[_c] = _st
         self._cls_init_export = next(
             (va for va, nm0 in b.exports.items()
              if nm0 == 'il2cpp_runtime_class_init'), None)

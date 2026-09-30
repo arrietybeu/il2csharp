@@ -1446,6 +1446,12 @@ class _CallsMixin:
         if target and self._is_class_init_twin(target):
             self.rt_names[target] = 'il2cpp_runtime_class_init'
             return 'il2cpp_runtime_class_init'
+        try:
+            _aan = self._array_addr_name(target)
+        except Exception:
+            _aan = None
+        if _aan is not None:
+            return _aan
         if self.rt_init_meta and target == self.rt_init_meta:
             return 'il2cpp_codegen_initialize_runtime_metadata'
         tgt = self._thunk_final(target) if target else None
