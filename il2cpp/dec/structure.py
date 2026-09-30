@@ -171,6 +171,7 @@ class _StructureMixin:
         raw = self._fence_void_calls(raw, m)
         raw = self._shared_equality_ops(raw, m)
         raw = self._shared_stub_casts(raw, m)
+        raw = self._shared_conv_resolve(raw, m)
         raw = self._escape_keywords(raw)
         raw = self._fresh_array_brackets(raw)
         rendered = self._name_interface_dispatch(self._render(raw))

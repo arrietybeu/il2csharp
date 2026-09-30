@@ -1,5 +1,31 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: codegen intrinsics, landing 6 -- unanimous conversions at proven casts (2026-09-30, LANDED)
+
+A shared address whose every candidate is the same static
+one-parameter conversion with distinct returns executes identical
+machine code, so a fix-104 caller-proven `(T)` cast naming exactly one
+return identifies the conversion (`_shared_conv_target`). The new
+`_shared_conv_resolve` pass (after `_shared_stub_casts`) renders
+`T.op_Implicit(arg)` and drops the cast: the Angle/StyleFloat/TimeValue
+triple at `0x182da54f0` resolves its 5 typed uses (3x Angle mi 17631:
+mi 20080/20698/20699; 2x StyleFloat mi 20246: mi 19412 x2) while all 31
+`object` sites and the stub decl keep the honest marker. Bare-object
+args, doubles, multi-arg, generic sharers, duplicate returns and
+unproven shapes all decline.
+
+Blast radius, proven tree-wide by registry census (not sampling): only
+2 unanimous conversion families exist (the triple plus
+StyleFloat/StyleInt with 0 cast sites), 5 cast sites total -- the
+paired UIElements diff is exactly those 5 lines in 3 files, 0 renumber
+cascades, 0 line-count changes. Assembly-CSharp has 0 eligible sites
+(output-neutral there by construction).
+
+Gates (UnityEngine.UIElementsModule, `--workers 1`): 802 types / 8,997
+bodies / 0 failed / 0 fallbacks; brace 0/802; parse 0 bad / 0 ERROR /
+0 MISSING; portable suite 996 passed (+14); +3 game
+(`tests/test_game_op_implicit.py`); goldens 64/64 unmoved.
+
 ## Current work: codegen intrinsics, landing 5 -- interface resolve helper named (2026-09-30, LANDED)
 
 `0x18043dc60` (2,446 sites) is not alloc/box -- the body proves it is
@@ -75,10 +101,10 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   (field sidecar + use->def) or instantiation proof, not call-shape
   elimination. Markers stay honest.
 - `op_Implicit` return-type subset (36 sites at `0x182da54f0`):
-  typed-use scan done 2026-09-30 -- 31 `object` sites decline;
-  **5 typed sites isolate one candidate each** (3x Angle mi 17631:
-  mi 20080/20698/20699; 2x StyleFloat mi 20246: mi 19412 x2;
-  TimeValue unproven anywhere). Landing-ready, not yet landed.
+  LANDED 2026-09-30 -- 31 `object` sites decline; the 5 typed sites
+  resolve (`Angle.op_Implicit` x3, `StyleFloat.op_Implicit` x2;
+  TimeValue unproven anywhere, marker stays). Proof: unanimous
+  conversion family + caller-proven cast + float-taking arg.
 - Cpp2IL declaration cross-check gate (proposed, not yet filed):
   diff emitted declarations against Cpp2IL-reconstructed DLLs.
 - Sidecar program (large, deferred by design): method+generic mixes

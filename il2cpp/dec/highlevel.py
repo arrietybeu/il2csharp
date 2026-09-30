@@ -3399,6 +3399,239 @@ class _HighLevelMixin:
                 out.append(l)
         return out
 
+    _CONV_CAST_RX = re.compile(r'\(([^()]+)\)sub_([0-9a-f]+)')
+
+    _CONV_NUM_TYPES = frozenset((
+        'float', 'int', 'uint', 'long', 'ulong', 'short', 'ushort',
+        'byte', 'sbyte', 'char', 'single', 'int32', 'uint32', 'int64',
+        'uint64', 'int16', 'uint16', 'byte', 'sbyte', 'char',
+    ))
+
+    def _shared_conv_target(self, va, cast):
+        """(qualifiedOwner, methodName) for a unanimous conversion family.
+
+        A shared address whose every candidate is a readable
+        non-generic static one-parameter conversion (op_Implicit /
+        op_Explicit, one shared name, identical parameter tuple,
+        non-byref parameter, non-sret returns with distinct type-name
+        spellings) executes identical machine code whatever the true
+        owner, so a caller-proven `(T)` cast naming exactly one return
+        identifies the conversion without guessing among twins (there
+        are none by construction: distinct returns). Anything else --
+        generics, mixed names/shapes, duplicate returns, an unmatched
+        cast -- declines to the honest marker. Never raises.
+        """
+        try:
+            il = self.L.il
+            cands = (getattr(il, 'addr_candidates', None) or {}).get(va)
+            if not cands or len(cands) < 2:
+                return None
+            try:
+                if va in self._stub_real_names():
+                    return None
+            except Exception:
+                pass
+            ms = []
+            for c in cands:
+                if not isinstance(c, tuple) or len(c) < 2 or c[0] != 'method':
+                    return None
+                if not (0 <= c[1] < len(self.L.meta.methods)):
+                    return None
+                ms.append(self.L.meta.methods[c[1]])
+            names = {(m.name or '').rpartition('.')[2] for m in ms}
+            if len(names) != 1 or names.pop() not in ('op_Implicit', 'op_Explicit'):
+                return None
+            if any((not m.is_static) or m.param_count != 1
+                   or getattr(m, 'generic_container', -1) != -1 for m in ms):
+                return None
+            try:
+                pts = []
+                for m in ms:
+                    ps = self.L.meta.method_params(m)
+                    if len(ps) != 1:
+                        return None
+                    pt = il.types[ps[0].type] if 0 <= ps[0].type < len(il.types) else None
+                    if pt is None or ((pt[1] >> 29) & 1):
+                        return None
+                    pts.append(pt)
+                if any(pt != pts[0] for pt in pts):
+                    return None
+            except Exception:
+                return None
+            rets = []
+            for m in ms:
+                rt = il.types[m.return_type] if 0 <= m.return_type < len(il.types) else None
+                if rt is None or il.returns_sret(rt):
+                    return None
+                try:
+                    rn = il.type_name(rt)
+                except Exception:
+                    return None
+                rets.append(rn)
+            if len(set(rets)) != len(rets):
+                return None
+            want = (cast or '').strip()
+            if rets.count(want) != 1:
+                return None
+            m0 = ms[rets.index(want)]
+            try:
+                td = self.L.meta.typedefs[m0.declaring]
+            except Exception:
+                return None
+            if '`' in (td.name or ''):
+                return None
+            owner = ('%s.' % td.namespace + td.name) if td.namespace else td.name
+            return (owner, m0.name)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _shared_conv_arg_ok(arg, amap):
+        """True when a single conversion argument is provably float-taking.
+
+        The native conversion consumes one float register, so a bare
+        object-typed temp would compile today (unboxing) and break as
+        `T.op(arg)`. Bare tokens need a proven numeric type from the
+        assign map; literals need a float/int spelling (never double);
+        complex expressions fire (no corpus counterexample -- the wire
+        value is the float lane). Never raises.
+        """
+        try:
+            a = (arg or '').strip()
+            if not a or a in ('_', '?'):
+                return False
+            if re.fullmatch(r'[A-Za-z_@]\w*', a):
+                ty = (amap or {}).get(a)
+                if ty is None:
+                    return False
+                head = re.split(r'[^A-Za-z0-9_]', ty.strip().split()[0])[-1].lower()
+                return head in _HighLevelMixin._CONV_NUM_TYPES
+            s = a
+            if s[:1] in ('+', '-'):
+                s = s[1:].strip()
+            if re.fullmatch(r'[0-9A-Za-z_.]+', s):
+                try:
+                    int(s, 0)
+                    return True
+                except ValueError:
+                    pass
+                if s[-1:] in ('f', 'F'):
+                    try:
+                        float(s[:-1])
+                        return True
+                    except ValueError:
+                        return False
+                # single-token double spelling (1.0, 2d): no implicit
+                # conversion to the float parameter.
+                return False
+            # complex expression (calls, arithmetic): the wire value is
+            # the float lane; no corpus counterexample. Bare-object
+            # temps are declined above.
+            return True
+        except Exception:
+            return False
+
+    def _shared_conv_line(self, line, amap):
+        """Rewrite a proven `(T)sub_X/*shared*/(arg)` conversion call.
+
+        The cast is fix-104 caller proof; `_shared_conv_target` adds
+        the unanimous-family proof. Emits the owner's conversion call
+        and drops the cast (the call now returns T). One bad span
+        keeps the line. Never raises.
+        """
+        try:
+            s = line
+            masked = self._stub_mask_line(s)
+            if 'sub_' not in masked or 'shared body,' not in s:
+                return line
+            out = []
+            pos = 0
+            for m in self._CONV_CAST_RX.finditer(masked):
+                cast, hx = m.group(1), m.group(2)
+                name_end = m.end()
+                if not self._stub_type_ok(cast):
+                    continue
+                pre = masked[:m.start()].rstrip()
+                if pre.endswith('!'):
+                    continue
+                span = self._stub_call_span(masked, name_end)
+                if span is None:
+                    continue
+                if 'shared body,' not in s[name_end:span[0]]:
+                    continue
+                inner = masked[span[0] + 1:span[1]]
+                depth = 0
+                parts = []
+                last = 0
+                bad = False
+                for k, ch in enumerate(inner):
+                    if ch == '(':
+                        depth += 1
+                    elif ch == ')':
+                        depth -= 1
+                        if depth < 0:
+                            bad = True
+                            break
+                    elif ch == ',' and depth == 0:
+                        parts.append(inner[last:k])
+                        last = k + 1
+                if bad:
+                    continue
+                parts.append(inner[last:])
+                if len(parts) != 1:
+                    continue
+                # map masked arg back: same offsets (mask preserves length)
+                a0 = span[0] + 1 + (len(parts[0]) - len(parts[0].lstrip()))
+                a1 = span[0] + 1 + len(parts[0].rstrip())
+                atext = s[a0:a1] if a1 > a0 else parts[0].strip()
+                if not self._shared_conv_arg_ok(atext, amap):
+                    continue
+                try:
+                    va = int(hx, 16)
+                except ValueError:
+                    continue
+                tgt = self._shared_conv_target(va, cast)
+                if tgt is None:
+                    continue
+                owner, mname = tgt
+                mname = (mname or '').rpartition('.')[2] or mname
+                out.append((m.start(), span[1] + 1, '%s.%s(%s)' % (owner, mname, atext)))
+            if not out:
+                return line
+            res = []
+            pos = 0
+            for a, b, rep in out:
+                if a < pos:
+                    return line
+                res.append(s[pos:a])
+                res.append(rep)
+                pos = b
+            res.append(s[pos:])
+            return ''.join(res)
+        except Exception:
+            return line
+
+    def _shared_conv_resolve(self, lines, m):
+        """Resolve unanimous conversion families at proven casts.
+
+        Runs after `_shared_stub_casts`: `(Angle)sub_182da54f0(...)`
+        becomes `Angle.op_Implicit(...)` when every candidate is the
+        same one-parameter conversion with distinct returns and the
+        cast names exactly one. Bare-object args, doubles, multi-arg
+        and unproven shapes keep today's spelling. Never raises.
+        """
+        try:
+            amap = self._stub_assign_types(lines, m)
+        except Exception:
+            amap = {}
+        out = []
+        for ln in lines:
+            try:
+                out.append(self._shared_conv_line(ln, amap))
+            except Exception:
+                out.append(ln)
+        return out
+
     def _shared_stub_casts(self, lines, m):
         """Caller-proven `(T)` casts over unresolved `sub_X` calls. -- fix 104
 
