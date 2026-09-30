@@ -1,5 +1,44 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: codegen intrinsics, landing 8 -- parameterized interface dispatch (2026-09-30, LANDED)
+
+The A-family (interface-offset dispatchers that forward one managed
+argument through R9) renders the managed call: `sub_180006590(3,
+typeof(IUpdatableGraph), graph, obj)` ->
+`graph.CanUpdateAsync(obj)`. Three parts: (1) `_r9_touch` first-touch
+rule -- a read proves the caller passed R9, a write manufactures it
+(`xor r9d,r9d`, `mov r9,[rip]` + klass compare at 0x180540f50 score 0
+now; self-xor counts as write); (2) memoized lazy `_iface_arity`
+choke, since the eager cnt/stats sample is Assembly-CSharp-only and
+these members live elsewhere (same seam as landing 7); (3) a
+`_param_interface_dispatch` twin resolving slot/iface/receiver plus
+the R9 argument for single-parameter targets (GPR-class R9 only,
+non-byref first parameter, closable non-sret return) and dropping R9
+spray for zero-parameter targets.
+
+Declines (markers stay honest): untyped-`?` R9 (mi 104027
+`set_OnSearchPath`), multi-parameter targets (mi 6160
+`TransformFinalBlock`), single-field struct returns -- resolving those
+lets the F2 first-field guard project whole-struct reloads without
+consumer proof (`dateTime3 = dateTime2._dateData`, mi 86310; enums
+flow cleanly and stay in). Same latent class exists in the nullary
+path; untouched without evidence.
+
+Gates: full strict pair at `--workers 8` (11,183 type files /
+114,458 bodies / 0 failed / 0 structured fallbacks / 0 type-emission
+failures both sides); brace 0 unbalanced; parse 0 bad / 0 ERROR /
+0 MISSING on the fix tree; per-file diff 162 of 11,276 changed, file
+set identical. Selected dispatcher `sub_` 1,409 -> 867 (-542:
+`180006020` 318->108, `180006590` 425->139, `18004a6e0` 96->50);
+the nullary pair is byte-identical (329/135), the `0x180540f50`
+impostor untouched (8), `0x180003a40`/`0x180020070` fully declined
+(multi-param/untyped R9). Shared markers 16,571 -> 16,568 (-3, stub
+comment text only). Every reviewed hunk is a resolution, dead-spray
+DCE, a dead-arm collapse with zero dangling temps, a Dispose fold, or
+stub/usings cleanup. Portable suite 1012 passed (+9); +4 game
+(`tests/test_game_iface_param.py`); goldens 64/64 unmoved
+after gating the single-field hazard (mi 86310 read, not waved).
+
 ## Current work: codegen intrinsics, landing 7 -- bounds-checked element address, slice A (2026-09-30, LANDED)
 
 `0x1803ed830` (stride 0x178 via imul) and `0x1803ed860` (stride
@@ -118,7 +157,7 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 `docs/public_release.md`).
 
 **Open, by payoff:**
-- Codegen-intrinsic recognition (program; landings 1-7 landed 2026-09-28/30):
+- Codegen-intrinsic recognition (program; landings 1-8 landed 2026-09-28/30):
   a census of plain `sub_` calls found 38,254 sites / 2,663 targets,
   **36,313 sites (95%) with zero metadata candidates** -- IL2CPP runtime
   helpers that metadata can never name. Landed families: nullary
@@ -132,13 +171,15 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   casts (5 `Angle`/`StyleFloat` sites -> `T.op_Implicit`), and
   bounds-checked element address slice A (764 TextMeshPro/TextCore
   sites -> named `il2cpp_array_addr` with spray args trimmed; 745
-  tree-wide). Open families by sites:
+  tree-wide), and parameterized interface dispatch (542 sites ->
+  managed calls, incl. `?.Accept()`/`?.Dispose()` folds from the
+  0-param drop). Open families by sites:
   isinst/castclass klass expressions (5,802; need element-class
   provenance), bounds-checked element address slice B (`&arr[i]`
-  indexed render), parameterized interface
-  dispatch (the A-family that saves R9:
-  `IUpdatableGraph.CanUpdateAsync` slot 3, `IAstarAI.set_OnSearchPath`
-  slot 26). The census script and report were local scratch (temp).
+  indexed render), multi-parameter interface dispatch (stack-home
+  args, e.g. `TransformFinalBlock`), untyped-R9 sites (need use->def),
+  and single-field-struct returns (need F2 use-proof; enums exempt).
+  The census script and report were local scratch (temp).
 - ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`):
   CLOSED 2026-09-30 with evidence -- all 865 shapes decline (typed
   args are `InternedString` on both sides; static/instance, arity, arg

@@ -137,7 +137,7 @@ class _StateMixin:
         except Exception:
             return None
         n_count = n_table = n_add = n_shl = n_tail = n_call = 0
-        reads_r9 = False
+        r9_first = None
         for ins in insns:
             if ins.mnemonic == Mnemonic.MOVZX \
                     and ins.op1_kind == OpKind.MEMORY \
@@ -164,18 +164,77 @@ class _StateMixin:
             elif ins.mnemonic == Mnemonic.CALL \
                     and ins.op0_kind == OpKind.NEAR_BRANCH64:
                 n_call += 1
-            # a forwarded managed argument enters through R9 as a source;
-            # a write (`xor r9d,r9d` in the byte-template variant) is not a
-            # read, so the source operand is what counts.
-            if not reads_r9 and ins.op1_kind == OpKind.REGISTER \
-                    and ins.op1_register == IReg.R9 \
-                    and not (ins.op0_kind == OpKind.REGISTER
-                             and ins.op0_register == IReg.R9):
-                reads_r9 = True
+            # a forwarded managed argument is live on entry: the FIRST
+            # touch of R9 decides. A read (source operand, memory base /
+            # index, CMP/TEST/JMP/CALL/PUSH/XCHG position) proves the
+            # caller passed it; a write (MOV/ZERO/LEA/arithmetic dest,
+            # POP) manufactures it inside. The byte-template variant's
+            # `xor r9d,r9d` and 0x180540f50's `mov r9,[rip]` + klass
+            # compare are writes-first: their callers pass one RCX arg,
+            # and forwarding would invent a bogus argument.
+            if r9_first is None:
+                r9_first = self._r9_touch(ins)
         if n_count == 1 and n_table == 1 and n_add == 1 and n_shl == 1 \
                 and n_tail and n_call:
-            return 1 if reads_r9 else 0
+            return 1 if r9_first == 'read' else 0
         return None
+
+    @staticmethod
+    def _r9_touch(ins):
+        """'read' / 'write' / None for R9's role in one instruction.
+
+        Memory base/index registers are always read, even in a store.
+        CMP/TEST read both sides; JMP/CALL/PUSH/XCHG read their
+        register operand; every other R9 destination writes. Never
+        raises (an unreadable instruction is no touch).
+        """
+        try:
+            R9 = IReg.R9
+            if getattr(ins, 'memory_base', None) == R9 \
+                    or getattr(ins, 'memory_index', None) == R9:
+                return 'read'
+            o0 = ins.op0_kind == OpKind.REGISTER and ins.op0_register == R9
+            o1 = ins.op1_kind == OpKind.REGISTER and ins.op1_register == R9
+            if o0 and o1:
+                # same-register both sides: zeroing idioms (`xor
+                # r9,r9`) manufacture the value, identities read it.
+                if ins.mnemonic in (Mnemonic.XOR, Mnemonic.SUB):
+                    return 'write'
+                return 'read'
+            if o0 and ins.mnemonic in (Mnemonic.CMP, Mnemonic.TEST,
+                                        Mnemonic.JMP, Mnemonic.CALL,
+                                        Mnemonic.PUSH, Mnemonic.XCHG):
+                return 'read'
+            if o1:
+                return 'read'
+            if o0:
+                return 'write'
+        except Exception:
+            pass
+        return None
+
+    def _iface_arity(self, target):
+        """Memoized interface-dispatcher arity (the rt_iface proof on demand).
+
+        The eager sample behind `_init_runtime_ids` is
+        Assembly-CSharp-only, so parameterized family members never
+        land in `rt_iface`. Callers consult this choke instead of the
+        raw dict: cached members answer identically, new members are
+        proved structurally once per instance (VAs are binary-local).
+        Never raises.
+        """
+        try:
+            if target is None:
+                return None
+            d = self.__dict__.setdefault('rt_iface', {})
+            if target in d:
+                return d[target]
+            ar = self._iface_dispatch_arity(target)
+            if ar is not None:
+                d[target] = ar
+            return ar
+        except Exception:
+            return None
 
     def _is_isinst_helper(self, target):
         """Recognize the IsInst helper `(obj, klass) -> obj-or-null`.

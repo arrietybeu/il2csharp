@@ -1586,7 +1586,7 @@ class _CallsMixin:
         if offset is None or not 0 <= offset <= 0xffff \
                 or iface.kind != 'klass' or not iface.text.startswith('typeof('):
             return None
-        if getattr(self, 'rt_iface', {}).get(target) != 0:
+        if self._iface_arity(target) != 0:
             prefix = bytes.fromhex(
                 '48895c2408574883ec20498b184533c9498bf8440fb7932e010000'
                 '66453bca73264c8b9bb00000000f1f840000000000410fb7c14803c0'
@@ -1630,6 +1630,97 @@ class _CallsMixin:
                 or self.il.returns_sret(rty):
             return None
         return mi, receiver, rty
+
+    def _param_interface_dispatch(self, target, arg_exprs):
+        """(mi, receiver, rty[, r9arg]) for a forwarded interface call.
+
+        The A-family twin of `_nullary_interface_dispatch`: same slot /
+        typeof / receiver triple in RCX/RDX/R8, plus the managed
+        argument the helper forwards through R9 (proved live on entry
+        by `_iface_dispatch_arity`, never by address). A zero-parameter
+        target drops the R9 spray the same way arity trimming drops
+        unread registers. Multi-parameter methods (stack-home args),
+        byref first parameters, non-GPR R9 values and unclosable
+        returns keep the honest `sub_` fallback. A different runtime
+        keeps `sub_` too.
+        """
+        if target is None or len(arg_exprs) < 4:
+            return None
+        slot, iface, receiver = arg_exprs[:3]
+        r9e = arg_exprs[3]
+        if slot is None or iface is None or receiver is None or r9e is None:
+            return None
+        offset = _int_lit(slot.text)
+        if offset is None or not 0 <= offset <= 0xffff \
+                or iface.kind != 'klass' or not iface.text.startswith('typeof('):
+            return None
+        if self._iface_arity(target) != 1:
+            return None
+        td_index = self._td_of(iface.ty)
+        if td_index is None:
+            return None
+        td = self.meta.typedefs[td_index]
+        if not td.flags & 0x20 or not 0 <= offset < td.method_count:
+            return None
+        mi = td.method_start + offset
+        method = self.meta.methods[mi]
+        if method.is_static or method.param_count not in (0, 1) \
+                or not 0 <= method.return_type < len(self.il.types):
+            return None
+        if method.param_count == 1:
+            try:
+                r9t = (r9e.text or '').strip()
+            except Exception:
+                return None
+            if not r9t or r9t in ('_', '?'):
+                return None
+            if getattr(r9e, 'kind', None) not in ('obj', 'int', 'ptr', 'arr', 'str', 'local'):
+                return None
+            try:
+                ps0 = self.meta.method_params(method)
+                pt0 = self.il.types[ps0[0].type] if len(ps0) == 1 and 0 <= ps0[0].type < len(self.il.types) else None
+            except Exception:
+                return None
+            if pt0 is None or ((pt0[1] >> 29) & 1):
+                return None
+        rty = self.il.types[method.return_type]
+        closed_key = getattr(self.il, '_closed_type_key', None)
+        if closed_key is not None and closed_key(rty) is None:
+            class_args = None
+            gen_fn = getattr(self, '_generic_class_args', None)
+            if gen_fn is not None:
+                try:
+                    class_args = gen_fn(iface.ty)
+                except Exception:
+                    class_args = None
+            subst = getattr(self.il, '_subst_closed', None)
+            rty = subst(rty, class_args, None) if class_args and subst else None
+        if rty is None or not self.il._return_abi_is_known(rty) \
+                or self.il.returns_sret(rty):
+            return None
+        # Single-field struct returns project to their field on stack
+        # reloads (the F2 whole-value guard keeps `this.m_State`
+        # spellings) without consumer proof, so `dateTime3 = dateTime2`
+        # becomes the uncompilable `dateTime3 = dateTime2._dateData`
+        # (mi 86310 `Set`). Decline them; enums flow cleanly
+        # (mi 104498 `ProcessRegularUpdates`).
+        try:
+            _rte = self.il._type_enum(rty)
+        except Exception:
+            _rte = None
+        if _rte in (0x11, 0x15):
+            try:
+                _rtd = self._td_of(rty)
+                _rtdo = self.meta.typedefs[_rtd] if _rtd is not None else None
+                _rfm = self.il.instance_field_chain(_rtd) if _rtd is not None else None
+            except Exception:
+                _rtdo, _rfm = None, None
+            if _rtdo is None or _rfm is None or not getattr(_rtdo, 'is_enum', False):
+                if _rfm is None or len(_rfm) <= 1:
+                    return None
+        if method.param_count == 0:
+            return mi, receiver, rty
+        return mi, receiver, rty, r9e
 
     def _wb_operands(self, args, arg_exprs):
         """`il2cpp_codegen_write_barrier(&field, value)` -> (lvalue text,
@@ -2250,6 +2341,17 @@ class _CallsMixin:
             rty = iface_rty
             name = self.il.method_simple_name(mi)
             args, arg_exprs = [recv.text], [recv]
+        else:
+            _pif = self._param_interface_dispatch(target, arg_exprs) if mi is None else None
+            if _pif is not None:
+                mi, recv, iface_rty = _pif[:3]
+                rty = iface_rty
+                name = self.il.method_simple_name(mi)
+                if len(_pif) > 3:
+                    args, arg_exprs = [recv.text, _pif[3].text], [recv, _pif[3]]
+                else:
+                    args, arg_exprs = [recv.text], [recv]
+                iface_identity = True
         # Resolve a vtable slot to its metadata method up front, so arg trimming,
         # instance-style rendering and property-accessor folding below apply to
         # virtual calls exactly as they do to direct ones.

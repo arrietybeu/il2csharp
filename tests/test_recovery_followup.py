@@ -494,6 +494,120 @@ def test_nullary_interface_dispatch_declines_an_argument_forwarder():
     assert lift._nullary_interface_dispatch(target, dispatch_args()) is None
 
 
+def test_iface_dispatch_arity_declines_a_writes_first_body():
+    # the A-family's only R9 touch (`mov rsi,r9` at 0x14) rewritten as a
+    # write (`mov r9,rsi`): the caller's R9 is dead on arrival, so no
+    # managed argument may be forwarded (0x180540f50's shape).
+    bad = bytearray(A_DISPATCH)
+    assert bytes(bad[0x14:0x17]) == bytes.fromhex('498bf1')
+    bad[0x14:0x17] = bytes.fromhex('4c8bce')
+    lift, target = dispatch_helper_lifter(bytes(bad))
+    assert lift._iface_dispatch_arity(target) == 0
+
+
+def test_r9_touch_classifies_positions():
+    from iced_x86 import Decoder
+
+    def touch(hex_bytes):
+        ins = next(iter(Decoder(64, bytes.fromhex(hex_bytes), ip=0x5000)))
+        return Lifter._r9_touch(ins)
+
+    assert touch('498bf1') == 'read'    # mov rsi,r9 (forward)
+    assert touch('4c8bce') == 'write'   # mov r9,rsi (manufacture)
+    assert touch('4d31c9') == 'write'   # xor r9,r9 (template zeroing)
+    assert touch('4c8b0d00000000') == 'write'  # mov r9,[rip] (load)
+    assert touch('493bc1') == 'read'    # cmp rax,r9 (source)
+    assert touch('4d3bc8') == 'read'    # cmp r9,r8 (CMP reads op0)
+
+
+def test_r9_touch_reads_memory_bases():
+    from iced_x86 import Decoder
+
+    def touch(hex_bytes):
+        ins = next(iter(Decoder(64, bytes.fromhex(hex_bytes), ip=0x5000)))
+        return Lifter._r9_touch(ins)
+
+    assert touch('488b01') is None      # mov rax,[rcx]: no r9 anywhere
+    assert touch('4d8b0121') == 'read'    # mov r8,[r9]: base is read
+    assert touch('4d890121') == 'read'    # mov [r9],r8: base is still read
+    assert touch('4a8b0c4d00000000') == 'read'  # mov rcx,[r9*2]: index read
+
+
+def test_iface_arity_memoizes_structural_proof():
+    lift, target = dispatch_helper_lifter(A_DISPATCH)
+    lift.rt_iface = {}
+    assert lift._iface_arity(target) == 1
+    assert lift.rt_iface[target] == 1
+    assert lift._iface_arity(0x9999) is None
+
+
+def _param_dispatcher_lifter(body, n_params=1, r9_kind='obj', r9_text='arg1'):
+    target = 0x5000
+    RET = (9, 0x12 << 16)
+    il = NS(
+        types=[INT, RET],
+        _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+        _return_abi_is_known=lambda rt: True,
+        _closed_type_key=None,
+        returns_sret=lambda rt: False,
+        type_name=lambda t: 'IFoo' if t == RET else 'int',
+        function_extent=lambda va: (target, target + len(body)),
+        addr_candidates={},
+    )
+    lift = lifter(il=il)
+    lift.meta = NS(
+        typedefs=[NS(namespace='', name='IFoo', flags=0x20,
+                      method_count=4, method_start=0)],
+        methods=[NS(return_type=1, is_static=False, param_count=n_params,
+                    name='Take', generic_container=-1, declaring=0)
+                 for _ in range(4)],
+        method_params=lambda m: [NS(type=0)],
+    )
+    lift.bin = NS(
+        read=lambda va, n: body if va == target and n == len(body) else None,
+        is_exec_va=lambda va: va == target,
+        exports={},
+    )
+    lift.rt_iface = {target: 1}
+    args = [Expr('3', INT, 'int'), Expr('typeof(IFoo)', (0, 0x12 << 16), 'klass'),
+            Expr('rec', CLASS, 'obj'), Expr(r9_text, INT, r9_kind)]
+    return lift, target, args
+
+
+def test_param_dispatch_resolves_a_typed_argument():
+    lift, target, args = _param_dispatcher_lifter(A_DISPATCH)
+    got = lift._param_interface_dispatch(target, args)
+    assert got is not None and got[0] == 3 and got[1].text == 'rec'
+
+
+def test_param_dispatch_drops_to_zero_params():
+    lift, target, args = _param_dispatcher_lifter(A_DISPATCH, n_params=0)
+    got = lift._param_interface_dispatch(target, args)
+    assert got is not None and len(got) == 3 and got[0] == 3
+
+
+def test_param_dispatch_declines_multi_param():
+    lift, target, args = _param_dispatcher_lifter(A_DISPATCH, n_params=3)
+    assert lift._param_interface_dispatch(target, args) is None
+
+
+def test_param_dispatch_declines_untyped_r9():
+    for kind, text in (('?', 'v1'), ('float', 'real1'), ('obj', '?'),
+                       ('obj', '_'), ('obj', '')):
+        lift, target, args = _param_dispatcher_lifter(
+            A_DISPATCH, r9_kind=kind, r9_text=text)
+        assert lift._param_interface_dispatch(target, args) is None, (kind, text)
+
+
+def test_param_dispatch_declines_writes_first_body():
+    bad = bytearray(A_DISPATCH)
+    bad[0x14:0x17] = bytes.fromhex('4c8bce')
+    lift, target, args = _param_dispatcher_lifter(bytes(bad))
+    lift.rt_iface = {}                # no cached verdict: prove it live
+    assert lift._param_interface_dispatch(target, args) is None
+    assert lift.rt_iface[target] == 0  # ...and the decline is memoized
+
+
 def test_return_value_register_abi():
     assert Lifter._return_value_register(F32) == 'XMM0'
     assert Lifter._return_value_register((0, 0x0D << 16)) == 'XMM0'
