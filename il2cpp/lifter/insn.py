@@ -1510,7 +1510,7 @@ class _InsnMixin:
                 scale, disp_add(disp)), None, 'ptr')
         if be is None:
             return Expr('mem_%x' % disp, None, 'ptr')
-        return self._field_expr(be, disp, size)
+        return self._field_expr(be, disp, size, elem_fold=True)
 
     def _mem_lvalue(self, ins) -> Optional[str]:
         """Assignable text for a memory destination, or None when the write is

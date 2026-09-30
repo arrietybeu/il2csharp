@@ -33,10 +33,13 @@ def test_shared_float_leaf_recovers_the_xmm_argument(game_decompiler):
 def test_shared_float_leaf_recovers_a_computed_argument(game_decompiler):
     # mi 20080 Rotate(Quaternion): the recovered value is the degree
     # conversion `real2`; before, the multiply was dropped and an
-    # undeclared GPR temp `obj5` was printed as the argument.
+    # undeclared GPR temp `obj5` was printed as the argument. Landing 6
+    # (unanimous conversions at proven casts) since resolves the
+    # Angle/StyleFloat/TimeValue triple to `Angle.op_Implicit`, so the
+    # shared marker is gone by design -- the recovered computation
+    # remains its argument.
     text = body(game_decompiler, 20080)
-    call = 'sub_182da54f0/*shared body, 3 candidates*/'
-    assert f'{call}(real2)' in text
+    assert 'UnityEngine.UIElements.Angle.op_Implicit(real2)' in text
     assert 'float real2 = real1 * 57.29578f;' in text
 
 

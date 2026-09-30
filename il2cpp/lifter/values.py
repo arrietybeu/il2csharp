@@ -1,8 +1,8 @@
 from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.common import csharp_type_name, u64
-from il2cpp.expr import Expr, _BARE_HINT_RX, _BARE_TOKEN_RX, _INT_TY, _byref_arg_render, _is_unresolved_gp, _mentions, _recv_fold
+from il2cpp.expr import Expr, _BARE_HINT_RX, _BARE_TOKEN_RX, _INT_TY, _byref_arg_render, _is_unresolved_gp, _mentions, _merge_arr_proof, _recv_fold
 from il2cpp.text import _int_lit, disp_add, strip_outer
-from il2cpp.x64 import ARG_XMM, KLASS_INITIALIZED, KLASS_STATIC_FIELDS, KLASS_VTABLE
+from il2cpp.x64 import ARG_XMM, KLASS_ELEMENT_CLASS, KLASS_INITIALIZED, KLASS_STATIC_FIELDS, KLASS_VTABLE
 
 class _ValuesMixin:
     def _stack_arg_texts(self, count, *, callee=False):
@@ -476,6 +476,14 @@ class _ValuesMixin:
             t._mi = e._mi
         if getattr(e, '_usg_idx', None) is not None:
             t._usg_idx = e._usg_idx
+        # the temp freezes this exact value, so newarr-exactness and
+        # array-klass provenance ride along (same value, same klass).
+        if getattr(e, '_newarr', None) is not None:
+            t._newarr = e._newarr
+        if getattr(e, '_arr_klass', None) is not None:
+            t._arr_klass = e._arr_klass
+        if getattr(e, '_dry_proof', None) is not None:
+            t._dry_proof = e._dry_proof
         # Scalar SSE writes preserve upper lanes.  If kill-on-write freezes
         # the low expression, retain only higher packed lanes that do not
         # themselves read the overwritten lvalue; disputed lanes stay
@@ -543,7 +551,7 @@ class _ValuesMixin:
         td_idx = self._td_of(ty)
         return td_idx is not None and self.meta.typedefs[td_idx].is_valuetype
 
-    def _field_expr(self, base: Expr, disp: int, size: int) -> Expr:
+    def _field_expr(self, base: Expr, disp: int, size: int, elem_fold=False) -> Expr:
         if size == 8 and getattr(self, '_xor_twin_loads', None) \
                 and getattr(self, '_cur_ip', None) in self._xor_twin_loads:
             # proved packed-xor twin lane (double3 negate): the
@@ -707,7 +715,29 @@ class _ValuesMixin:
                     elif _ptr_base and fte == 0x0e:
                         fkind = 'str'
                     return Expr('%s%s%s' % (_recv_fold(text), _sep, fname), fty, fkind)
-        return Expr('*(%s %s)' % (text, disp_add(disp)), None, 'ptr')
+        if elem_fold and disp == KLASS_ELEMENT_CLASS and base.kind == 'ptr':
+            # element klass of a newarr-proven array: [arrklass+0x40] is
+            # Il2CppClass.element_class. The provenance was captured when
+            # the klass pointer was loaded ([arr+0] below); the fold fires
+            # only on the load path, so stores, LEA and CMP keep today's
+            # raw spelling. A proved node renders `typeof(E)`, which the
+            # existing IsInst fold in `_call` turns into `obj as E`.
+            ak = getattr(base, '_arr_klass', None)
+            if ak is not None:
+                en = self._elem_klass_name(ak[0], ak[1])
+                if en is not None:
+                    return Expr('typeof(%s)' % en[0], en[1], 'klass')
+        e = Expr('*(%s %s)' % (text, disp_add(disp)), None, 'ptr')
+        if base.kind == 'arr' and disp == 0:
+            # klass-pointer load off a managed array (Il2CppArray.klass is
+            # at offset 0): record the array's type and newarr-exactness
+            # for the +0x40 fold above. The effective proof covers a
+            # dry-vintage array base too (loop-carried arrays read dry
+            # end_states). Provenance only -- the text, kind and type
+            # this returns are byte-identical to today's.
+            pt = _merge_arr_proof(base)
+            e._arr_klass = (pt if pt is not None else base.ty, pt is not None)
+        return e
 
     def _field_index_for_offset(self, td_idx, disp):
         td = self.meta.typedefs[td_idx]
@@ -725,6 +755,46 @@ class _ValuesMixin:
         if te in (0x1d, 0x14):
             return self.il.type_from_ptr(ty[0])
         return None
+
+    def _elem_klass_name(self, arr_ty, exact):
+        """`(name, ety)` for `[arrklass+0x40]` at an IsInst site, else None.
+
+        Soundness rests on exactness: array covariance lets an `E[]`-typed
+        local hold a `D[]` (D : E) at runtime, in which case element_class
+        is D, not E. Only a same-method newarr (`exact`, from `_newarr`)
+        fixes the runtime klass to exactly E[], so params, fields, statics
+        and `as`-refinements all decline here. The element itself must be
+        directly nameable too: a reference type (C# `as` is illegal on
+        value types), closed (no VAR/MVAR), and not System.Object (an `as
+        object` fold is noise, and `type_name` also spells its own
+        fallback as `object`). Generic-instance and nested-array elements
+        decline in this slice -- honest markers, follow-up work.
+        """
+        if not exact:
+            return None
+        ety = self._elem_type(arr_ty)
+        if ety is None:
+            return None
+        te = self.il._type_enum(ety)
+        if te == 0x0e:
+            return (self.il.type_name(ety), ety)
+        if te not in (0x11, 0x12):
+            return None
+        td = self._td_of(ety)
+        if td is None:
+            return None
+        tdt = self.meta.typedefs[td] \
+            if 0 <= td < len(self.meta.typedefs) else None
+        if tdt is None or tdt.is_valuetype or tdt.is_enum:
+            return None
+        try:
+            nm = self.il.type_name(ety)
+        except Exception:
+            return None
+        if not nm or nm in ('object', 'System.Object') \
+                or nm.startswith('object<') or '(' in nm or ')' in nm:
+            return None
+        return (nm, ety)
 
     def _is_byte_ptr_ty(self, ty) -> bool:
         """A genuine metadata `byte*` tuple (PTR-to-U1), reused for

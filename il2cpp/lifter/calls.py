@@ -1414,12 +1414,27 @@ class _CallsMixin:
         """
         if getattr(self, '_array_allocation_loop_guard',
                    getattr(self, '_memory_rhs_loop_guard', False)):
-            return Expr(text, ty, 'arr')
+            # the loop guard keeps the old full-text representation (no
+            # per-allocation temp until per-iteration identity is proved),
+            # but the value is still this exact newarr on every execution,
+            # so the exactness proof rides along identically.
+            ge = Expr(text, ty, 'arr')
+            ge._newarr = True
+            return ge
         name = self.new_var()
         if ty is not None and not getattr(self, 'dry', False):
             self._var_types[name] = ty
         self.emit(ip, 'var %s = %s;' % (name, text), asm)
-        return Expr(name, ty, 'arr')
+        e = Expr(name, ty, 'arr')
+        # exactness proof for the element-class fold (`_elem_klass_name`):
+        # a same-method newarr fixes the array's runtime klass to exactly
+        # E[], so [klass+0x40] is provably E's klass. Array covariance lets
+        # a param/field/static/`as`-refined E[] hold a D[] at runtime, so
+        # only an allocation carries this flag. `_copy_expr`/`_kill_one`
+        # preserve it because both freeze the identical value under a new
+        # name; any other value drops it and the site keeps today's marker.
+        e._newarr = True
+        return e
 
     def _call_name(self, target) -> str:
         # MSVC folds identical bodies, and IL2CPP shares one body across

@@ -28,7 +28,16 @@ class Expr:
                  # allocation Expr. It survives temp binding so the following
                  # .ctor can complete that allocation instead of creating T
                  # for a second time.
-                 '_alloc', '_slice', '_stack_offset', '_bytes', '_parts')
+                 '_alloc', '_slice', '_stack_offset', '_bytes', '_parts',
+                 # element-class fold: `_newarr` proves a same-method
+                 # newarr (exact runtime klass); `_arr_klass` carries an
+                 # array's (type, exactness) on its klass-pointer load.
+                 '_newarr', '_arr_klass',
+                  # element-class fold: dry unanimous-merge proof that a
+                  # value is a same-method newarr of the carried array
+                  # type. Pass 2 reads dry end_states at loop back-edges,
+                  # so without this the proof dies at every loop header.
+                  '_dry_proof')
 
     def __init__(self, text, ty=None, kind='?', recv=None):
         self.text = text      # rendered C# expression
@@ -52,10 +61,37 @@ class Expr:
             return False
         if name == '_alloc':
             return None
+        if name == '_newarr':
+            return False
+        if name == '_arr_klass':
+            return None
+        if name == '_dry_proof':
+            return None
         raise AttributeError(name)
 
     def __repr__(self):
         return 'E(%s)' % self.text
+
+
+def _merge_arr_proof(v):
+    """Array type a merge input proves exact, else None.
+
+    A same-method newarr fixes the runtime klass, so every input proving
+    the SAME array type proves the merged value on all paths. Array
+    covariance is why params, fields, statics and `as`-refinements never
+    prove: an `E[]`-typed local can hold a `D[]` at runtime. Inputs prove
+    through the live `_newarr` flag or a dry unanimous-merge `_dry_proof`
+    (pass 2 reads dry end_states at loop back-edges, structurally).
+    """
+    if not isinstance(v, Expr):
+        return None
+    if getattr(v, '_newarr', False) and isinstance(v.ty, tuple):
+        return v.ty
+    dp = getattr(v, '_dry_proof', None)
+    if dp is not None and isinstance(dp, tuple) and len(dp) == 2 \
+            and isinstance(dp[0], tuple):
+        return dp[0]
+    return None
 
 
 def e_const(v, ty=None, kind='int'):

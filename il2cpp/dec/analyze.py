@@ -1,7 +1,7 @@
 from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.cfg import _Sink, _TEMP_RX
 from il2cpp.common import csharp_type_name
-from il2cpp.expr import Expr, _BARE_TOKEN_RX, _R8_TY, _mentions, _recv_fold, _recv_shaped
+from il2cpp.expr import Expr, _BARE_TOKEN_RX, _R8_TY, _mentions, _merge_arr_proof, _recv_fold, _recv_shaped
 from il2cpp.text import imm_of, reg_name
 from il2cpp.x64 import ARG_REGS, GPRS, flag_cond
 
@@ -461,7 +461,14 @@ class _AnalyzeMixin:
                     if isinstance(v, Expr):
                         L.regs[k] = v
                     elif isinstance(v, str):
-                        L.regs[k] = Expr(v)
+                        e = Expr(v)
+                        pts = [_merge_arr_proof(p.end_state.get(k))
+                               for p in preds_done]
+                        if pts and all(t is not None for t in pts) \
+                                and len(set(pts)) == 1 \
+                                and L.il._type_enum(pts[0]) in (0x1d, 0x14):
+                            e._dry_proof = (pts[0], True)
+                        L.regs[k] = e
                     else:
                         L.regs[k] = Expr('?', None, '?')
                 merge_locs[bid] = {k for k, v in merged.items() if v is None}
@@ -559,6 +566,11 @@ class _AnalyzeMixin:
                             self._var_types.setdefault(phi[key], pty)
                         L._aggregate_phi_sources[phi[key]] = vals
                         merged[k] = Expr(phi[key], pty, pkind)
+                        pts = [_merge_arr_proof(x) for x in vals]
+                        if pts and all(t is not None for t in pts) \
+                                and len(set(pts)) == 1 \
+                                and L.il._type_enum(pts[0]) in (0x1d, 0x14):
+                            merged[k]._newarr = True
                         if k.startswith('!mem:') and pty is not None:
                             width = int(k.rsplit(':', 1)[1])
                             if L.il._sf_field_size(pty, 0) == width:
@@ -584,6 +596,12 @@ class _AnalyzeMixin:
                                     self._var_types.setdefault(tmp, v.ty)
                                 pre.append((tmp, v.text))
                                 merged[k] = Expr(tmp, v.ty, v.kind)
+                                if getattr(v, '_newarr', False):
+                                    merged[k]._newarr = True
+                                if getattr(v, '_arr_klass', None) is not None:
+                                    merged[k]._arr_klass = v._arr_klass
+                                if getattr(v, '_dry_proof', None) is not None:
+                                    merged[k]._dry_proof = v._dry_proof
                     if pre:
                         self.phi_pre.setdefault(bid, []).extend(pre)
                 L.regs = L._new_regs(merged)

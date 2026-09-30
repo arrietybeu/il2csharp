@@ -192,6 +192,13 @@ ARG_XMM = ['XMM0', 'XMM1', 'XMM2', 'XMM3']
 KLASS_STATIC_FIELDS = 0xB8
 KLASS_INITIALIZED = 0xE4
 KLASS_VTABLE = 0x138
+# Il2CppClass_1.element_class: image@0, gc_desc@8, name@16, namespaze@24,
+# byval_arg@32 (16 bytes: pointer + bits + padding), this_arg@48 (16
+# bytes), element_class@64. For an array klass this is the element type's
+# klass; for any other klass it is NULL, which is why the fold in
+# `_elem_klass_name` requires an array-typed base. Same Unity 6000.0/v31
+# calibration as the offsets above.
+KLASS_ELEMENT_CLASS = 0x40
 
 # instructions that store to a memory destination, and the C# operator for the
 # read-modify-write forms (`add [this+0x20], 11`)

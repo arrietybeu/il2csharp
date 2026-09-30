@@ -1,5 +1,57 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: codegen intrinsics, landing 9 -- IsInst element-class `as` (2026-09-30, LANDED)
+
+The opaque-klass IsInst family (`sub_180434690(obj, klass)`, 5,884
+sites tree-wide, only a handful `typeof(T)`-folded) is dominated by
+one shape: `((byte*)((byte*)ARR + 0)[0] + 0x40)[0]` -- the array's
+klass loaded from its object header, then `Il2CppClass.element_class`
+at +0x40 (`KLASS_ELEMENT_CLASS`, derived from the `Il2CppClass_1`
+layout: byval_arg@32[16B], this_arg@48[16B], element_class@64; same
+Unity 6000.0/v31 calibration as the other klass offsets). The fold
+renders `obj as E` when the array's static type is `E[]` with a
+closed, nameable, non-object reference element, and -- the soundness
+key -- the array's runtime klass is PROVEN exactly `E[]` by a
+same-method newarr (`_newarr` from `_array_allocation`, preserved
+across value-preserving copies, kills, binds and merges). Array
+covariance is why params, fields, statics and `as`-refinements never
+prove: an `E[]`-typed local can hold a `D[]` at runtime, and folding
+that to `as E` would turn a null into a value. Merges compose
+per-path proofs (mirroring the `pty` consensus); dry unanimous
+merges record a `_dry_proof` invisible to dry execution
+(text/kind/ty unchanged, merge_locs identical), because pass 2 reads
+dry end_states at loop back-edges structurally -- without it the
+proof dies at every loop header (mi 84's v52). The fold itself is
+load-path-only (`elem_fold` opt-in: stores, LEA and CMP keep today's
+spelling); the existing landing-2 fold turns the proved
+`typeof(E)` into `obj as E`, and redundant same-type checks collapse
+downstream (copy-prop + dead temps), so most sites vanish entirely
+(mi 84, mi 471) while genuinely-casting sites keep a visible `as`
+(+31 tree-wide).
+
+Declines (markers stay honest): object elements (`as object` is
+noise; mi 2717/4020), value-type/enum elements (`as` is illegal),
+open generics, generic-instance and nested-array elements
+(follow-up), field/param/static klass-sources (covariance-unproven;
+mi 200/30694-field/10829/32342), unknown provenance (mi 7021).
+
+Gates: paired strict builds at `--workers 8` (11,183 type files /
+114,458 bodies / 0 failed / 0 structured fallbacks / 0
+type-emission failures both sides); brace 0 unbalanced; parse 0 bad
+/ 0 ERROR / 0 MISSING on the fix tree; paired per-file diff 195 of
+11,183 changed, file set identical (0 added / 0 removed); every
+changed file only loses `sub_` sites (0 files gain one);
+`sub_180434690` sites 5,884 -> 4,666 (-1,218). Goldens 64/64
+unmoved; portable suite 1027 passed (+15 `tests/test_elemclass.py`,
+proof-reader and element-gate units); +7 game
+(`tests/test_game_elemclass.py`: mi 84/471/30694 fold,
+mi 200/2717/4020/10829/7021/32342 decline).
+
+Also fixed alongside (pre-existing, stash-proven at HEAD):
+`test_shared_float_leaf_recovers_a_computed_argument` still pinned
+the landing-6-resolved marker at mi 20080; updated to the landed
+`Angle.op_Implicit(real2)` spelling.
+
 ## Current work: codegen intrinsics, landing 8 -- parameterized interface dispatch (2026-09-30, LANDED)
 
 The A-family (interface-offset dispatchers that forward one managed
@@ -157,7 +209,7 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 `docs/public_release.md`).
 
 **Open, by payoff:**
-- Codegen-intrinsic recognition (program; landings 1-8 landed 2026-09-28/30):
+- Codegen-intrinsic recognition (program; landings 1-9 landed 2026-09-28/30):
   a census of plain `sub_` calls found 38,254 sites / 2,663 targets,
   **36,313 sites (95%) with zero metadata candidates** -- IL2CPP runtime
   helpers that metadata can never name. Landed families: nullary
@@ -173,9 +225,13 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
   sites -> named `il2cpp_array_addr` with spray args trimmed; 745
   tree-wide), and parameterized interface dispatch (542 sites ->
   managed calls, incl. `?.Accept()`/`?.Dispose()` folds from the
-  0-param drop). Open families by sites:
-  isinst/castclass klass expressions (5,802; need element-class
-  provenance), bounds-checked element address slice B (`&arr[i]`
+  0-param drop), and IsInst element-class slice A (newarr-proven
+  arrays only: 5,884 -> 4,666 sites, -1,218; landing 9, section
+  above). Open families by sites:
+  isinst/castclass klass expressions (remaining ~4,666; need
+  element-class provenance for non-newarr klass-sources,
+  generic-instance/nested-array elements, and field-store identity),
+  bounds-checked element address slice B (`&arr[i]`
   indexed render), multi-parameter interface dispatch (stack-home
   args, e.g. `TransformFinalBlock`), untyped-R9 sites (need use->def),
   and single-field-struct returns (need F2 use-proof; enums exempt).
