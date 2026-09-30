@@ -341,7 +341,7 @@ cross-check in a debugger or Ghidra.
 
 ## Validation
 
-Current gates (r10 tree): **1147 tests (943 portable + 204 game)**;
+Current gates (r10 tree): **1231 tests (1012 portable + 219 game)**;
 a strict 11,183-file/114,458-body build with no failures or fallbacks; a
 0-error syntax parse of every C# file; and a paired 116,178-method direct
 sweep with 0 crashes and structural metrics unchanged (into_block

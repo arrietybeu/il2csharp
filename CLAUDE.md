@@ -22,7 +22,7 @@ via System.Array, rename barrier + param exclusion, interface dispatch
 naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
 direct calls), each decline-by-default with portable + game pins; plus
 documented disproofs (hinted receivers, ?addr tightening,
-receiver-driven generics). 1147 tests pass (943 portable + 204 game),
+receiver-driven generics). 1231 tests pass (1012 portable + 219 game),
 suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
 both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
 and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
@@ -156,15 +156,37 @@ fix-123 in `validation_reports/review123_*`.
   and a miss-path call (`_iface_dispatch_arity`, filled into `rt_iface`
   by `_init_runtime_ids` from the hot-target set it already collects).
   Only a member that never reads R9 -- the register after the
-  (slot, iface, receiver) triple -- is a nullary dispatcher, and only
-  nullary methods resolve this way; a reading variant forwards one
-  managed argument and declines for now. The resolved return closes
+  (slot, iface, receiver) triple -- is a nullary dispatcher; a reading
+  variant forwards one managed argument through the parameterized twin
+  below. The resolved return closes
   through `_generic_class_args(iface.ty)` + `_subst_closed`; an
   unclosable open return (`IEnumerator_1<T>` with no T in scope)
   declines to `sub_`. Results are materialized at the call instruction
   (getters excepted): left lazy, the enumerator stack home and the phi
   copy's `_bind` both materialize the call, duplicating `GetEnumerator()`
   with the second instance as the iterated one.
+- A forwarded R9 argument is live on entry or it does not exist:
+  `_r9_touch` decides by FIRST touch (source/memory/CMP/TEST/JMP/CALL/
+  PUSH/XCHG reads prove it; a MOV/ZERO/LEA/POP destination manufactures
+  it, self-xor included). The eager `cnt`/`stats` sample is
+  Assembly-CSharp-only, so non-AC members are proved on demand through
+  the memoized `_iface_arity` choke (per instance; VAs are
+  binary-local), never by address. The parameterized twin resolves
+  single-parameter targets with GPR-class R9 (floats/`?`/placeholders
+  decline), drops R9 spray for zero-parameter targets, and declines
+  multi-parameter targets, byref first parameters, and single-field
+  struct returns (the F2 first-field guard would project whole-struct
+  reloads without consumer proof; enums flow cleanly).
+- A unanimous conversion family (every candidate the same static
+  one-parameter op_Implicit/op_Explicit with distinct returns)
+  resolves only at a caller-proven `(T)` cast naming exactly one
+  return, with a float-taking single argument (bare-object temps,
+  doubles, and multi-arg keep the marker).
+- A bounds-checked element-address helper is a 34/35-byte skeleton
+  with the jae landing exactly on the fail call; the stride is
+  extracted, never assumed. Naming (`il2cpp_array_addr`, arity 2)
+  reaches non-AC images through the same lazy `_call_name` seam as
+  the class-init twin.
 - A consensus value type folds sret only when the individual call's first
   argument is an observed address. Require a known exact nonzero value-type
   size; generic value types, source-level ref returns, and unsupported opaque
@@ -354,7 +376,7 @@ fix-123 in `validation_reports/review123_*`.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test
-(`tests/test_source_format.py`) enforces this contract. **1147 tests pass** (943 portable + 204 game;
+(`tests/test_source_format.py`) enforces this contract. **1231 tests pass** (1012 portable + 219 game;
 64 golden snapshots, all green).
 `tests/goldens_review84.json` is **hash-only**: each of the 64 snapshots
 keeps its MethodDef row, VA, owner and name plus `body_sha256` /

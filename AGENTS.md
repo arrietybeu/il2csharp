@@ -221,15 +221,29 @@ opaque klass expressions keep `sub_`. Landing 3 recognizes the
 Interlocked helper's `lock cmpxchg` body and renders the managed
 `Interlocked.CompareExchange` (21 AC calls -> 0). Landing 4 recognizes
 the out-of-line class-init helper and elides it, propagating the klass
-value (3 AC calls, 861 tree-wide). Open, by payoff: the
-rest of the codegen families (isinst klass-expr 5,802 sites, alloc/box
-2,446, bounds-checked element address 745, parameterized
-interface dispatch), unmodelled-instruction
+value (3 AC calls, 861 tree-wide). Landing 5 names the interface
+slow-path resolve helper `0x18043dc60` (`il2cpp_interface_get_method`,
+2,446 sites -- the body disproves the old alloc/box label). Landing 6
+resolves unanimous conversion families at caller-proven casts (5
+`Angle`/`StyleFloat` sites -> `T.op_Implicit`; the 865-site
+ToString spray is closed-declined, all shapes vacuous). Landing 7
+names the bounds-checked element-address helpers
+(`il2cpp_array_addr`, 764 sites). Landing 8 renders parameterized
+interface dispatch (542 sites -> managed calls; the R9 first-touch
+liveness guard, lazy arity choke for non-AC images, and a
+single-field-struct return decline with enums exempt). Open, by
+payoff: the rest of the codegen families (isinst klass-expr 5,802
+sites, bounds slice B `&arr[i]`, multi-parameter dispatch,
+untyped-R9 sites, single-field returns), unmodelled-instruction
 invalidation (`insn.py`'s silent fall-through leaves a stale destination
-live; probed, needs lane modeling first), F2's sibling `_aggregate_load`
-work (landed), ToString/op_Implicit spray probe (865 sites, 1 VA
-`0x1825b1150`), `op_Implicit` return-type subset (tens of sites), Cpp2IL
-declaration cross-check (unfiled); then the sidecar program and a
-full-tree promotion (user call). Platform support (Linux/macOS binaries,
+live; probed, needs lane modeling first -- SHUFPS must co-land with
+the MOVSS merge), Dec F5 literal-blind guards (inventoried, 0 corpus
+hits), ToString/op_Implicit spray probe (865 sites, 1 VA
+`0x1825b1150`, closed-declined), Cpp2IL
+declaration cross-check (specified with prototype, not yet
+implemented); then the sidecar program (phased, whole-tile
+preference first) and a
+full-tree promotion (user call). Suite is 1231 passed / 0 failed
+(1012 portable + 219 game). Platform support (Linux/macOS binaries,
 better Android) is recorded in `docs/todo.md` as deferred and not
 planned soon.

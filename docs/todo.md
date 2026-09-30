@@ -148,7 +148,7 @@ Cpp2IL declaration gate specified with prototype; sidecar scoped in
 phases (whole-tile preference first); helper census refreshed (no
 drift: 38,252 sites / 2,661 targets / 36,311 zero-candidate).
 
-## Work index (2026-09-28; history below untouched)
+## Work index (2026-09-30; history below untouched)
 
 `## Current work` headers farther down are chronological log labels, not
 live status -- newest section is on top and each section's own status tag
