@@ -5,7 +5,7 @@
 tree out, with every method body reconstructed from the native x64 code and
 cross-referenced against IL2CPP metadata.
 
-**Status: r10 (2026-09-28).** 1231 tests pass (1012 portable + 219 game
+**Status: r10 (2026-09-28).** 1253 tests pass (1027 portable + 226 game
 fixture-backed); the strict build covers 11,183 files / 114,458 bodies with
 0 failures or structured fallbacks; the brace audit and the tree-sitter
 parse gate are clean. The recovered game **does not yet compile** — clean

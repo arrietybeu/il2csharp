@@ -22,7 +22,7 @@ via System.Array, rename barrier + param exclusion, interface dispatch
 naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
 direct calls), each decline-by-default with portable + game pins; plus
 documented disproofs (hinted receivers, ?addr tightening,
-receiver-driven generics). 1231 tests pass (1012 portable + 219 game),
+receiver-driven generics). 1253 tests pass (1027 portable + 226 game),
 suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
 both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
 and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
@@ -187,6 +187,18 @@ fix-123 in `validation_reports/review123_*`.
   extracted, never assumed. Naming (`il2cpp_array_addr`, arity 2)
   reaches non-AC images through the same lazy `_call_name` seam as
   the class-init twin.
+- An element-class IsInst folds `sub_x(obj, [arrklass+0x40])` to `obj
+  as E` only with newarr-exactness: a same-method newarr fixes the
+  runtime klass to exactly E[], while array covariance lets a
+  param/field/static/`as`-refined E[] hold a D[] at runtime, so only
+  an allocation proves (`_newarr`, preserved across value-preserving
+  copies, kills, binds and merges). Merges compose per-path proofs
+  for one array type; dry unanimous merges record a `_dry_proof`
+  invisible to dry execution because pass 2 reads dry end_states at
+  loop back-edges structurally. The element must be a closed
+  nameable reference type, never System.Object (an `as object` fold
+  is noise) or a value type (`as` is illegal); the fold fires on the
+  load path only, so stores, LEA and CMP keep today's raw spelling.
 - A consensus value type folds sret only when the individual call's first
   argument is an observed address. Require a known exact nonzero value-type
   size; generic value types, source-level ref returns, and unsupported opaque
@@ -376,7 +388,7 @@ fix-123 in `validation_reports/review123_*`.
 
 All package sources under `il2cpp/` are CRLF with no BOM; the root
 `il2csharp.py` launcher is CRLF and retains its UTF-8 BOM. A regression test
-(`tests/test_source_format.py`) enforces this contract. **1231 tests pass** (1012 portable + 219 game;
+(`tests/test_source_format.py`) enforces this contract. **1253 tests pass** (1027 portable + 226 game;
 64 golden snapshots, all green).
 `tests/goldens_review84.json` is **hash-only**: each of the 64 snapshots
 keeps its MethodDef row, VA, owner and name plus `body_sha256` /

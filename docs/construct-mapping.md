@@ -80,6 +80,15 @@ What gets resolved inside bodies:
 | C# keyword escaping               | reserved words as identifiers escape with trailing underscore (`.namespace` → `.namespace_`, `string interface;` → `string interface_;`) via the existing `safe_ident`, declarations and uses agreeing exactly; the Roslyn probe's parse layer went 10,778 → 40 → 0 on this plus array brackets |
 | fresh-array brackets              | `new T[N][i]` parses as an invalid rank specifier and `new T[N](idx)[0]` (single-argument ldelema shape) as an invalid call; wrapping the creation (`(new T[N])[i]`, `(new T[N])[idx]`) preserves allocation/size/index verbatim (709 sites) |
 | legal type declarations           | interfaces misread as classes (ECMA mandates abstract+interface together) render `partial interface` with modifier-free members (DIM bodies kept); abstract+sealed utility classes (all member-static, census-proven) render `static partial class`; user delegates render `delegate R Name(params);` via Invoke; static-ness propagates to properties/events |
+| nullary interface dispatch        | the interface-offset dispatcher is proved structurally, never by address (one `movzx` interface-count at +0x12E, one interface-table load at +0xB0, one `add 0x138` + one `shl 4` method-entry fold, an indirect tail jmp, a miss-path call); members that never read R9 render the managed call (`graph.CanUpdateAsync(obj)`), with the return closed through the interface instantiation and results materialized at the call instruction so `IDisposable` sites fold into `obj?.Dispose()` (55 Assembly-CSharp helper sites -> 0); R9-reading (parameterized) members decline here |
+| parameterized interface dispatch  | the R9-forwarding twin renders one-argument managed calls under a first-touch rule (a read proves the caller passed R9, a write manufactures it) with lazy per-member arity proof: single GPR-class parameters resolve, zero-parameter targets drop the spray (more `?.Dispose()` folds), and multi-parameter targets, untyped R9, byref first parameters and single-field-struct returns keep the marker (542 sites -> managed calls) |
+| IsInst `as` (typeof klass)        | the IsInst helper is proved structurally, never by address (klass-in-RDX/object-in-RCX prologue with null check, `Class::IsAssignableFrom` call, exactly one indirect `call [rax+10h]`, the System.Object short-circuit, return; thunk and body both land); a literal `typeof(T)` klass argument renders `obj as T` with the exact hardware semantics (9 Assembly-CSharp calls); opaque klass expressions keep the marker |
+| IsInst `as` (element klass)       | `[arrklass+0x40]` is `Il2CppClass.element_class`, so `sub_x(obj, elemclass(arr))` renders `obj as E` when the array is statically `E[]` with a closed nameable reference element AND a same-method newarr proves the runtime klass is exactly `E[]` (array covariance lets params/fields/statics/`as`-refinements hold a `D[]`, so only allocations prove); merges compose per-path proofs and dry unanimous merges carry the proof through loop back-edges (5,884 -> 4,666 sites, -1,218; the rest, plus generic-instance/nested-array elements, keep the marker) |
+| Interlocked.CompareExchange       | the `lock cmpxchg [rcx],rdx` helper (comparand staged in RAX from R8, `cmovne` keeping the observed value, the barrier call) renders `System.Threading.Interlocked.CompareExchange(ref loc, value, comparand)` with the value argument's type (21 Assembly-CSharp sites -> 0) |
+| out-of-line class-init            | the 56-byte class-init helper (`Class::Init` call, `[klass+0xD8]` fast-path compare, int3 tail) is named `il2cpp_runtime_class_init`, routing sites through the existing bookkeeping which drops the call and propagates the klass value (3 Assembly-CSharp sites, 861 tree-wide) |
+| interface resolve helper          | the 137-byte interface slow-path resolve body (callers inline the fast loop and land here on miss) is named `il2cpp_interface_get_method(obj, iface, slot)` with arity 3, dropping the sprayed 4th argument; the return stays the native method-entry pair pointer (26 Assembly-CSharp calls, 2,446 tree-wide) |
+| unanimous conversions             | a shared address whose every candidate is the same static one-parameter `op_Implicit`/`op_Explicit` with distinct returns executes identical machine code, so a caller-proven `(T)` cast naming exactly one return resolves it: `T.op_Implicit(float-arg)` (5 Angle/StyleFloat sites; bare-object/double/multi-arg/generic shapes keep the marker) |
+| bounds-checked element address    | the `cmp edx,[rcx+0x18]; jae fail` helpers over the SZARRAY layout (`RCX+0x20+index*stride`, stride extracted not assumed) are named `il2cpp_array_addr(arr, idx)` with arity 2, trimming spray residues (764 TextMeshPro/TextCore sites; the stride rides along for the `&arr[i]` follow-up) |
 
 ## How it works (original implementation)
 
@@ -454,6 +463,15 @@ Ordered by how much they cost readability:
 7. Klass offsets are calibrated for Unity 6000.0 / v31 only; other generations
    need their own constants.
 8. Mach-O / 32-bit binaries.
+9. **Runtime-helper residue.** Nine intrinsic families now render managed
+   calls (nullary + parameterized interface dispatch, IsInst `as` for
+   `typeof` and newarr-proven element klasses, `Interlocked`,
+   class-init elision, interface resolve, unanimous conversions,
+   bounds-checked element address). Open slices: bounds `&arr[i]`
+   render, multi-parameter dispatch, untyped-R9 sites,
+   single-field-struct returns, non-newarr klass provenance,
+   generic-instance/nested-array elements, field-store identity. Live
+   status and counts in `docs/todo.md`.
 
 Deliberately not done: **LINQ inversion** (`for` → `arr.Sum()`), **nameof**
 reconstruction, **tuple deconstruction** — each guesses at source that may
