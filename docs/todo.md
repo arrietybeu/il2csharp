@@ -1,5 +1,47 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: codegen intrinsics, landing 5 -- interface resolve helper named (2026-09-30, LANDED)
+
+`0x18043dc60` (2,446 sites) is not alloc/box -- the body proves it is
+the interface slow-path resolve helper: the caller inlines the
+fast-path loop and calls here on miss with (RCX=receiver object,
+RDX=iface klass, R8=slot word). `_is_iface_resolve_helper` proves the
+137-byte body structurally (fixed prologue through `movzx esi,r8w`,
+one `mov rbp,rdx`, four internal calls, `test byte [rdi+136h],10h`
+plus `cmp [rbx+10h],rax`, mid-function ret with an int3 fail tail;
+never the address). Naming it `il2cpp_interface_get_method` with
+`RT_ARITY` 3 drops the duplicated 4th arg (R9 spray residue from the
+loop): `sub_18043dc60(attrs, typeof(IAttrList), 0,
+typeof(IAttrList))` -> `il2cpp_interface_get_method(attrs,
+typeof(IAttrList), 0)`. The return stays the native method-entry pair
+pointer (honest residual -- the `res[0]()(obj, res[8])` indirect-call
+fold needs pair-struct provenance).
+
+Measured on Assembly-CSharp vs a stashed baseline (same scoped build):
+**13 files changed, line counts equal except three dropped `using
+static __SharedBodyStubs;` imports (-2 each) and the 22-line stub
+entry for the now-named address**; every other hunk is the rename
+plus temp renumbers. AC `sub_18043dc60` sites 26 -> 0. No golden
+moved (64/64).
+
+Gates (Assembly-CSharp only, `--workers 1`): 490 types / 6,622 bodies /
+0 failed / 0 fallbacks; brace 0/490; parse 0 bad / 0 ERROR / 0 MISSING;
+portable suite 982 passed (+2 predicate tests); +1 game
+(`tests/test_game_iface_resolve.py`: mi 122).
+
+Probes completed alongside (evidence only, no source change):
+ToString spray `0x1825b1150` declines all 865 shapes (typed args are
+`InternedString` on both sides; needs receiver proof); the
+`0x182da54f0` op_Implicit triple has 5 proven single-candidate typed
+uses (3x Angle mi 17631, 2x StyleFloat mi 20246 -- landing-ready);
+IsInst klass-expr dominant family is `*([arr]+0x40)` element-class
+with a fresh-`new T[N]` closable slice (~2.9k); SHUFPS lane modeling
+must co-land with MOVSS-merge (Blinker collapses to all-from-.a
+otherwise); Dec F5 inventoried (0 corpus hits, guards specified);
+Cpp2IL declaration gate specified with prototype; sidecar scoped in
+phases (whole-tile preference first); helper census refreshed (no
+drift: 38,252 sites / 2,661 targets / 36,311 zero-candidate).
+
 ## Work index (2026-09-28; history below untouched)
 
 `## Current work` headers farther down are chronological log labels, not
@@ -9,27 +51,34 @@ public scrub are pre-scrub ids and no longer resolve in this history (see
 `docs/public_release.md`).
 
 **Open, by payoff:**
-- Codegen-intrinsic recognition (program; landings 1-4 landed 2026-09-28):
+- Codegen-intrinsic recognition (program; landings 1-5 landed 2026-09-28/30):
   a census of plain `sub_` calls found 38,254 sites / 2,663 targets,
   **36,313 sites (95%) with zero metadata candidates** -- IL2CPP runtime
   helpers that metadata can never name. Landed families: nullary
   interface dispatch (55 AC helper sites -> 0), IsInst `typeof(T)`
   (9 AC calls -> `obj as T`), `Interlocked.CompareExchange` (21 AC calls
   -> 0), out-of-line class-init (3 AC calls -> elided with the klass
-  value propagating; 861 tree-wide). Open families by sites:
+  value propagating; 861 tree-wide), interface slow-path resolve
+  `0x18043dc60` (26 AC calls -> named `il2cpp_interface_get_method`
+  with the duplicated 4th arg dropped; 2,446 tree-wide -- the body
+  disproves the old alloc/box label). Open families by sites:
   isinst/castclass klass expressions (5,802; need element-class
-  provenance), alloc/box `0x18043dc60` (2,446), bounds-checked element
+  provenance), bounds-checked element
   address `0x1803ed830`/`0x1803ed860` (745), parameterized interface
   dispatch (the A-family that saves R9:
   `IUpdatableGraph.CanUpdateAsync` slot 3, `IAstarAI.set_OnSearchPath`
   slot 26). The census script and report were local scratch (temp).
 - ToString/op_Implicit spray probe (865 sites, 1 VA `0x1825b1150`):
-  the only un-disproved micro-slice. Both candidates consume one
-  register today; the unrun scan is whether any of the 865 call shapes
-  fits exactly one candidate.
-- `op_Implicit` return-type subset (tens of sites, e.g.
-  Angle/StyleFloat/TimeValue at `0x182da54f0`): needs a typed-use
-  scan; sole caller sampled (13332) declines on `object`.
+  CLOSED 2026-09-30 with evidence -- all 865 shapes decline (typed
+  args are `InternedString` on both sides; static/instance, arity, arg
+  and return types all vacuous at native level). Needs receiver proof
+  (field sidecar + use->def) or instantiation proof, not call-shape
+  elimination. Markers stay honest.
+- `op_Implicit` return-type subset (36 sites at `0x182da54f0`):
+  typed-use scan done 2026-09-30 -- 31 `object` sites decline;
+  **5 typed sites isolate one candidate each** (3x Angle mi 17631:
+  mi 20080/20698/20699; 2x StyleFloat mi 20246: mi 19412 x2;
+  TimeValue unproven anywhere). Landing-ready, not yet landed.
 - Cpp2IL declaration cross-check gate (proposed, not yet filed):
   diff emitted declarations against Cpp2IL-reconstructed DLLs.
 - Sidecar program (large, deferred by design): method+generic mixes

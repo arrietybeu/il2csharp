@@ -1005,3 +1005,29 @@ def test_class_init_helper_rejects_a_mutated_body():
     bad[0x10] ^= 0xFF                   # the [klass+0xD8] fast-path compare
     lift, target = isinst_helper_lifter(bytes(bad))
     assert not lift._is_class_init_helper(target)
+
+
+# The interface slow-path resolve helper (0x18043dc60, 137 bytes, four
+# internal calls, fail-path int3). (obj, iface, slot) in RCX/RDX/R8.
+IFACE_RESOLVE_BODY = bytes.fromhex(
+    '48895c240848896c24104889742418574883ec20488b39488bd9488bcf410fb7f0'
+    '488beae8670000004885c07536f6873601000010744248394310743c440fb7c6'
+    '488bd5488bcbe814f30000488bd84885c07425488b4808488b4920e88f240500'
+    '488bc3488b5c2430488b6c2438488b7424404883c4205fc3440fb7c6488bd548'
+    '8bcfe8180d0000cc')
+
+
+def test_iface_resolve_helper_recognized_structurally():
+    lift, target = isinst_helper_lifter(IFACE_RESOLVE_BODY)
+    assert lift._is_iface_resolve_helper(target)
+
+
+def test_iface_resolve_helper_rejects_a_mutated_body():
+    bad = bytearray(IFACE_RESOLVE_BODY)
+    bad[0] ^= 0xFF                        # the prologue is the proof
+    lift, target = isinst_helper_lifter(bytes(bad))
+    assert not lift._is_iface_resolve_helper(target)
+    bad2 = bytearray(IFACE_RESOLVE_BODY)
+    bad2[IFACE_RESOLVE_BODY.find(bytes.fromhex('f6873601000010'))] ^= 0xFF
+    lift2, target2 = isinst_helper_lifter(bytes(bad2))
+    assert not lift2._is_iface_resolve_helper(target2)

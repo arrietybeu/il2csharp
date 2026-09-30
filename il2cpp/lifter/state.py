@@ -28,6 +28,7 @@ class _StateMixin:
         'il2cpp_object_new': 1,
         'il2cpp_codegen_write_barrier': 2,
         'il2cpp_runtime_class_init': 1,
+        'il2cpp_interface_get_method': 3,
     }
 
     @staticmethod
@@ -250,6 +251,42 @@ class _StateMixin:
                 return False
             pos += len(b) + tail
         return True
+
+    def _is_iface_resolve_helper(self, target):
+        """Recognize the interface slow-path resolve helper.
+
+        Ground truth: 0x18043dc60 (extent 0x89, 39 insns). The caller
+        inlines the fast-path loop and calls here on miss with
+        (RCX=receiver object, RDX=iface klass, R8=slot word). The body
+        derefs the klass from the object (`mov rdi,[rcx]`), saves the
+        iface (`mov rbp,rdx`) and slot (`movzx esi,r8w`), walks the
+        interface table through two search calls plus a class-init-ish
+        call, and returns the receiver on hit. The fail path calls a
+        noreturn raiser and ends in int3. Four internal `call rel32`
+        (only displacements vary); zero jmp refs. R9 is never read --
+        the printed 4th arg is spray residue from the fast-path loop.
+        Naming routes through `il2cpp_interface_get_method` with arity
+        3 (obj, iface, slot). A different runtime keeps `sub_`.
+        """
+        if not HAVE_ICED or not target or not self.bin.is_exec_va(target):
+            return False
+        if self.il.addr_candidates.get(target) or target in self.bin.exports:
+            return False
+        start, finish = self.il.function_extent(target)
+        if start != target or finish is None or not 0x40 < finish - target <= 0x400:
+            return False
+        code = self.bin.read(target, finish - target)
+        if not code:
+            return False
+        if not code.startswith(bytes.fromhex(
+                '48895c240848896c24104889742418574883ec20488b39488bd9488bcf410fb7f0')):
+            return False
+        return (code.count(bytes.fromhex('488beae867000000')) == 1
+                and code.count(b'\xe8') == 4
+                and bytes.fromhex('f6873601000010') in code
+                and bytes.fromhex('48394310') in code
+                and b'\xc3' in code
+                and code.endswith(b'\xcc'))
 
     # ---- unregistered pure-FP32-unary leaves ---------------------------
     # Ground truth: 0x1804cdb00, the CRT log10f behind AudioVolumeSliders'
@@ -1106,6 +1143,19 @@ class _StateMixin:
                 self.rt_names[_t] = 'il2cpp_runtime_class_init'
                 if _fin:
                     self.rt_names[_fin] = 'il2cpp_runtime_class_init'
+        # Interface slow-path resolve helper (0x18043dc60, 2,446 sites):
+        # the miss-path of the inlined fast-path loop. (obj, iface,
+        # slot) in RCX/RDX/R8; R9 residue is spray. Name + arity 3
+        # drops the duplicated 4th arg. Return stays the native
+        # method-entry pair pointer (honest residual -- no `as`/dispatch
+        # fold without pair-struct provenance).
+        for _t in sorted(set(cnt) | set(stats)):
+            _fin = self._thunk_final(_t)
+            if self._is_iface_resolve_helper(_t) or (
+                    _fin and _fin != _t and self._is_iface_resolve_helper(_fin)):
+                self.rt_names[_t] = 'il2cpp_interface_get_method'
+                if _fin:
+                    self.rt_names[_fin] = 'il2cpp_interface_get_method'
         self._cls_init_export = next(
             (va for va, nm0 in b.exports.items()
              if nm0 == 'il2cpp_runtime_class_init'), None)
