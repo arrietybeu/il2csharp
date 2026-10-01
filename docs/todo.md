@@ -53,11 +53,13 @@ lifter-side with width proof; returns/byref declined; probe points
 detailed); twin+guard branch (`twin-guard-wip`: consumer vetoes +
 subclass tolerance + drop attribution, then re-measure); isinst slice
 2 (fence helper `_bare_typeof_target` LANDED + 9 pins; `_call` gate
-open pending owner-exact residual census -- 459 isinst lines / 123
-file-level candidates in the Photon3Unity3D/Astar/Voice trees, but
-only 1 site lifts live (MI 123442, arity-4 decline); the rest is
-shared-body aliasing, so the census must lift each VA through the
-built file's own owner MI before writing the gate); decl-gate v2 (field-statics
+PARKED -- full census of the Photon3Unity3D/Astar/Voice trees finds
+exactly one typeof-carrying isinst site (MI 123442, arity-4 with
+extra args: decline); the other 458 markers are `+0x40` klass-load
+sites (landing-9 domain, not typeof residuals). The spec's 17 must
+live in unbuilt images; the gate needs a full-tree census and a
+firing repro (exact-2-arg, kind!=klass, nameable T) before it is
+written); decl-gate v2 (field-statics
 first); sidecar phase 1 (spec'd); Cpp2IL side B (external binary).
 
 ## Current work: single-field assign fold F2-C1 (2026-10-01, LANDED)
