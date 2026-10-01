@@ -136,6 +136,9 @@ class _StructureMixin:
         # runs right after it (probe_b41_stages.py: 0->12 there,
         # 12->12 everywhere later)
         raw = self._selfcopy_drop(raw)
+        # F2-C1 sits here: assignments still carry lifter spellings
+        # (copy-prop already transparent) and dead decls drop after.
+        raw = self._single_field_assign_fold(raw, m)
         raw = self._drop_dead_locals(raw)
         # fix 51b: later passes MINT shapes the early run (before
         # _drop_dead_temps) can never see -- dead-store drops empty the

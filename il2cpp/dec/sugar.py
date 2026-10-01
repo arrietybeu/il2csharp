@@ -341,6 +341,150 @@ class _SugarMixin:
             m = self._STATIC_ADDR_RX.search(text, start + 10)
         return text
 
+    _SF_DECL_RX = re.compile(r'^([\w.<>\[\], ]+)\s+([A-Za-z_]\w*)\s*=\s*(.+);$')
+    _SF_RHS_RX = re.compile(r'^([A-Za-z_]\w*)\.([A-Za-z_]\w*)$')
+    _SF_KW = frozenset(
+        'this typeof null true false default sizeof nameof checked unchecked'.split())
+
+    def _decl_types(self, lines, masked):
+        """Temp/param name -> set of declared type texts (masked scan)."""
+        out = {}
+        for st, mm in zip(lines, masked):
+            m = self._SF_DECL_RX.match(mm)
+            if not m:
+                continue
+            ty, nm = m.group(1).strip(), m.group(2)
+            if not nm or nm in self._SF_KW:
+                continue
+            a, b = m.span(1)
+            if st[a:b] != mm[a:b]:
+                continue
+            out.setdefault(nm, set()).add(ty)
+        return out
+
+    def _single_field_assign_fold(self, lines, m):
+        """`T t = X.f` -> `T t = X` for single-field structs (F2-C1).
+
+        The lifter renders whole-struct value flows through field-lane
+        spellings (`offset._ticks`); when the destination is that same
+        single-field struct type, the field hop is provably the whole
+        value and the fold removes an uncompilable mismatch. Requires:
+        exact one-field typedef (non-enum), the field name matches, the
+        base is a bare temp with exactly one declared type equal to T
+        (lifeter maps, body decls, or method params), and T is also
+        X's recorded type. Mismatched consumers (int/ulong lanes, enums,
+        object decls, unknown types, calls, complex bases) keep today's
+        spelling. Masked matching keeps literals/comments honest.
+        """
+        try:
+            L = getattr(self, 'L', None)
+            il = getattr(L, 'il', None)
+            if L is None or il is None:
+                return lines
+            masked = []
+            in_bc = False
+            for st in lines:
+                mm, in_bc = self._mask_literals(st, in_bc)
+                masked.append(mm)
+            decls = self._decl_types(lines, masked)
+            params = {}
+            try:
+                if m is not None:
+                    for p in L.meta.method_params(m):
+                        pn = getattr(p, 'name', None)
+                        if pn and pn not in self._SF_KW:
+                            params[pn] = p.type
+            except Exception:
+                params = {}
+            out = list(lines)
+            for i, (st, mm) in enumerate(zip(lines, masked)):
+                m2 = self._SF_DECL_RX.match(mm)
+                if m2 is not None:
+                    a, b = m2.span(3)
+                    if st[a:b] != mm[a:b]:
+                        continue
+                    t, rhs = m2.group(2), m2.group(3).strip()
+                    tds0 = decls.get(t, set())
+                    if len(tds0) != 1:
+                        continue
+                    ttn = next(iter(tds0))
+                else:
+                    m3 = re.match(r'^([A-Za-z_]\w*)\s*=\s*(.+);$', mm)
+                    if not m3:
+                        continue
+                    t, rhs = m3.group(1), m3.group(2).strip()
+                    a, b = m3.span(2)
+                    if st[a:b] != mm[a:b]:
+                        continue
+                    tds0 = decls.get(t, set())
+                    if len(tds0) != 1:
+                        continue
+                    ttn = next(iter(tds0))
+                mr = self._SF_RHS_RX.match(rhs)
+                if not mr:
+                    continue
+                x, f = mr.group(1), mr.group(2)
+                if x in self._SF_KW:
+                    continue
+                tdi = self._td_idx_by_name(ttn)
+                if tdi is None:
+                    continue
+                try:
+                    tdo = L.meta.typedefs[tdi]
+                    chain = il.instance_field_chain(tdi) or {}
+                except Exception:
+                    continue
+                if getattr(tdo, 'is_enum', False) or len(chain) != 1:
+                    continue
+                try:
+                    (foff, (fname, _fti)), = chain.items()
+                except Exception:
+                    continue
+                if fname != f:
+                    continue
+                xty = self._sf_temp_type(L, decls, params, x)
+                if xty is None:
+                    continue
+                try:
+                    xtd = L._td_of(xty) if hasattr(L, '_td_of') else None
+                except Exception:
+                    xtd = None
+                if xtd != tdi:
+                    continue
+                s0, s1 = mm.find(rhs), mm.find(rhs) + len(rhs)
+                out[i] = st[:s0] + x + st[s1:]
+            return out
+        except Exception:
+            return lines
+
+    def _sf_temp_type(self, L, decls, params, x):
+        """Il2CppType tuple for temp X, else None (maps, decls, params)."""
+        try:
+            for mp in ('_var_types', '_type_hints', 'slot_types'):
+                try:
+                    mm = getattr(L, mp, None)
+                    v = mm.get(x) if mm else None
+                except Exception:
+                    v = None
+                if isinstance(v, tuple):
+                    return v
+            tds = decls.get(x, set())
+            if len(tds) == 1:
+                tdi = self._td_idx_by_name(next(iter(tds)))
+                if tdi is not None:
+                    return (tdi, 0x11 << 16)
+            if x in params:
+                try:
+                    pt = L.il.types[params[x]] \
+                        if 0 <= params[x] < len(L.il.types) else None
+                except Exception:
+                    pt = None
+                if isinstance(pt, tuple):
+                    return pt
+        except Exception:
+            pass
+        return None
+
     def _td_idx_by_name(self, full):
         # Per INSTANCE, never per class: the values are TypeDef indices, which
         # are binary-local (CLAUDE.md), so a class-level map hands a second

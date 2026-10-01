@@ -1,5 +1,26 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: single-field assign fold F2-C1 (2026-10-01, LANDED)
+
+First slice of the single-field use-proof: `T t = X.f` (decl or plain
+reassignment) folds to `T t = X` when T is a closed non-enum
+single-field value type, f is its single field, and X resolves to T
+(lifter maps, body decls, or method params; exactly one type each).
+Int/ulong/object/enum consumers, unknown types, call/complex bases,
+multi-field structs and multi-def temps keep today's spelling;
+literal/comment masking throughout. Placement after `_selfcopy_drop`
+(copy-prop transparent) so folded decls drop via `_drop_dead_locals`.
+
+Gates: paired scoped builds (mscorlib + Assembly-CSharp): 4 files
+changed, file sets identical, all 12 hunks genuine single-field
+recoveries (`TimeSpan ts = offset`, `DateTime dt = dateTime`,
+`CancellationToken ct = cancellationToken`, `PlayerRef pr = player`,
+incl. reassignment shapes) with renumber-only cascades; brace 0;
+parse 0/0/0/0. Goldens 64/64 unmoved. Suite 1345 passed / 0 failed
+(+9 portable `tests/test_single_field.py`, +3 game
+`tests/test_game_single_field.py` incl. the `ulong`-lane control
+that must keep its lane). Next: C2 call-arg fold, then the twin.
+
 ## Current work: IsInst A2 sugar twin -- probed, census-closed, DECLINED (2026-10-01, DOCUMENTED)
 
 The 21 `arr.getClass() + 0x40` sites (getClass sugar for the klass
