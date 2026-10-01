@@ -599,7 +599,7 @@ class _TextPassMixin:
                     if not (re.match(r'[A-Za-z0-9_)\]>]', prev)
                             or re.match(r'[A-Za-z0-9_)\]]', back)):
                         tail = s[i + 1:]
-                        if re.match(r'\s*(?:[<>=|+*/%^\[\].&:-]|!(?==))|[.,);]|\s*$|\s*\?', tail):
+                        if re.match(r'\s*(?:[<>=|+*/%^\[\].&:-]|!(?==))|\s*[.,);}]|\s*$|\s*\?', tail):
                             out.append('unknown')
                             i += 1
                             continue

@@ -14,6 +14,23 @@ else:
     _WIDE_FLOAT_MN = frozenset()
 
 class _InsnMixin:
+    def _lane_value(self, origin, offset, expected):
+        """A modeled SIMD lane must be spellable as a binary operand.
+
+        `_piece_value` provenance can still carry the bare `?`/`_`
+        placeholder text (an unproven value that happens to have parts);
+        stamping it into arithmetic renders `real27 * ?`, which is
+        unparseable (LegsAnimator VA 0x180644EF0 gate). Decline those
+        to today's spelling; `unknown`-text lanes still render (they
+        parse).
+        """
+        if origin is None:
+            return None
+        v = self._piece_value(origin, offset, 4, expected)
+        if v is None or not v.text or v.text in ('?', '_'):
+            return None
+        return v
+
     def _insn(self, ins, insns, idx, fmt, end):
         mn = ins.mnemonic
         asm = fmt.format(ins) if fmt else None
@@ -398,6 +415,31 @@ class _InsnMixin:
                     src_e = self.reg(reg_name(ins.op1_register))
                 finally:
                     self._copying = False
+                if mn == Mnemonic.MOVSS:
+                    # Scalar single merge: low lane from src, lanes 1..3
+                    # preserved from dst. Hardware truth; the old full copy
+                    # dropped the dst high lanes. Decline (any lane
+                    # unproven) keeps today's full copy -- a copy is closer
+                    # to truth than unknown, so never pop here.
+                    _dst_e = self.reg(dst)
+                    _parts = []
+                    _ok = src_e is not None and _dst_e is not None
+                    if _ok:
+                        _v0 = self._lane_value(src_e, 0, _R4_TY)
+                        _ok = _v0 is not None
+                        if _ok:
+                            _parts.append((0, _v0, 0, 4))
+                            for _lo, _off in ((4, 4), (8, 8), (12, 12)):
+                                _v = self._lane_value(_dst_e, _off, _R4_TY)
+                                if _v is None:
+                                    _ok = False
+                                    break
+                                _parts.append((_lo, _v, 0, 4))
+                    if _ok:
+                        _me = Expr('?', None, 'bits')
+                        _me._parts = _parts
+                        self.set_reg(dst, _me)
+                        return
                 self.set_reg(dst, src_e)
                 return
             return
@@ -886,6 +928,105 @@ class _InsnMixin:
             packed._parts = parts
             self.set_reg(dst, packed)
             return
+        if mn == Mnemonic.SHUFPS and A(2) in (OpKind.IMMEDIATE8, OpKind.IMMEDIATE8TO32):
+            # dst[i] = dst[sel] for i<2, src[sel] for i>=2, sel=(imm>>(2i))&3.
+            # The reverted fault decoded one origin/selector for all lanes
+            # (every channel from .a); the per-lane map below pins identity
+            # 0xE4, broadcast 0x00 and 0x1B in tests. Any unproven lane
+            # keeps today's spelling (fall through) -- never partial-model,
+            # never pop: invalidation stays open (mi80548 gate).
+            dst = reg_name(ins.op0_register)
+            left = self.reg(dst)
+            right = (self.reg(reg_name(ins.op1_register)) if A(1) == OpKind.REGISTER
+                     else self._read_mem(ins, asm))
+            try:
+                imm8 = imm_of(ins, 2) & 0xFF
+            except Exception:
+                imm8 = None
+            parts = []
+            ok = left is not None and right is not None and imm8 is not None
+            if ok:
+                for i in range(4):
+                    sel = (imm8 >> (2 * i)) & 3
+                    origin = left if i < 2 else right
+                    value = self._lane_value(origin, sel * 4, _R4_TY)
+                    if value is None:
+                        ok = False
+                        break
+                    parts.append((i * 4, value, 0, 4))
+            if ok:
+                packed = Expr('?', None, 'bits')
+                packed._parts = parts
+                self.set_reg(dst, packed)
+                return
+        if mn == Mnemonic.PSHUFD and A(2) in (OpKind.IMMEDIATE8, OpKind.IMMEDIATE8TO32):
+            # All four lanes from src under the same imm8 map.
+            dst = reg_name(ins.op0_register)
+            right = (self.reg(reg_name(ins.op1_register)) if A(1) == OpKind.REGISTER
+                     else self._read_mem(ins, asm))
+            try:
+                imm8 = imm_of(ins, 2) & 0xFF
+            except Exception:
+                imm8 = None
+            parts = []
+            ok = right is not None and imm8 is not None
+            if ok:
+                for i in range(4):
+                    sel = (imm8 >> (2 * i)) & 3
+                    value = self._lane_value(right, sel * 4, _R4_TY)
+                    if value is None:
+                        ok = False
+                        break
+                    parts.append((i * 4, value, 0, 4))
+            if ok:
+                packed = Expr('?', None, 'bits')
+                packed._parts = parts
+                self.set_reg(dst, packed)
+                return
+        if mn == Mnemonic.UNPCKHPS:
+            # Interleave UPPER halves: dst = [d2, s2, d3, s3].
+            dst = reg_name(ins.op0_register)
+            left = self.reg(dst)
+            right = (self.reg(reg_name(ins.op1_register)) if A(1) == OpKind.REGISTER
+                     else self._read_mem(ins, asm))
+            parts = []
+            ok = left is not None and right is not None
+            if ok:
+                for lo, origin, offset in ((0, left, 8), (4, right, 8),
+                                          (8, left, 12), (12, right, 12)):
+                    value = self._lane_value(origin, offset, _R4_TY)
+                    if value is None:
+                        ok = False
+                        break
+                    parts.append((lo, value, 0, 4))
+            if ok:
+                packed = Expr('?', None, 'bits')
+                packed._parts = parts
+                self.set_reg(dst, packed)
+                return
+        if mn == Mnemonic.CVTDQ2PS:
+            # Integer-lane to float-lane conversion. Model lanes only when
+            # each 4B source lane slices to an int-typed value; render
+            # (float)(lane) per lane, never a whole-register cast. Any
+            # unproven lane keeps today's spelling instead of fabricating.
+            dst = reg_name(ins.op0_register)
+            right = (self.reg(reg_name(ins.op1_register)) if A(1) == OpKind.REGISTER
+                     else self._read_mem(ins, asm))
+            parts = []
+            ok = right is not None
+            if ok:
+                for lo in (0, 4, 8, 12):
+                    lane = self._lane_value(right, lo, _INT_TY)
+                    if lane is None:
+                        ok = False
+                        break
+                    fe = Expr('(float)(' + lane.text + ')', _R4_TY, 'float')
+                    parts.append((lo, fe, 0, 4))
+            if ok:
+                packed = Expr('?', None, 'bits')
+                packed._parts = parts
+                self.set_reg(dst, packed)
+                return
         if mn in (Mnemonic.XORPS, Mnemonic.XORPD, Mnemonic.ANDPS, Mnemonic.ANDNPS,
                   Mnemonic.ORPS, Mnemonic.PXOR):
             dst = reg_name(ins.op0_register)

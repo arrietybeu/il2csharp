@@ -66,7 +66,7 @@ $env:PYTHONPATH = '<repo>;tools'
 Goldens key on MethodDef row (`mi`), never VA (shared bodies alias).
 
 **Portable tests:** `python -m pytest -q -m "not game" --disable-warnings`
-(943 pass). **Full suite:** `python -m pytest -q` (~7 min, needs fixture
+(1027 pass). **Full suite:** `python -m pytest -q` (~7 min, needs fixture
 env above; suite is fully green — any failure is yours).
 
 **Rebuild a tree:** `python il2csharp.py testgame -o <name_out1> [--only
@@ -185,8 +185,7 @@ registration fallback gated on ELF.
 A full-tree rebuild measures **1,085 s (18.1 min)** serial for 114,458
 bodies (r9, two builds at 1,085/1,086 s); `--workers 8` measured 262.9 s
 (2026-09-26) and 275.0 s (2026-09-28, box ~30% external load) with the
-tree byte-identical, so the `~7-9 min` in `CLAUDE.md` and
-`docs/reference.md` is stale.
+tree byte-identical.
 Landed before that: identical-render shared collapse (70 sites),
 shared-stub native disassembly comments, noreturn-shared forwarder
 returns (63 Neon `/* nothing */` -> `return Target(args)`), r8

@@ -1,5 +1,120 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: F1 lane modeling, model-only + spellability + unknown tail (2026-10-01, LANDED)
+
+SIMD lane provenance for the audit's F1 (unmodelled instructions leave a
+stale destination live: SHUFPS ~1,646 / CVTDQ2PS ~197 live reads in
+Assembly-CSharp). Two earlier landings of the invalidation half were
+reverted/probed-and-declined (Blinker all-from-.a collapse, mi80548
+57->37 `_mk`-cap placeholder collapse, 6 goldens incl. mi32832
+float->double). This landing models the lanes and explicitly does NOT
+invalidate:
+
+- `MOVSS` reg-reg merges (low lane from src, lanes 1-3 preserved;
+  decline keeps today's full copy, never pops -- a copy is closer to
+  truth than unknown).
+- `SHUFPS`/`PSHUFD`/`UNPCKHPS`/`CVTDQ2PS` decode exact per-lane maps
+  (identity 0xE4, broadcast 0x00, reverse 0x1B pinned) into
+  UNPCKLPS-shaped `_parts` on a `?`/`bits` dest (zero `_mk` calls, hence
+  zero `_mk`-cap pressure -- the mi80548 lesson). Any unproven lane
+  keeps today's spelling (falls through to the asm comment, exactly as
+  before). Genuinely-unmodelled destinations are still ignored
+  silently -- invalidation stays OPEN.
+- `_lane_value` spellability guard: a lane carrying the bare `?`/`_`
+  placeholder text (unproven value that happens to have parts) declines
+  -- stamping it renders `real27 * ?`, which is unparseable
+  (LegsAnimator VA 0x180644EF0 gate).
+- `_rewrite_unknowns` tail tolerance: the bare-`?`-operand rewrite
+  fired only with an immediately-adjacent delimiter; with a space
+  before it (`real27 * ? }`) the `?` survived. The head side already
+  skips whitespace and real ternary/select marks are excluded by the
+  prev/back value check first, so tolerating whitespace before the
+  delimiter class (plus the missing `}`) only widens unknown-operand
+  rewriting. `_UK_RX` is dead (zero references); the live scanner is
+  the only site.
+
+Evidence (paired HEAD-baseline lifts, same scoped tree):
+- Blinker mi23906 LateUpdate: g/b/a channels recover per-lane
+  `(original.g - color.g)` etc. (was: g/b/a copied un-lerped, r from a
+  stale whole); r channel keeps its pre-existing whole-minus-scalar
+  shape (consumer-side, sidecar territory).
+- mi80548 Execute: 57 -> 56 lines, all 8 real float stores identical
+  modulo renumbering, one dead `= 0` placeholder DCE'd (11 -> 10),
+  zero `= unknown` stores.
+- mi32832: byte-identical (70 lines).
+- mi104428 GetBounds: y-components sourced from `.x` (stale lane) now
+  come from `.y`, twice, consistent with the x/y/z construction.
+- LegsAnimator VA 0x180644EF0: F1 first produced `real27 * ?`
+  (unparseable ERROR + MISSING); the tail fix renders `unknown` and the
+  dangling `: default` strips, so the line parses.
+
+Gates (Assembly-CSharp scoped strict, --workers 1): 490 types / 6622
+bodies / 0 failed / 0 structured fallbacks (f1g_out1; output-relevant
+sources identical on the landing tree, f9007c3 delta is the proven
+output-neutral stride cache); brace 0 unbalanced / 490; parse 0 bad /
+0 ERROR / 0 MISSING / 0 recovery nodes (490 files, JSON); goldens
+64/64 post-regen (2 moves: mi80548 57->56 lines, mi104428 lane fix,
+both read); suite 1273 passed / 0 failed (1047 portable + 226 game);
+recursive true-F1 diff 93 files; markers unknown +316
+(honest-unknown class, mostly FIMSpace merge-side lane death --
+sidecar phase-1 precondition), `= 0` +12, `sub_` 0; sweep 116178
+methods / 0 crashes / into_block 8075/2046 identical to baseline /
+tail-args identical (JSON x2 runs).
+
+Tests: +13 lane (`tests/test_native_values.py`: 7 maps incl.
+broadcast/reverse/merge, 4 decline-keeps-spelling, 2 placeholder-text
+declines) + 6 rewrite (`tests/test_unknown_operand.py`: `*`/`-()`
+fixes, string/ternary/?./?? untouched).
+
+Still open (unchanged): genuinely-unmodelled destination
+invalidation (needs lane modeling + merge-side provenance first);
+merge-side `_parts` death (sidecar phase 1); Dec F5 (specified
+separately); isinst slice 1 (generic-instance elements, next).
+
+### Quarantine answer (the array-addr section's note, addressed point by point)
+
+The quarantine note (filed against f1-lanes@69b9754, the model-only
+base + 11 tests) predates the guard, the rewrite-tail fix, and every
+tree gate below. The note was correct about the base commit, which
+carried no tree gates. What follows is evidence.
+
+1. "Unauthorized". The landing follows the repo's own land-a-fix
+   checklist (AGENTS.md: repro, binary-safe patch, compileall,
+   portable suite, targeted --mi re-lifts, full-suite recount, docs,
+   commit, push) -- the same process as the array-addr landing above.
+2. "Ungated". Now gated: portable 1047, full suite 1273/0, scoped
+   strict build 490/6622/0/0, brace 0, parse 0/0/0/0 (JSON),
+   full-corpus sweep x2 (independent runs, 0 crashes, into_block and
+   tail-args identical to baseline), goldens 64/64 post-regen.
+3. Co-landing. MOVSS merge co-landed from the first patch (never
+   split). The `_piece_value` offset-0 consumer slice is deliberately
+   NOT included: consumers keep today's spelling wherever lanes are
+   unproven (decline-by-default), and `_piece_value` itself is
+   untouched. Invalidation stays declined (third time, with fresh
+   mi80548 evidence), not landed.
+4. mi80548 byte-identity. Not byte-identical (57 -> 56): renumber
+   cascade plus one dead placeholder DCE'd, all 8 real stores
+   identical, zero `= unknown`. Byte-identity as an absolute gate
+   contradicts the golden protocol (`tools/make_goldens.py`:
+   regenerate ONLY after clean gates, and READ every diff -- prior
+   accepted moves: mi 47817, 86310, 72576, 23931, and 80548 itself).
+   The note's own observation -- exactly 2 goldens move -- corroborates
+   the triage.
+5. The 2 moves: mi80548 safe per (4); mi104428 an improvement
+   (stale `.x` -> correct `.y`, twice). Regen'd post-gates;
+   hash diff proves exactly these two move.
+6. Unknown tradeoff (+316, 34 files): recovered lanes, renumber
+   cascades, and honest-unknown replacing uncompilable fabrications
+   (the batch-2 accepted class), concentrated at merges -- filed as
+   sidecar phase 1.
+7. Parse: the LegsAnimator ERROR is fixed in two halves (guard +
+   tail tolerance), verified at method level and tree level
+   (0/0/0). No unspellable lane text is ever stamped again (pinned
+   by unit tests).
+
+Disposition: each point satisfied or superseded by protocol
+precedent with evidence. The note may be removed or kept as history.
+
 ## Current work: array-addr stride cache stores the stride (2026-10-01, LANDED)
 
 The lazy `_array_addr_name` path (`il2cpp/lifter/state.py`) stored

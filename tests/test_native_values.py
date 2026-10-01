@@ -1,4 +1,5 @@
 """Small real-x64 instruction regressions for Review 78's TODO fixes."""
+import struct
 from types import SimpleNamespace as NS
 
 import pytest
@@ -280,3 +281,110 @@ def test_scalar_sse_slices_a_whole_value_fragment():
     lift.regs['XMM0'] = lift.regs['RAX']
     execute(lift, 'f30f58c1')       # addss xmm0, xmm1
     assert lift.regs['XMM0'].text == 'particleColor.x + real2'
+
+
+# --- F1 lane modeling (SHUFPS/PSHUFD/UNPCKHPS/CVTDQ2PS/MOVSS-merge) ---
+#
+# Each handler fires only when every consumed lane is proven through
+# `_piece_value`; any unproven lane keeps today's spelling (the
+# destination is left untouched and execution falls through to the asm
+# comment, exactly as before). Invalidation of genuinely-unmodelled
+# destinations stays open (mi80548 gate).
+
+def lanes_lifter(regs=None):
+    il = NS(types=[INT, FLOAT],
+            _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+            instance_field_chain=lambda td: {},
+            type_from_ptr=lambda ptr: None,
+            _closed_type_key=lambda t: t,
+            _sf_field_size=lambda fty, depth: 4 if fty == FLOAT else None)
+    meta = NS(typedefs=[NS(is_valuetype=False)])
+    lift = Lifter.__new__(Lifter)
+    lift.il, lift.meta = il, meta
+    lift.bin = NS()
+    lift.regs = dict(regs or {})
+    lift.out, lift._type_hints, lift._var_types = [], {}, {}
+    lift.slot_types, lift.stack_map, lift.stack_values, lift.addr_of = {}, {}, {}, {}
+    lift.rsp_delta = lift.var_n = 0
+    lift.dry = lift.asm_comments = lift._copying = False
+    lift._cur_ip = 0
+    lift.flags = None
+    return lift
+
+
+def _packed(*names):
+    p = Expr(names[0], FLOAT, 'bits')
+    p._parts = [(i * 4, Expr(n, FLOAT, 'float'), 0, 4) for i, n in enumerate(names)]
+    return p
+
+
+def _lane_texts(lift, reg):
+    e = lift.regs.get(reg)
+    out = []
+    for off in (0, 4, 8, 12):
+        v = lift._piece_value(e, off, 4, FLOAT)
+        out.append(v.text if v is not None else '<None>')
+    return out
+
+
+@pytest.mark.parametrize('hx,want', [
+    ('0fc6c1e4', ['a', 'b', 'g', 'h']),    # shufps identity
+    ('0fc6c100', ['a', 'a', 'e', 'e']),    # shufps broadcast
+    ('0fc6c11b', ['d', 'c', 'f', 'e']),    # shufps reverse-ish
+    ('660f70c1e4', ['e', 'f', 'g', 'h']),  # pshufd identity
+    ('660f70c11b', ['h', 'g', 'f', 'e']),  # pshufd reverse
+    ('0f15c1', ['c', 'g', 'd', 'h']),      # unpckhps upper interleave
+    ('f30f10c1', ['e', 'b', 'c', 'd']),    # movss low-lane merge
+])
+def test_simd_lane_models(hx, want):
+    lift = lanes_lifter({'XMM0': _packed('a', 'b', 'c', 'd'),
+                         'XMM1': _packed('e', 'f', 'g', 'h')})
+    execute(lift, hx)
+    assert _lane_texts(lift, 'XMM0') == want
+
+
+def test_shufps_with_unproven_lanes_keeps_todays_spelling():
+    dst = _packed('a', 'b', 'c', 'd')
+    lift = lanes_lifter({'XMM0': dst,
+                         'XMM1': Expr('stale', FLOAT, 'float')})
+    execute(lift, '0fc6c1e4')
+    assert lift.regs['XMM0'] is dst
+
+
+def test_movss_with_unproven_dst_lane_keeps_full_copy():
+    lift = lanes_lifter({'XMM0': Expr('stale', FLOAT, 'float'),
+                         'XMM1': _packed('e', 'f', 'g', 'h')})
+    execute(lift, 'f30f10c1')
+    assert _lane_texts(lift, 'XMM0') == ['e', 'f', 'g', 'h']
+
+
+def test_cvtdq2ps_models_int_lanes():
+    src = Expr('src', None, 'bits')
+    src._bytes = struct.pack('<4i', 1, -2, 3, 4)
+    lift = lanes_lifter({'XMM0': _packed('a', 'b', 'c', 'd'), 'XMM1': src})
+    execute(lift, '0f5bc1')
+    assert _lane_texts(lift, 'XMM0') == [
+        '(float)(1)', '(float)(-2)', '(float)(3)', '(float)(4)']
+
+
+def test_cvtdq2ps_with_float_lanes_keeps_todays_spelling():
+    dst = _packed('a', 'b', 'c', 'd')
+    lift = lanes_lifter({'XMM0': dst, 'XMM1': _packed('e', 'f', 'g', 'h')})
+    execute(lift, '0f5bc1')
+    assert lift.regs['XMM0'] is dst
+
+
+def test_shufps_with_placeholder_lane_text_keeps_todays_spelling():
+    # A lane carrying the bare `?` placeholder is proven-looking but
+    # unspellable (`real27 * ?` is unparseable -- LegsAnimator gate).
+    dst = _packed('a', 'b', 'c', 'd')
+    lift = lanes_lifter({'XMM0': dst, 'XMM1': _packed('e', '?', 'g', 'h')})
+    execute(lift, '0fc6c11b')
+    assert lift.regs['XMM0'] is dst
+
+
+def test_movss_with_placeholder_src_lane_keeps_full_copy():
+    lift = lanes_lifter({'XMM0': _packed('a', 'b', 'c', 'd'),
+                         'XMM1': _packed('?', 'f', 'g', 'h')})
+    execute(lift, 'f30f10c1')
+    assert _lane_texts(lift, 'XMM0') == ['?', 'f', 'g', 'h']
