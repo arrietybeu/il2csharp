@@ -76,7 +76,13 @@ tiny e2e green, mscorlib 20,874 decls 0 problems, 0 skipped) + delegate Invoke r
 LANDED (dump stops filtering Invoke on pure delegates, full M grammar
 reused with zero parser changes; extract synthesizes one Invoke M
 row per delegate_declaration; 21 portable incl. arity pins + tiny
-e2e green, mscorlib 20,934 decls 0 problems, 0 skipped); sidecar phase 1 (spec'd); Cpp2IL
+e2e green, mscorlib 20,934 decls 0 problems, 0 skipped) + full
+type-spelling `--strict-types` LANDED (extract type tails, spell
+side-maps through parse/norm, `canon_full` keyword/qualification/
+arity/mangled-name tolerant with signatures/tuples/generics/suffixes
+decomposed, spell-preferring multiset pairing; default path
+bit-identical; 24 portable incl. strict pins + tiny e2e green,
+mscorlib default 0, strict 0 problems); sidecar phase 1 (spec'd); Cpp2IL
 side B (external binary).
 
 ## Current work: single-field assign fold F2-C1 (2026-10-01, LANDED)

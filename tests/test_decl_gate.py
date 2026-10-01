@@ -8,6 +8,7 @@ from diff_decls import (
     _mkey,
     _strip_genargs,
     _top_commas,
+    canon_full,
     canon_member,
     canon_owner,
     canon_short,
@@ -193,10 +194,10 @@ def test_extract_property_event_indexer(tmp_path):
            "public static string S { get; } } }")
     (tmp_path / "W.cs").write_text(src, encoding="utf-8")
     lines, nfiles, skipped = extract_tree(str(tmp_path), "X.dll")
-    assert "P N.W.P s=0 g=0 n=3" in lines
-    assert "E N.W.E s=0 g=0 n=3" in lines
-    assert "P N.W.this s=0 g=0 n=1" in lines
-    assert "P N.W.S s=1 g=0 n=1" in lines
+    assert "P N.W.P s=0 g=0 n=3 int" in lines
+    assert "E N.W.E s=0 g=0 n=3 System.Action" in lines
+    assert "P N.W.this s=0 g=0 n=1 int" in lines
+    assert "P N.W.S s=1 g=0 n=1 string" in lines
 
 
 def test_diff_invoke():
@@ -219,14 +220,88 @@ def test_diff_invoke():
     assert diff_dump_extracted(dump, ext2) != []
 
 
+def test_strict_clean_and_fires():
+    dump = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "M N.W.Add s=0 g=0 f=0x1c6 (int,string)->void",
+        "F N.W._count s=0 int",
+    ]
+    ext = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "M N.W.Add s=0 g=0 n=2 (int,string)->void",
+        "F N.W._count s=0 g=0 n=0 int",
+    ]
+    assert diff_dump_extracted(dump, ext) == []
+    assert diff_dump_extracted(dump, ext, strict=True) == []
+    ext2 = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "M N.W.Add s=0 g=0 n=2 (string,int)->void",
+        "F N.W._count s=0 g=0 n=0 string",
+    ]
+    assert diff_dump_extracted(dump, ext2) == []
+    probs = diff_dump_extracted(dump, ext2, strict=True)
+    assert any("type spelling mismatch" in p for p in probs)
+
+
 def test_extract_delegate_invoke(tmp_path):
     from extract_decls import extract_tree
     src = ("namespace N { public delegate void Cb(int x); "
            "public delegate int D2(string a, string b); }")
     (tmp_path / "D.cs").write_text(src, encoding="utf-8")
     lines, nfiles, skipped = extract_tree(str(tmp_path), "X.dll")
-    assert "M N.Cb.Invoke s=0 g=0 n=1" in lines
-    assert "M N.D2.Invoke s=0 g=0 n=2" in lines
+    assert "M N.Cb.Invoke s=0 g=0 n=1 (int)->void" in lines
+    assert "M N.D2.Invoke s=0 g=0 n=2 (string,string)->int" in lines
+
+
+def test_canon_full():
+    assert canon_full("System.String") == canon_full("string") == "String"
+    assert canon_full("global::System.Int32") == "Int32"
+    assert canon_full("System.Collections.Generic.List<int>") == \
+        canon_full("List<Int32>")
+    assert canon_full("int[]") == "Int32[]"
+    assert canon_full("int?") == "Int32?"
+    assert canon_full("System.Collections.Generic.Dictionary<string,System.Collections.Generic.List<int>>") == \
+        "Dictionary<String,List<Int32>>"
+    assert canon_full("int") != canon_full("string")
+    assert canon_full("(int,string)") != canon_full("(string,int)")
+    assert canon_full("(System.Type)->System.Exception") == \
+        canon_full("(Type)->Exception")
+    assert canon_full("(System.Threading.Thread)->void") == \
+        canon_full("(Thread)->Void")
+    assert canon_full("()->void") == "()->Void"
+    assert canon_full(
+        "Interop.Kernel32.TIME_DYNAMIC_ZONE_INFORMATION.<DaylightName>e__FixedBuffer") == \
+        canon_full(
+        "Interop.Kernel32.TIME_DYNAMIC_ZONE_INFORMATION._DaylightName_e__FixedBuffer") == \
+        "_DaylightName_e__FixedBuffer"
+    assert canon_full(
+        "System.Threading.SparselyPopulatedArray_1<System.Threading.CancellationCallbackInfo>[]") == \
+        canon_full("SparselyPopulatedArray_1<CancellationCallbackInfo>[]") == \
+        "SparselyPopulatedArray<CancellationCallbackInfo>[]"
+    assert canon_full(
+        "System.Collections.Generic.Dictionary<string,System.Collections.Generic.List<int>>") == \
+        canon_full("Dictionary<String,List<Int32>>") == \
+        "Dictionary<String,List<Int32>>"
+    assert canon_full("") == ""
+
+
+def test_strict_pairs_spell_first():
+    dump = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "M N.W.M s=0 g=0 f=0x1c6 (System.String)->void",
+        "M N.W.M s=0 g=0 f=0x1c6 (System.Int32)->void",
+    ]
+    ext = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "M N.W.M s=0 g=0 n=1 (String)->void",
+        "M N.W.M s=0 g=0 n=1 (Int32)->void",
+    ]
+    assert diff_dump_extracted(dump, ext, strict=True) == []
 
 
 def test_diff_qualifier_compatible():

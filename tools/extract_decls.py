@@ -41,6 +41,22 @@ def text(src, node):
     return src[node.start_byte:node.end_byte].decode("utf-8", "replace")
 
 
+_TYPE_NODES = {"predefined_type", "qualified_name", "generic_name",
+               "nullable_type", "array_type", "pointer_type",
+               "tuple_type", "function_pointer_type", "identifier"}
+
+
+def _type_text(src, node):
+    """Whitespace-collapsed text of the node itself if type-like, else
+    of its first type-like child, else ''."""
+    if node.type in _TYPE_NODES:
+        return re.sub(r"\s+", " ", text(src, node)).strip()
+    for c in node.children:
+        if c.type in _TYPE_NODES:
+            return re.sub(r"\s+", " ", text(src, c)).strip()
+    return ""
+
+
 class Extractor:
     def __init__(self):
         self.parser = Parser(CS)
@@ -132,15 +148,30 @@ class Extractor:
             self.emit_type(path, "delegate")
             try:
                 nparams = 0
+                ptypes = []
                 for k in kids:
                     if k.type == "parameter_list":
-                        nparams = sum(1 for g in k.children
-                                      if g.type == "parameter")
+                        for g in k.children:
+                            if g.type == "parameter":
+                                nparams += 1
+                                ptypes.append(_type_text(src, g))
+                        break
+                rt = ""
+                for k in kids:
+                    if k.type == "parameter_list":
+                        break
+                    if k.type in _TYPE_NODES:
+                        rt = _type_text(src, k)
                         break
                 self.types[path]["members"].append(
-                    ("M", "Invoke", 0, 0, nparams))
+                    ("M", "Invoke", 0, 0, nparams,
+                     ",".join(ptypes), rt or "void"))
             except Exception:
-                pass
+                try:
+                    self.types[path]["members"].append(
+                        ("M", "Invoke", 0, 0, nparams, "", ""))
+                except Exception:
+                    pass
             return
         if t in ("method_declaration", "constructor_declaration",
                  "destructor_declaration", "operator_declaration",
@@ -228,8 +259,25 @@ class Extractor:
             path = (ns + "." if ns else "") + "+".join(owners)
             self.types.setdefault(path, {"kind": "?", "base": None,
                                          "ifaces": [], "members": []})
+            if t in ("constructor_declaration", "destructor_declaration"):
+                rt = "void"
+                ptypes = []
+                for c in node.children:
+                    if c.type == "parameter_list":
+                        for g in c.children:
+                            if g.type == "parameter":
+                                ptypes.append(_type_text(src, g))
+            else:
+                rt = _type_text(src, node) or "void"
+                ptypes = []
+                for c in node.children:
+                    if c.type == "parameter_list":
+                        for g in c.children:
+                            if g.type == "parameter":
+                                ptypes.append(_type_text(src, g))
             self.types[path]["members"].append(
-                ("M", pname, 1 if static else 0, garity, nargs))
+                ("M", pname, 1 if static else 0, garity, nargs,
+                 ",".join(ptypes), rt))
             return
         if t == "enum_member_declaration":
             if not owners:
@@ -245,7 +293,8 @@ class Extractor:
             path = (ns + "." if ns else "") + "+".join(owners)
             self.types.setdefault(path, {"kind": "?", "base": None,
                                          "ifaces": [], "members": []})
-            self.types[path]["members"].append(("F", name, 0, 0, 0))
+            self.types[path]["members"].append(("F", name, 0, 0, 0,
+                                                 owners[-1], ""))
             return
         if t == "field_declaration":
             if not owners:
@@ -264,7 +313,8 @@ class Extractor:
                                 if w.type == "identifier":
                                     self.types[path]["members"].append(
                                         ("F", text(src, w).strip(),
-                                         1 if static else 0, 0, 0))
+                                         1 if static else 0, 0, 0,
+                                         _type_text(src, c), ""))
             return
         if t in ("property_declaration", "indexer_declaration"):
             try:
@@ -305,7 +355,8 @@ class Extractor:
                 self.types.setdefault(path, {"kind": "?", "base": None,
                                              "ifaces": [], "members": []})
                 self.types[path]["members"].append(
-                    ("P", name, 1 if static else 0, 0, get + 2 * st_))
+                    ("P", name, 1 if static else 0, 0, get + 2 * st_,
+                     _type_text(src, node), ""))
             except Exception:
                 self.skipped_props += 1
             return
@@ -324,13 +375,15 @@ class Extractor:
                                                  "ifaces": [], "members": []})
                     for c in node.children:
                         if c.type == "variable_declaration":
+                            fty = _type_text(src, c)
                             for v in c.children:
                                 if v.type == "variable_declarator":
                                     for w in v.children:
                                         if w.type == "identifier":
                                             self.types[path]["members"].append(
                                                 ("E", text(src, w).strip(),
-                                                 1 if static else 0, 0, 3))
+                                                 1 if static else 0, 0, 3,
+                                                 fty, ""))
                 else:
                     kinds = set()
                     prefix, names = "", []
@@ -357,7 +410,8 @@ class Extractor:
                     self.types.setdefault(path, {"kind": "?", "base": None,
                                                  "ifaces": [], "members": []})
                     self.types[path]["members"].append(
-                        ("E", name, 1 if static else 0, 0, a + 2 * r))
+                        ("E", name, 1 if static else 0, 0, a + 2 * r,
+                         _type_text(src, node), ""))
             except Exception:
                 self.skipped_props += 1
             return
@@ -390,9 +444,14 @@ class Extractor:
                 eb if eb else "-",
                 ",".join(re.sub(r"\s+", " ", x).strip() for x in r["ifaces"])
                 if r["ifaces"] else "-"))
-            for kind, name, static, garity, nargs in sorted(r["members"]):
-                out.append("%s %s.%s s=%d g=%d n=%d" % (
-                    kind, path, name, static, garity, nargs))
+            for kind, name, static, garity, nargs, t1, t2 in sorted(r["members"]):
+                line = "%s %s.%s s=%d g=%d n=%d" % (
+                    kind, path, name, static, garity, nargs)
+                if kind == "M" and (t1 or t2):
+                    line += " (%s)->%s" % (t1, t2)
+                elif kind in ("F", "P", "E") and t1:
+                    line += " " + t1
+                out.append(line)
         return out
 
 
