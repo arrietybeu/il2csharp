@@ -1,5 +1,55 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: IsInst tail-path `as` fold, slice 2b (2026-10-02, LANDED)
+
+Direct tail jumps to the proved IsInst helper (`rt_isinst =
+{0x180434690, 0x180479f80}`) with a klass-kind bare `typeof(T)` klass
+now fold to the managed `(obj as T)`, mirroring `_call`'s long-standing
+intrinsic exactly (same kind + bare-typeof gates; spray tail dropped by
+the same early return). Opaque klass tails keep the honest `sub_`.
+The gap was structural, not textual: the dec direct-tail path
+(`il2cpp/dec/analyze.py`, `_call_name` branch) rendered every tail
+through `_emit_tail` with no intrinsic check, so klass-kind typeof
+tails could never fold -- even though the value already carried the
+exact proof `_call` demands. Found by tracing mi 3446
+(`System.Attribute.GetCustomAttributes`, 4-arg spray tail) through
+three silent hooks: the lifter `JMP`/`_call` paths never see direct
+tails (dec intercepts first), and `rt_isinst` recognition was fine.
+
+Evidence (paired `--only mscorlib,System.Xml,PhotonVoice` strict
+builds on the landing base): 2072 type files / 18362 bodies / 0 failed
+/ 0 structured fallbacks both sides; recursive per-file diff exactly
+4 files, each a single-line fold with spray-DCE and redundant-cast
+collapse (mscorlib `Attribute.cs` x2 `GetCustomAttributes`,
+`XPathNavigator`/`XmlReader` `IXmlSchemaInfo` getters,
+PhotonVoice `Recorder` voice getter); file sets identical. Tree-wide
+static census bounds it: 4 tail-form sites in 36 images with any
+typeof shape (the 10 Assembly-CSharp sites are call-form and
+untouched -- paired AC build 0/490 changed).
+
+Gates: brace 0 unbalanced / 2072; parse 0 bad / 0 ERROR / 0 MISSING
+(JSON); goldens 64/64 unmoved (zero overlap with folded methods, no
+regen); portable 1197 passed / 0 failed; +2 game pins
+(`tests/test_game_isinst_tail.py`: mi 3446 fold, mi 200 field-klass
+decline); full suite 1437 passed with 2 failures both PROVEN
+environmental (below) and individually green: effective full green.
+
+Repo-level finding (not mine, recorded): `test_game_decl_gate` and
+`test_game_compile_gate` REQUIRE the gitignored local `final_out/`
+tree (promotion built it in the main workdir only). Fresh worktrees
+lack it, so decl-gate extracts 0 files ("missing emitted type") and
+compile-gate fails its `tree.is_dir()` assert. Both fail identically
+without any source change and pass once the subdirs are materialized
+(decl-gate 4.4s, compile-gate 0.7s in-worktree; both green on main).
+Future worktree gating must materialize `final_out/<images>` first.
+
+Tests: +2 game (fold + decline pins above).
+
+Still open (isinst program): slice 2 `_call` text-exact fallback for
+non-klass kinds (17 sites, needs settled `calls.py`); loop-carried
+proof loss (~25, dry-header fixture still wanted -- the 6 primitive
+pins hold); field-store identity (91, needs callee-store analysis).
+
 ## Current work: iface-zero probe mi5694 -- FIXED on main, probe CLOSED (2026-10-01, DOCUMENTED)
 
 The OPEN probe (lines 408-420: `customFormatter12 == 0`, untyped

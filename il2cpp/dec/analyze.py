@@ -362,6 +362,23 @@ class _AnalyzeMixin:
                                     L._emit_tail(ins.ip, call, None, void=void)
                             else:
                                 nm = L._call_name(t)
+                                if t in getattr(L, 'rt_isinst', ()) and len(arg_exprs) >= 2:
+                                    # Tail-path mirror of `_call`'s IsInst intrinsic:
+                                    # a direct tail jump to the proved helper with a
+                                    # klass-kind bare `typeof(T)` klass folds to the
+                                    # managed `as` (the spray tail is dropped, exactly
+                                    # as `_call` drops it by returning early). Opaque
+                                    # klass expressions keep the honest `sub_` below.
+                                    _tobj, _tklass = arg_exprs[0], arg_exprs[1]
+                                    if _tobj is not None and _tklass is not None \
+                                            and _tklass.kind == 'klass' \
+                                            and isinstance(_tklass.text, str) \
+                                            and _tklass.text.startswith('typeof(') \
+                                            and _tklass.text.endswith(')'):
+                                        _tname = _tklass.text[len('typeof('):-1]
+                                        L._emit_tail(ins.ip, '(%s as %s)' % (
+                                            _tobj.text, _tname), None, marker=False)
+                                        continue
                                 raise_exc = L._named_raise_throw(t, nm)
                                 if raise_exc is not None:
                                     L.emit(ins.ip, 'throw new %s();' % raise_exc, None)
