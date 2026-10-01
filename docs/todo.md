@@ -60,13 +60,15 @@ lifter-side with width proof; returns/byref declined; probe points
 detailed); twin+guard branch (`twin-guard-wip`: consumer vetoes +
 subclass tolerance + drop attribution, then re-measure); isinst slice
 2 (fence helper `_bare_typeof_target` LANDED + 9 pins; `_call` gate
-PARKED -- full census of the Photon3Unity3D/Astar/Voice trees finds
-exactly one typeof-carrying isinst site (MI 123442, arity-4 with
-extra args: decline); the other 458 markers are `+0x40` klass-load
-sites (landing-9 domain, not typeof residuals). The spec's 17 must
-live in unbuilt images; the gate needs a full-tree census and a
-firing repro (exact-2-arg, kind!=klass, nameable T) before it is
-written); decl-gate v2 field-statics LANDED (`F s=` both sides via
+DECLINED with a full-tree census (11,183 files / 114,458 bodies):
+exactly 17 typeof-carrying `sub_180434690` sites, all declined --
+9x Obi checked-cast with discarded result (arity 4), 5x cast-with-
+context `return (T)sub(obj, typeof(T), a, b)` (arity 4; folding to
+`as` would trade throw for null), 2x Attribute (arity 4 / wrapped
+`GetTypeFromHandle`), 1x Recorder (arity 4). Trimming the extra
+args as spray is unsound: castclass-throw vs `as`-null diverge
+exactly where the result is discarded or cast. Markers stay
+honest); decl-gate v2 field-statics LANDED (`F s=` both sides via
 `field_attrs`, enum members exempt s=0; 15 portable + tiny e2e green,
 mscorlib 18,894 decls 0 problems) + property/event rows LANDED
 (`P s/get/set`, `E s/add/rem` both sides, mirrored on emitter truth:
