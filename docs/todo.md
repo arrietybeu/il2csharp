@@ -1,5 +1,61 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: iface-zero probe mi5694 -- FIXED on main, probe CLOSED (2026-10-01, DOCUMENTED)
+
+The OPEN probe (lines 408-420: `customFormatter12 == 0`, untyped
+indirect-call temp at TEST time, single TEST / zero CMP-reg-0) is fixed
+on `main` 572c8d4 with no source change. Fresh lift
+(`tools/inspect_methods.py --mi 5694 --save`, 2026-10-01) renders
+`if (customFormatter12 == null)`; controls hold (`obj83 == 0`,
+`readOnlySpan11 == 0` per `tests/test_game_null_zero.py`). The analyze
+TEST-null gate correctly declines the untyped temp at flag time
+(`_test_is_value` False for te 0x12/kind obj; `values.py:911-929`,
+`insn.py:1220-1224`, `analyze.py:192-212`), then `_null_zero_rewrite`
+(`flow.py:1203`, wired `structure.py:197`) fires downstream on the
+unique `System.ICustomFormatter` decl (`_eq_typedef_map`,
+`highlevel.py:2598`). Pins green: 52 passed
+(`test_game_dry_merge` + `test_game_null_zero` + `test_null_zero` +
+`test_loop_proof` + `test_single_field`); full suite 1437 passed;
+goldens 64/64. Probe closed; no further action.
+
+## Current work: sidecar 112 + (2)/(3)/(4) -- honest kills, coverless by construction (2026-10-01, DOCUMENTED)
+
+Repro on `main` 572c8d4 (`PYTHONHASHSEED=0`): `tcensus.py FIMSpace`
+1017 methods / 4801 sites (fwd:sliceless 2669, fwd:divergent 922,
+loop:fwdU+backNoSl 296, loop:fwdU+backSlDiff 239); `dropprobe.py` 112 =
+80 retiled-someNoSlice / 15 retiled-allslice / 9 killed (5
+`_stack_store` + 4 `_call`) / 5 absent-at-dry-header / 3
+vanished-no-event -- byte-exact match for the 333->112 fix. No source
+change; the 112 are honest, and (2)/(3)/(4) are blocked without sidecar
+use->def:
+- 80-bucket: sample mi29353 `!mem:-740:4` -- dry stores are genuine
+overwrites (`*(this+0x78)`, float expr `(300,…)`, `s_0`, all sliceless;
+`dropprobe2.py 29353 -740 -736`) bearing no relation to the forward
+tile (`v128`). Keeping the forward tile would claim a struct tile where
+a float was written -- unsound. Honest divergent; decline stands.
+- (2) 105 `?`: back-value census gives 97 `?` + 82 missing
+(nonexpr/None). Sample mi29353 bid 18 `!mem:-624:4`: fwd tile
+`(t1002.z, 0, 4, closed)` vs single back `?`. Dry body stores
+`t1047.z` (sliced) but the back edge is `?` -- killed later in-body by
+`_stack_store`/`_call` (killer stats above). A dry-header fixpoint
+re-propagates `?` and still diverges. Honest; no fixpoint.
+- (3) renumber-tolerant: dry/real renumbering proven at identical IPs
+(mi29353: DRY `t1001`/`t1047.z` vs REAL `t1002`/`t1083.z` @0x180646d04 /
+0x1806476e3). Normalizing temp numbers unifies distinct temps sharing
+a shape (two structs' `.z`) -- unsound without def-use proof. Sized ~5%
+(26/535 then, ~12 of 239 now). Declined; needs sidecar use->def, not
+text compare.
+- (4) first consumer: zero unanimous sliced-both-sides sites in census
+(no `fwdU+backSlSame` bucket; only `fwdU+backSlDiff` 239,
+`fwdNoSl+backSlDiff` 216, `fwdDiv+backSlDiff` 2). `_tile_proof_for`
+(`expr.py:104`) requires unanimous texts and runs only on the phi path,
+which exact-unanimous tiles never take -- coverless by construction, so
+wiring `_piece_value` offset-0 changes nothing. Blocked on (2)/(3).
+Next: sidecar use->def per-arm types + field sidecar (large, deferred
+by design); Cpp2IL side B (external binary); Megabonk 46 (awaiting
+method list/binaries). Suite: full 1437 / portable 1197 / goldens 64 /
+targeted 52, all green; 0 goldens moved.
+
 ## Current work: dry-pass merge keeps frame address + unanimous tiles (2026-10-01, LANDED)
 
 Answers census next-step (1) below ("why does the dry loop body drop the
