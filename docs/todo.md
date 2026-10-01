@@ -1,5 +1,29 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: IsInst slice 3 (initmeta-wrapper klass identity) -- probed, KEEPER (2026-10-01, DOCUMENTED)
+
+The 15 initmeta-wrapper sites stay as-is: none of the wrappers behind
+`il2cpp_codegen_initialize_runtime_metadata` preserves its RCX klass
+across the internal call, so a `call_wrapper(typeof(T)) -> typeof(T)`
+fold would be unsound. Per-VA verdicts (native extents + decodes):
+- `0x180435400` (named outer): single-ret but passthrough, not
+  identity -- RAX is the inner call's return, never restored from the
+  RCX spill. Needs inner proof, which fails.
+- `0x180490FB0` (named inner): not single-ret (0 rets; `mov dl,1`
+  + tail-shim to `0x1804455C0`), preserves nothing into RAX.
+- `0x1804455C0` (real routine): multi-exit via jump-table; the
+  fast path returns `*slot` (deref after `lock xadd`), not RCX, and
+  the slow path returns a computed RBX with a store. The
+  `mov-rax-rcx` identity is affirmatively FALSE (slot address is not
+  the klass value).
+Call-site sample (mi 24167; 23994 is a 2-insn thunk, 24742 a
+forwarder): `lea rcx,[slot]; call` x2 with RAX discarded and the slot
+re-read from memory -- the RAX-read-back shape is absent. (The
+`0x18043E360` class-init helper fast path IS `mov rax,rbx`
+identity, but that is a different chain.) No source change, no
+goldens moved. Resurrection would need a wrapper proved byte-identical
+to an identity shape, none observed.
+
 ## Current work: `_piece_value` offset-0 slice -- probed, built, measured, DECLINED (2026-10-01, DOCUMENTED)
 
 The `_slice` unwrap in `Lifter._piece_value`
