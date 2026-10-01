@@ -1,5 +1,22 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: IsInst A2 sugar twin -- probed, census-closed, DECLINED (2026-10-01, DOCUMENTED)
+
+The 21 `arr.getClass() + 0x40` sites (getClass sugar for the klass
+load instead of `[arr]+0`) cannot fold without newarr-exactness, and
+none has it. Provenance census of every klass source (9 arrays across
+8 methods): 5× shared-body call results (`sub_182b9e210(...)`, mi
+24722/24730/24862/28097/27318), 2× temp copies of params/fields
+(`= nodeArray2`, `= valueArray1`, `= dataRowArray1`), 1× untyped call
+result, 9× field (`this.touchControlArray`, FastTouchscreen). Zero
+same-method newarrs. A fold to `typeof(E)` on any of them mistypes
+when the tested object is E-but-not-D (the E[]-typed local holding a
+D[] at runtime still yields D's element klass, and `as E` vs `as D`
+diverge exactly there), so the honest `sub_` markers stand. Same
+exactness bar as landing 9; the relief is field-store identity /
+sidecar (family 2), not a weaker fold -- none exists (there is no
+klass spelling weaker than `typeof(E)` that the IsInst fold accepts).
+
 ## Current work: Cpp2IL declaration gate, side A landed (2026-10-01, LANDED)
 
 The proposed-but-never-filed cross-check now exists as three tools
