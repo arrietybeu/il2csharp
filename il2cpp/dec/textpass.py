@@ -108,16 +108,17 @@ class _TextPassMixin:
         every hole resolves to an argument that can live inside one."""
         idx = 0
         while True:
-            idx = text.find('System.String.Format(', idx)
+            masked, _ = _mask_line_spans(text, False)
+            idx = masked.find('System.String.Format(', idx)
             if idx < 0:
                 return text
             start = idx + len('System.String.Format(')
             depth = 1
             i = start
             while i < len(text) and depth > 0:
-                if text[i] == '(':
+                if masked[i] == '(':
                     depth += 1
-                elif text[i] == ')':
+                elif masked[i] == ')':
                     depth -= 1
                 i += 1
             if depth != 0:
@@ -163,16 +164,17 @@ class _TextPassMixin:
         # args mix string literals with expressions
         idx = 0
         while True:
-            idx = text.find('System.String.Concat(', idx)
+            masked, _ = _mask_line_spans(text, False)
+            idx = masked.find('System.String.Concat(', idx)
             if idx < 0:
                 break
             start = idx + len('System.String.Concat(')
             depth = 1
             i = start
             while i < len(text) and depth > 0:
-                if text[i] == '(':
+                if masked[i] == '(':
                     depth += 1
-                elif text[i] == ')':
+                elif masked[i] == ')':
                     depth -= 1
                 i += 1
             if depth != 0:
@@ -191,6 +193,33 @@ class _TextPassMixin:
                 idx = i
         return text
 
+    @staticmethod
+    def _sub_outside_literals(rx, rep, ln, masked):
+        """Match on the mask, splice replacements into the original.
+
+        The mask blanks literals/comments with NULs length-preservingly,
+        so a match span in the mask addresses identical offsets in the
+        original; the replacement is recomputed from the ORIGINAL match
+        text, keeping code folding byte-identical (the `_rename_locals`
+        offset-splice pattern). String reps expand against the original
+        match; the precompiled-regex cache makes `str` patterns free
+        after first use.
+        """
+        if isinstance(rx, str):
+            rx = re.compile(re.escape(rx))
+        out = []
+        last = 0
+        for m in rx.finditer(masked):
+            s, e = m.span()
+            m2 = rx.match(ln, s, e)
+            if m2 is None:
+                continue
+            out.append(ln[last:s])
+            out.append(m2.expand(rep) if isinstance(rep, str) else rep(m2))
+            last = e
+        out.append(ln[last:])
+        return ''.join(out)
+
     @classmethod
     def _fold_consts(cls, text: str) -> str:
         def zrep(m):
@@ -198,7 +227,8 @@ class _TextPassMixin:
                 return str(int(m.group(1), 0) & int(m.group(2), 0))
             except Exception:
                 return m.group(0)
-        text = cls.ZEXT_RE.sub(zrep, text)
+        masked, _ = _mask_line_spans(text, False)
+        text = cls._sub_outside_literals(cls.ZEXT_RE, zrep, text, masked)
 
         def rep(m):
             try:
@@ -234,8 +264,10 @@ class _TextPassMixin:
         prev = None
         while prev != text:
             prev = text
-            text = cls.FOLD_RE.sub(rep, text)
-            text = cls.SUB_CMP_RE.sub(sub_cmp_rep, text)
+            masked, _ = _mask_line_spans(text, False)
+            text = cls._sub_outside_literals(cls.FOLD_RE, rep, text, masked)
+            masked, _ = _mask_line_spans(text, False)
+            text = cls._sub_outside_literals(cls.SUB_CMP_RE, sub_cmp_rep, text, masked)
         return text
 
     _DEREF_OFF = re.compile(r'([+-])\s*(0x[0-9a-fA-F]+|\d+)\s*$')
@@ -354,22 +386,24 @@ class _TextPassMixin:
         residues become `ref objN`."""
         for _ in range(16):
             m = text
-            text = self._CAST_NCONST_RX.sub(r'(\1)\2', text)
-            text = self._DSTAR_RX.sub(r'((byte*)\1)[0]', text)
-            text = self._NCONST_RX.sub(r'((byte*)\1)[0]', text)
+            masked, _ = _mask_line_spans(text, False)
+            text = self._sub_outside_literals(self._CAST_NCONST_RX, r'(\1)\2', text, masked)
+            text = self._sub_outside_literals(self._DSTAR_RX, r'((byte*)\1)[0]', text, masked)
+            text = self._sub_outside_literals(self._NCONST_RX, r'((byte*)\1)[0]', text, masked)
             if text == m:
                 m2 = self._LVAL_OFF_RX.match(text)
                 if m2:
                     text = '((byte*)%s + %s)[0] = %s' % (m2.group(1), m2.group(2),
                                              text[m2.end():].lstrip())
                 else:
-                    mm = re.search(r'\*\x28', text)
+                    masked, _ = _mask_line_spans(text, False)
+                    mm = re.search(r'\*\x28', masked)
                     if mm:
                         i = mm.start() + 1
                         depth = 0
                         j = i
                         while j < len(text):
-                            ch = text[j]
+                            ch = masked[j]
                             if ch == '(':
                                 depth += 1
                             elif ch == ')':
@@ -498,7 +532,7 @@ class _TextPassMixin:
         # `&objN` args -> `ref objN`; files with any of it get wrapped
         # in an unsafe block below (C# permits pointer ops only there)
         raw = [self._sanitize_dollar(ln) for ln in raw]
-        raw = [self._DATA_ADDR_RX.sub(r'\1', ln) for ln in raw]
+        raw = [self._sub_outside_literals(self._DATA_ADDR_RX, r'\1', ln, _mask_line_spans(ln, False)[0]) for ln in raw]
         # `typeof(X) = 0;` (a static-field blob store whose offset 0 has no
         # field name to attach) cannot be an lvalue; keep the fact as a
         # comment. A bare `default` that got rewritten into an operator
@@ -509,14 +543,14 @@ class _TextPassMixin:
         # of these (e.g. after `case`/`else` funneled into a single elided
         # store) left a MISSING-node parse error: `L_x: /* ... */` needs a
         # statement after the label, and a comment alone doesn't count.
-        raw = [self._TYPEOF_STORE_0_RX.sub(r'\1/* typeof(X) blob store at offset 0 */;', ln) for ln in raw]
+        raw = [self._sub_outside_literals(self._TYPEOF_STORE_0_RX, r'\1/* typeof(X) blob store at offset 0 */;', ln, _mask_line_spans(ln, False)[0]) for ln in raw]
         raw = [self._TYPEOF_KSTORE_RX.sub(
             lambda m: m.group(0).replace('typeof(' + m.group(2) + ')', m.group(2), 1),
             ln) for ln in raw]
-        raw = [self._RCONST_RX.sub(r'return ((byte*)\1)[0];', ln) for ln in raw]
-        raw = [self._DEFAULT_OP_RX.sub('0', ln) for ln in raw]
+        raw = [self._sub_outside_literals(self._RCONST_RX, r'return ((byte*)\1)[0];', ln, _mask_line_spans(ln, False)[0]) for ln in raw]
+        raw = [self._sub_outside_literals(self._DEFAULT_OP_RX, '0', ln, _mask_line_spans(ln, False)[0]) for ln in raw]
         for _ in range(3):
-            raw = [self._DEFAULT_DEQUE_RX.sub('default', ln) for ln in raw]
+            raw = [self._sub_outside_literals(self._DEFAULT_DEQUE_RX, 'default', ln, _mask_line_spans(ln, False)[0]) for ln in raw]
         # fix 54b: the `&X` -> `ref X` rewrite that used to wrap this
         # call is gone. Its lookbehind (`(?<=[(,])`) could only ever
         # reach the argument immediately after `(`, because args join
@@ -527,7 +561,7 @@ class _TextPassMixin:
         # lone `?` marks an undecodable native value; the lifter's ternary
         # renders are protected: a `?` followed by a real operand
         # (`(c ? X)` no-colon select form and the full `? :` form) stays
-        raw = [ln.replace('?addr', 'default') for ln in raw]
+        raw = [self._sub_outside_literals('?addr', 'default', ln, _mask_line_spans(ln, False)[0]) for ln in raw]
         # lone `?` marks an undecodable native value. Rewrite ONLY operand
         # positions into the parseable `unknown` name: a `?` preceded by an
         # expression (`(c ? Y)` no-false-arm select, `? 1 : 0` ternary,
@@ -615,14 +649,14 @@ class _TextPassMixin:
         # a chain of two unknown operands with an unknown operator between
         # them (`? ? ?` -> `unknown unknown unknown`) collapses to one.
         for _ in range(3):
-            raw = [re.sub(r'\bunknown\s+unknown\b', 'unknown', ln) for ln in raw]
+            raw = [self._sub_outside_literals(re.compile(r'\bunknown\s+unknown\b'), 'unknown', ln, _mask_line_spans(ln, False)[0]) for ln in raw]
         # `?.NAME : default` is the selective-shock `?` receiver: the rewrite
         # above already produced `unknown.NAME`; drop the dangling ` : default`
         # ternary tail that would leave an unparseable `expr : default` in an
         # argument list (RuntimeHelpers.InitializeArray family). A real
         # ternary keeps its `?` outside strings, so a `: default` whose
         # enclosing statement region has none is a dangling tail.
-        raw = [re.sub(r'\bunknown\.([A-Za-z_]\w*)\s*:\s*default\b', 'unknown.\\1', ln) for ln in raw]
+        raw = [self._sub_outside_literals(re.compile(r'\bunknown\.([A-Za-z_]\w*)\s*:\s*default\b'), 'unknown.\\1', ln, _mask_line_spans(ln, False)[0]) for ln in raw]
 
         def _strip_dangling_default(ln: str) -> str:
             out = []
@@ -794,3 +828,72 @@ class _TextPassMixin:
 
 
     # ------------------------------------------------------------------
+
+def _mask_line_spans(line, in_block_comment):
+    """Blank literals/comments with NULs, same length (mask twin).
+
+    Module-level twin of the highlevel masker for textpass code
+    paths exercised through partial test doubles (which lack the
+    composed class): identical algorithm, no self/cls needed.
+    """
+    """Blank string/char literals and comments with NULs, same length.
+
+    `_rename_locals` collected and substituted vN/tN/s_XX tokens over
+    the whole line, so a literal carrying such a token was rewritten
+    (the ADO.NET diffgram namespace rendered `...-obj83`) and a
+    literal-only token shifted the numbering. Masking keeps token
+    spans aligned with the original line while the scanners only
+    ever see code.
+    """
+    out = []
+    i = 0
+    n = len(line)
+    while i < n:
+        if in_block_comment:
+            j = line.find('*/', i)
+            if j < 0:
+                out.append('\x00' * (n - i))
+                return ''.join(out), True
+            out.append('\x00' * (j + 2 - i))
+            i = j + 2
+            in_block_comment = False
+            continue
+        if line.startswith('//', i):
+            out.append('\x00' * (n - i))
+            break
+        if line.startswith('/*', i):
+            in_block_comment = True
+            out.append('\x00' * 2)
+            i += 2
+            continue
+        if line.startswith('@"', i):
+            j = i + 2
+            while j < n:
+                if line.startswith('""', j):
+                    j += 2
+                    continue
+                if line[j] == '"':
+                    j += 1
+                    break
+                j += 1
+            out.append('\x00' * (j - i))
+            i = j
+            continue
+        c = line[i]
+        if c in ('"', "'"):
+            j = i + 1
+            while j < n:
+                if line[j] == '\\':
+                    j += 2
+                    continue
+                if line[j] == c:
+                    j += 1
+                    break
+                j += 1
+            out.append('\x00' * (j - i))
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return ''.join(out), in_block_comment
+

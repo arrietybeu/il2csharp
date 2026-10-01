@@ -984,8 +984,10 @@ class _HighLevelMixin:
                 if w and idx_rx.search(w.group(1)):
                     ok = False
                     break
-                t = p1.sub('~E~', s)
-                t = p3.sub('~E~', t)
+                sh, _ = self._mask_literals(s, False)
+                t = self._sub_outside_literals(p1, '~E~', s, sh)
+                sh2, _ = self._mask_literals(t, False)
+                t = self._sub_outside_literals(p3, '~E~', t, sh2)
                 if idx_rx.search(t):
                     ok = False      # counter used for something else
                     break
@@ -4086,6 +4088,28 @@ class _HighLevelMixin:
             stem += 'Ptr' if pointer_depth == 1 else 'Ptr%d' % pointer_depth
         stem = re.sub(r'[^A-Za-z0-9_]', '', stem)[:48]
         return stem if stem and stem != 'obj' else None
+
+    @staticmethod
+    def _sub_outside_literals(rx, rep, ln, masked):
+        """Match on the mask, splice replacements into the original.
+
+        Twin of the textpass helper (kept local: the two dec mixins
+        must not import each other). See there for the contract.
+        """
+        if isinstance(rx, str):
+            rx = re.compile(re.escape(rx))
+        out = []
+        last = 0
+        for m in rx.finditer(masked):
+            s, e = m.span()
+            m2 = rx.match(ln, s, e)
+            if m2 is None:
+                continue
+            out.append(ln[last:s])
+            out.append(m2.expand(rep) if isinstance(rep, str) else rep(m2))
+            last = e
+        out.append(ln[last:])
+        return ''.join(out)
 
     @staticmethod
     def _mask_literals(line: str, in_block_comment: bool) -> Tuple[str, bool]:

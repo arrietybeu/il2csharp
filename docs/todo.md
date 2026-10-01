@@ -71,6 +71,67 @@ the invalidation half, the `_piece_value` offset-0 slice fix, and
 interface-typed zero rendering (`customFormatter12 == 0`, mi 5694,
 pre-existing, different path).
 
+## Current work: Dec F5 literal-blind substitutions, guarded (2026-10-01, LANDED)
+
+Four latent corruption families (plus two adjacent call-finds)
+rewrote string literals, verbatim strings and comments because they
+matched raw line text: `_fold_consts` const folding (F5-1),
+`_unsafify` deref rewrites (F5-2), `_render` marker/keyword subs
+(F5-3), `_foreach_sugar` element masking (F5-4), plus
+`_fold_concat` / `_format_interp` call-head finds. Corpus census:
+0 hits over 11,183 files / 3.08M lines -- latent, proven red only on
+synthetic vectors (16 fired).
+
+Guards mirror the landed literal-safety fix: match on the mask,
+splice into the original by offsets (the `_rename_locals` pattern);
+per-line masking (in_block=False) with the documented
+spanning-block-comment residual (fidelity-only); `:530`-before-`:699`
+order preserved; `idx_rx` disqualification stays on the original
+(decline preservation); call heads + paren depth walk on the mask,
+parts sliced from the original.
+- Mixin robustness: textpass code paths run through partial test
+  doubles lacking the composed class, so cross-mixin mask calls die
+  (6 pre-existing tests red). Fix is a module-level mask twin in
+  textpass.py (no MRO, no self) with structural asserts (mixin
+  methods intact, one module fn); highlevel keeps its method
+  versions. A v1 mid-class insertion nested the mixin dead (caught
+  by the new asserts, never shipped); v2 appends at EOF.
+- Adjacent `_UK_RX` is dead (zero references); the live scanner is
+  the only site (plus the F1 tail-tolerance already landed there).
+
+Evidence (synthetic red/green, then tree gates):
+- Probe vectors (pre-patch RED: 16 fired across the families;
+  controls green) become 21 passing unit tests
+  (`tests/test_decF5_literal_blind.py`: each family x
+  string/verbatim/line-comment/block-comment byte-identity, plus
+  code-fire counterparts; F5-4 asserts the literal survives AND the
+  fold declines).
+- mi-80548 golden moves (the only one): 16/16 diff lines are
+  dead-placeholder comment text (`((byte*)v+N)[0]` vs `*(v+N)`
+  alternation), ZERO real-code changes (56 -> 56 lines).
+- Paired strict builds (--only Assembly-CSharp, dispatch base):
+  490/6622/0/0 in 197.5 s vs 164.8 s; recursive per-file diff
+  0/490 changed, file set identical.
+
+Gates: paired strict builds (above); brace 0 unbalanced / 490;
+parse 0 bad / 0 ERROR / 0 MISSING (490 files, JSON); goldens 64/64
+post-regen (1 move: mi-80548 comment-only, read); suite 1309
+passed pre-regen (1 golden, accepted move) + 64/64 post-regen
+(1079 portable incl. 21 new + 6 mixin tests); sweep 6634 methods /
+0 crashes (scoped AC report for regen mechanics).
+
+Tests: +21 new file (byte-identity reds + code-fire greens +
+decline-preservation).
+
+Still open: isinst slice 2 (typeof-residual -- needs settled
+calls.py; dispatch follow-ups in flight); slice 3 (initmeta --
+needs sibling verdict); loop-carried proof loss; field-store
+identity; bounds slice B (`&arr[i]`, foreign `_array_index_fold`
+in flight); single-field returns (needs F2 use-proof + analyze.py
+consumer recording); sidecar program (phased); Cpp2IL declaration
+gate (prototype filed separately); parallel-build residual;
+platform scope (deferred).
+
 ## Current work: IsInst element-class slice 1 -- closed generic-instance `as` (2026-10-01, LANDED)
 
 The opaque-klass IsInst remainder (~4,666 sites post-landing-9) is
