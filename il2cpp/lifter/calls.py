@@ -2589,6 +2589,57 @@ class _CallsMixin:
                     self.emit(ins.ip, '', asm)
                 return
 
+    @staticmethod
+    def _bare_typeof_target(text):
+        """Inner `T` of a whole-string `typeof(T)`, else None (slice 2).
+
+        Pure string fence: blanks `"..."`/`'...'` spans (a quoted
+        `typeof` inside a string literal must never shape-match),
+        then walks parens from `typeof(` to its match. Fires only
+        when the close paren ends the string (member/call wraps like
+        `typeof(T).Get()` decline) and `T` is non-empty. Mirrors the
+        dec-side `_fence_bare_typeof` walk without importing dec.
+        """
+        try:
+            import re as _re
+            s = text if isinstance(text, str) else ''
+            if not s:
+                return None
+            muted = list(s)
+            _q = None
+            _i = 0
+            while _i < len(s):
+                ch = s[_i]
+                if _q is None and ch in ('"', "'"):
+                    _q = ch
+                    muted[_i] = '#'
+                elif _q is not None and ch == _q:
+                    muted[_i] = '#'
+                    _q = None
+                elif _q is not None:
+                    muted[_i] = '#'
+                _i += 1
+            if _q is not None:
+                return None
+            m = _re.match(r'typeof\s*\(', ''.join(muted))
+            if not m:
+                return None
+            depth = 0
+            for _j in range(m.end() - 1, len(s)):
+                c = muted[_j]
+                if c == '(':
+                    depth += 1
+                elif c == ')':
+                    depth -= 1
+                    if depth == 0:
+                        if _j != len(s) - 1:
+                            return None
+                        inner = s[m.end():_j].strip()
+                        return inner if inner else None
+            return None
+        except Exception:
+            return None
+
         # --- Interlocked.CompareExchange(ref loc, value, comparand)
         if target is not None and target in getattr(self, 'rt_interlocked', ()) \
                 and len(arg_exprs) >= 3:
