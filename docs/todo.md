@@ -82,7 +82,10 @@ side-maps through parse/norm, `canon_full` keyword/qualification/
 arity/mangled-name tolerant with signatures/tuples/generics/suffixes
 decomposed, spell-preferring multiset pairing; default path
 bit-identical; 24 portable incl. strict pins + tiny e2e green,
-mscorlib default 0, strict 0 problems); sidecar phase 1 (spec'd); Cpp2IL
+mscorlib default 0, strict 0 problems) + compile gate LANDED
+(syntax-vs-binding split with exit codes; 6 portable incl. fake-
+compiler plumbing + game mscorlib syntax==0 green; 1350 files,
+0 syntax, 40 binding residuals); sidecar phase 1 (spec'd); Cpp2IL
 side B (external binary).
 
 ## Current work: single-field assign fold F2-C1 (2026-10-01, LANDED)
