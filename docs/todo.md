@@ -66,8 +66,10 @@ extra args: decline); the other 458 markers are `+0x40` klass-load
 sites (landing-9 domain, not typeof residuals). The spec's 17 must
 live in unbuilt images; the gate needs a full-tree census and a
 firing repro (exact-2-arg, kind!=klass, nameable T) before it is
-written); decl-gate v2 (field-statics
-first); sidecar phase 1 (spec'd); Cpp2IL side B (external binary).
+written); decl-gate v2 field-statics LANDED (`F s=` both sides via
+`field_attrs`, enum members exempt s=0; 15 portable + tiny e2e green,
+mscorlib 18,894 decls 0 problems); sidecar phase 1 (spec'd); Cpp2IL
+side B (external binary).
 
 ## Current work: single-field assign fold F2-C1 (2026-10-01, LANDED)
 

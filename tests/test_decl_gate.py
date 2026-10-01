@@ -69,7 +69,7 @@ DUMP_BASE = [
     "T System.Widget kind=class base=- ebase=- ifaces=System.IDisposable",
     "M System.Widget..ctor s=0 g=0 f=0x1886 ()->void",
     "M System.Widget.Dispose s=0 g=0 f=0x1c6 ()->void",
-    "F System.Widget._count int",
+    "F System.Widget._count s=0 int",
 ]
 
 
@@ -109,6 +109,26 @@ def test_diff_ifaces_rest():
     assert any("ifaces mismatch" in p for p in probs)
     assert not any("missing emitted member" in p for p in probs)
     assert not any("extra emitted member" in p for p in probs)
+
+
+def test_diff_field_static():
+    dump = [
+        "A mscorlib.dll",
+        "T System.Widget kind=class base=- ebase=- ifaces=-",
+        "F System.Widget._count s=1 int",
+    ]
+    ext0 = [
+        "A mscorlib.dll",
+        "T System.Widget kind=class base=- ebase=- ifaces=-",
+        "F System.Widget._count s=0 g=0 n=0",
+    ]
+    assert diff_dump_extracted(dump, ext0) != []
+    ext1 = [
+        "A mscorlib.dll",
+        "T System.Widget kind=class base=- ebase=- ifaces=-",
+        "F System.Widget._count s=1 g=0 n=0",
+    ]
+    assert diff_dump_extracted(dump, ext1) == []
 
 
 def test_diff_qualifier_compatible():

@@ -186,6 +186,10 @@ def dump_image(il, meta, img, nest):
         from il2cpp.csharp import source_field_name as _sfn
     except Exception:
         _sfn = None
+    try:
+        from il2cpp.csharp import field_attrs as _fattrs, FA_STATIC as _FA_S
+    except Exception:
+        _fattrs, _FA_S = None, 0x10
     tds = []
     try:
         t0, tn = img.type_start, img.type_count
@@ -287,8 +291,14 @@ def dump_image(il, meta, img, nest):
                 ft = il.types[f.type] if 0 <= f.type < len(il.types) else None
             except Exception:
                 ft = None
-            frows.append("F %s.%s %s" % (
-                owner_path(meta, nest, td, ti), fn, type_name(il, ft)))
+            try:
+                _fst = 0 if getattr(td, "is_enum", False) else (
+                    1 if (_fattrs is not None and _fattrs(il, f) & _FA_S)
+                    else 0)
+            except Exception:
+                _fst = 0
+            frows.append("F %s.%s s=%d %s" % (
+                owner_path(meta, nest, td, ti), fn, _fst, type_name(il, ft)))
         frows.sort()
         out.extend(frows)
     return out

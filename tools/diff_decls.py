@@ -115,14 +115,14 @@ def parse_dump(lines):
                     nargs = 0
                 cur["members"].append((kind, name, int(s), int(g), nargs))
             else:
-                m = re.match(r"^F\s+(.+?)\s+(.+)$", ln)
+                m = re.match(r"^F\s+(.+?)\s+s=(\d+)\s+(.+)$", ln)
                 if not m:
                     raise ValueError("bad member line: %r" % ln)
-                dotted, fty = m.groups()
+                dotted, s, fty = m.groups()
                 if _cur_raw is None or not dotted.startswith(_cur_raw + "."):
                     raise ValueError("bad member line: %r" % ln)
                 name = dotted[len(_cur_raw) + 1:]
-                cur["members"].append(("F", name, 0, 0, 0))
+                cur["members"].append(("F", name, int(s), 0, 0))
     return types
 
 
@@ -220,10 +220,7 @@ def norm_types(types, from_dump):
                 qs = canon_short(q)
             else:
                 t, qs = cn, None
-            if k == "F":
-                mems.append((k, t, qs, 0, 0, 0))
-            else:
-                mems.append((k, t, qs, s, g, a))
+            mems.append((k, t, qs, s, g, a))
         norm[cpath] = (r["kind"], first, eb, rest, tuple(sorted(mems, key=_mkey)))
     return norm
 
