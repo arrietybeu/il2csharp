@@ -199,6 +199,36 @@ def test_extract_property_event_indexer(tmp_path):
     assert "P N.W.S s=1 g=0 n=1" in lines
 
 
+def test_diff_invoke():
+    dump = [
+        "A mscorlib.dll",
+        "T N.Cb kind=delegate base=- ebase=- ifaces=-",
+        "M N.Cb.Invoke s=0 g=0 f=0x1c6 (int)->void",
+    ]
+    ext = [
+        "A mscorlib.dll",
+        "T N.Cb kind=delegate base=- ebase=- ifaces=-",
+        "M N.Cb.Invoke s=0 g=0 n=1",
+    ]
+    assert diff_dump_extracted(dump, ext) == []
+    ext2 = [
+        "A mscorlib.dll",
+        "T N.Cb kind=delegate base=- ebase=- ifaces=-",
+        "M N.Cb.Invoke s=0 g=0 n=2",
+    ]
+    assert diff_dump_extracted(dump, ext2) != []
+
+
+def test_extract_delegate_invoke(tmp_path):
+    from extract_decls import extract_tree
+    src = ("namespace N { public delegate void Cb(int x); "
+           "public delegate int D2(string a, string b); }")
+    (tmp_path / "D.cs").write_text(src, encoding="utf-8")
+    lines, nfiles, skipped = extract_tree(str(tmp_path), "X.dll")
+    assert "M N.Cb.Invoke s=0 g=0 n=1" in lines
+    assert "M N.D2.Invoke s=0 g=0 n=2" in lines
+
+
 def test_diff_qualifier_compatible():
     dump = [
         "A m.dll",

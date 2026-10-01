@@ -253,7 +253,7 @@ def dump_image(il, meta, img, nest):
         dskip = delegate_covered(meta, il, td)
         if dskip:
             ms = [(mi, m) for mi, m in ms
-                  if not (m.name in (".ctor", ".cctor", "Invoke")
+                  if not (m.name in (".ctor", ".cctor")
                           or m.name.startswith(("BeginInvoke", "EndInvoke")))]
         rows = []
         for mi, m in ms:

@@ -130,6 +130,17 @@ class Extractor:
                 return
             path = (ns + "." if ns else "") + "+".join(owners + [name])
             self.emit_type(path, "delegate")
+            try:
+                nparams = 0
+                for k in kids:
+                    if k.type == "parameter_list":
+                        nparams = sum(1 for g in k.children
+                                      if g.type == "parameter")
+                        break
+                self.types[path]["members"].append(
+                    ("M", "Invoke", 0, 0, nparams))
+            except Exception:
+                pass
             return
         if t in ("method_declaration", "constructor_declaration",
                  "destructor_declaration", "operator_declaration",

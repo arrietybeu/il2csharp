@@ -72,7 +72,11 @@ mscorlib 18,894 decls 0 problems) + property/event rows LANDED
 (`P s/get/set`, `E s/add/rem` both sides, mirrored on emitter truth:
 indexers as bare `this`, incomplete event pairs skipped, expression
 bodies count as getters; 19 portable incl. snippet-extract pins +
-tiny e2e green, mscorlib 20,874 decls 0 problems, 0 skipped); sidecar phase 1 (spec'd); Cpp2IL
+tiny e2e green, mscorlib 20,874 decls 0 problems, 0 skipped) + delegate Invoke rows
+LANDED (dump stops filtering Invoke on pure delegates, full M grammar
+reused with zero parser changes; extract synthesizes one Invoke M
+row per delegate_declaration; 21 portable incl. arity pins + tiny
+e2e green, mscorlib 20,934 decls 0 problems, 0 skipped); sidecar phase 1 (spec'd); Cpp2IL
 side B (external binary).
 
 ## Current work: single-field assign fold F2-C1 (2026-10-01, LANDED)
