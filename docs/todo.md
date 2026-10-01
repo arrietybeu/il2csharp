@@ -1,5 +1,35 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: Cpp2IL declaration gate, side A landed (2026-10-01, LANDED)
+
+The proposed-but-never-filed cross-check now exists as three tools
+plus tests: `tools/dump_decls.py` (canonical per-assembly declaration
+dump from metadata: CLR owner paths, kind, emitter-mirrored base
+(parent omitted for enum/valuetype/interface/delegate/object-parent),
+enum underlying keyword, full member signatures with flags, fields via
+`source_field_name`), `tools/extract_decls.py` (tree-sitter parse of
+emitted files into the same grammar: namespaces, nesting, enum
+members, ctors/dtors/operators/conversions mapped, properties/events
+skipped like their folded accessors), `tools/diff_decls.py`
+(structural compare with emitter-exact normalization: render +
+file-boundary mangle rules imported, not reimplemented; nesting dots;
+first-interface-as-base; two-pass member matching with tail +
+qualifier compatibility and multiset counts; exit code gates).
+
+Validated: tiny image (Unity.Burst.Unsafe, 41 decls) byte-stable dumps
+and zero diffs; mscorlib (18,894 decls both sides) zero problems after
+driving out nesting namespaces, accessor/delegate exclusion, enum
+members/underlying, explicit-impl qualifiers, backing-field renames,
+first-interface order, and generated-name mangling. Gates: 14 portable
++ 1 game (tiny end-to-end) green.
+
+Side B (open, external binary): run Cpp2IL on the same fixture dump,
+reduce its reconstructed DLLs to this grammar (reflection FullNames
+map to CLR owner paths; signatures to the M/F shapes), diff. v2
+(open): property/event rows both sides, full type-spelling compare
+(currently structural: names/arity/staticness/counts, short outers),
+field static flags, delegate Invoke-shape rows, compile gate.
+
 ## Current work: IsInst slice 3 (initmeta-wrapper klass identity) -- probed, KEEPER (2026-10-01, DOCUMENTED)
 
 The 15 initmeta-wrapper sites stay as-is: none of the wrappers behind
