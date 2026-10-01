@@ -75,3 +75,14 @@ def test_lazy_name_declines_mutated_body():
     lift.rt_names = {}
     assert lift._array_addr_name(target) is None
     assert target not in lift.rt_names
+
+
+def test_lazy_name_caches_stride_not_true():
+    lift, target = lifter_for(BODY_A)
+    lift.rt_names = {}
+    assert lift._array_addr_name(target) == 'il2cpp_array_addr'
+    assert lift.__dict__.get('rt_array_addr', {}).get(target) == 0x178
+    lift2, target2 = lifter_for(BODY_B)
+    lift2.rt_names = {}
+    assert lift2._array_addr_name(target2) == 'il2cpp_array_addr'
+    assert lift2.__dict__.get('rt_array_addr', {}).get(target2) == 0x60

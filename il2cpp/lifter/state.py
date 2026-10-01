@@ -421,9 +421,10 @@ class _StateMixin:
                         and not (getattr(self.il, 'addr_candidates', None) or {}).get(target) \
                         and target not in (getattr(self.bin, 'exports', None) or {}) \
                         and target not in (getattr(self, 'rt_names', None) or {}):
-                    if self._is_array_addr_helper(target):
+                    _st = self._is_array_addr_helper(target)
+                    if _st:
                         self.rt_names[target] = 'il2cpp_array_addr'
-                        self.__dict__.setdefault('rt_array_addr', {})[target] = True
+                        self.__dict__.setdefault('rt_array_addr', {})[target] = _st
                         name = 'il2cpp_array_addr'
             except Exception:
                 name = None

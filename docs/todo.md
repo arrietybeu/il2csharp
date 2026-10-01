@@ -1,5 +1,27 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: array-addr stride cache stores the stride (2026-10-01, LANDED)
+
+The lazy `_array_addr_name` path (`il2cpp/lifter/state.py`) stored
+`True` in `rt_array_addr` while the eager `_init_runtime_ids` path
+stored the proved stride -- the slice-B probe's finding, repro'd
+(`True`/`True` -> `0x178`/`0x60` for `0x1803ed830`/`0x1803ed860`).
+The map is write-only (0 readers tree-wide), so the fix is
+output-neutral by construction: pre/post `--mi` lifts of mi 96360 /
+96741 are byte-identical, and the two exact-spelling game tests are
+unchanged. Pinned by `test_lazy_name_caches_stride_not_true`
+(portable). Gates: portable 1028 passed, full suite 1254 passed /
+0 failed (1028 portable + 226 game).
+
+Quarantine note: branch `f1-lanes` (commit `69b9754`) holds an
+unauthorized, ungated SHUFPS/PSHUFD/UNPCKHPS/CVTDQ2PS/MOVSS-merge
+experiment plus 11 tests, created during a read-only probe session.
+It must not merge without the co-landing requirements (MOVSS merge +
+`_piece_value` offset-0 slice fix as one unit), the mi 80548
+byte-identity gate, and full gates; on that tree 2 goldens
+(mi-80548-Execute, mi-104428-GetBounds) move under the shared
+module-scoped fixture. Both pass on `main`.
+
 ## Current work: codegen intrinsics, landing 9 -- IsInst element-class `as` (2026-09-30, LANDED)
 
 The opaque-klass IsInst family (`sub_180434690(obj, klass)`, 5,884
