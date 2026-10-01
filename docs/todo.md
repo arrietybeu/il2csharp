@@ -1,5 +1,39 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: sidecar consumer redesign -- census (2026-10-01, OPEN)
+
+Why phase 1 is coverless: `_tile_proof_for` is only reached on the phi
+path (il2cpp/dec/analyze.py pass 2), which only runs when pred texts
+differ -- an exact unanimous tile has identical texts and never becomes
+a phi. The record cannot fire by construction; wiring a consumer to it
+changes nothing.
+
+Census (spy on `_tile_proof_for` + caller-frame rpo/preds; script
+`%TEMP%\opencode\tcensus.py <ns> <cap> <out.json>`), FIMSpace, 1,017
+methods / 4,212 `!mem:` phi sites, 15.5 s: fwd-only sliceless 2,423,
+fwd-only divergent 921, loop sites 868 (fwd-unanimous + sliceless
+back-edge 535; fwd-sliceless 266+19; fwd-divergent 45; back sliced but
+different 3). The 535 bucket, by back-edge (dry end_state) value:
+missing key 333, dry-divergent `?` 105, genuinely different 70,
+renumber-only 26 (`t1001.z` vs dry `t1000.z`), same text 1.
+
+Next: (1) find why the dry loop body drops the `!mem:` key (333) --
+kill/clobber vs never-set; (2) dry-pass merges keep `_slice` the way
+`_dry_proof` is kept (analyze.py ~line 478) and iterate the dry header
+to a fixpoint for the 105; (3) renumber-tolerant same-tile compare is
+only ~5% of the bucket; (4) first consumer = the declined
+`_piece_value` offset-0 unwrap, re-measured with paired
+Assembly-CSharp gates.
+
+External input (Megabonk port notes, Unity 2023.2 / metadata v29):
+46 struct temps passed as `default` after dropped stores (e.g.
+`AegisRenderer.SetAmount`) -- real miscompile, not reproducible here
+yet (asked for the method list / binaries). Same patterns counted in
+r11 Assembly-CSharp (490 files): empty `typeof(T).initialized` guards
+2,962 of 2,999 (cheap, safe cleanup), raw `((byte*)x + 0x` 6,076,
+`__field_` 4,098, inlined Unity statics (`upVector` etc.) 1,144,
+`op_Multiply(` 92, `/*vtable slot` 30, `sub_` calls 1,585.
+
 ## final_out promoted to r11 (2026-10-01)
 
 Rebuilt from `main` `1cafd3f` (strict, 8 workers): 11,183 files / 114,458
