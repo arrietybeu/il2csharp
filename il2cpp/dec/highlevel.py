@@ -1355,6 +1355,270 @@ class _HighLevelMixin:
         # bare-call shape this pattern actually produces (any call already
         # carrying its own `<...>` didn't need this and is left untouched).
         callno_rx = _re.compile(r'^(.*?\.\w+)\(\)(;)$')
+        # Heterogeneous box-temp guard (mi 1242 `Convert.ChangeType`):
+        # one stack slot is reused across switch arms with incompatible
+        # types, but the tracked tuple keeps a single arm's type (first
+        # or last write wins). Declaring the first occurrence with that
+        # tuple breaks every other arm (`System.DateTime dateTime1 =
+        # obj2; dateTime1 = flag1; ...`). When the chosen declaration is
+        # a namespaced type and some single-identifier assignment to the
+        # same local resolves to a different closed type, keep `object`
+        # (boxing is always safe). A single conflicting sample can be
+        # a mistyped lane/fragment artifact (mi 63027 `vector31 =
+        # real37`), so two distinct conflicting closed types are
+        # required; uncomparable (None) keys never vote. Single-
+        # identifier RHS only;
+        # calls/members/literals prove nothing and never fire the guard.
+        # Non-namespaced (primitive) declarations are out of scope.
+        def _tracked_of_post(post):
+            _pre = tok_of.get(post, post)
+            _t = None
+            try:
+                if isinstance(_pre, str) and _pre.startswith('s_'):
+                    _t = self.L.slot_types.get(_pre)
+            except Exception:
+                _t = None
+            try:
+                if _t is None:
+                    _mm = getattr(self, '_var_types', None)
+                    if _mm:
+                        _t = _mm.get(_pre)
+            except Exception:
+                pass
+            try:
+                if _t is None:
+                    _t = self.L.__dict__.get('_var_types', {}).get(_pre)
+            except Exception:
+                pass
+            try:
+                if _t is None:
+                    _t = getattr(self.L, '_type_hints', {}).get(_pre)
+            except Exception:
+                pass
+            try:
+                if _t is None and isinstance(_pre, str) and not _pre.startswith('s_'):
+                    _t = getattr(self.L, 'slot_types', {}).get(_pre)
+            except Exception:
+                pass
+            if _t is None and method is not None:
+                _si = safe_ident
+                try:
+                    for _pp in self.L.meta.method_params(method):
+                        if _si(_pp.name) == post:
+                            _pt = self.L.il.types[_pp.type]
+                            _t = _pt
+                            break
+                except Exception:
+                    pass
+            return _t if isinstance(_t, tuple) else None
+        def _closed_key(_tt):
+            try:
+                _ck = getattr(self.L.il, '_closed_type_key', None)
+                if callable(_ck):
+                    return _ck(_tt)
+            except Exception:
+                pass
+            return _tt
+        def _hetero_derived(_dt0, _rt):
+            """True when the RHS type provably derives from the decl type."""
+            try:
+                _tdof = getattr(self.L.il, 'td_of_ty', None)
+                if not callable(_tdof):
+                    return False
+                _t0 = _tdof(_dt0)
+                _t1 = _tdof(_rt)
+                if _t0 is None or _t1 is None:
+                    return False
+                if _t0 == _t1:
+                    return True
+                try:
+                    _bc = getattr(self.L.il, 'base_chain_tds', None)
+                    if not callable(_bc):
+                        return False
+                    return _t0 in (_bc(_t1) or ())
+                except Exception:
+                    return False
+            except Exception:
+                return False
+        # Unresolved native helpers (`sub_<hex>(...)`) carry no C#
+        # signature, so an argument position there imposes no parameter
+        # type on the temp: `&slot` / `slot` handed to one cannot veto the
+        # retype (mi 1242 `sub_18004a890(&obj1, 13, typeof(...), c)`, a
+        # box-staging slot reused across Convert.ChangeType arms). Resolved
+        # callees, ref/out/in, members, indexers and returns still veto.
+        _HELPER_RX = _re.compile(r'(?<![\w.])sub_[0-9A-Fa-f]+\s*$')
+        def _untyped_helper_arg(_sh, _pos):
+            _d = 0
+            for _i in range(_pos - 1, -1, -1):
+                _c = _sh[_i]
+                if _c == ')':
+                    _d += 1
+                elif _c == '(':
+                    if _d == 0:
+                        return _HELPER_RX.search(_sh, 0, _i) is not None
+                    _d -= 1
+            return False
+        _OBJ_MEMBERS = frozenset((
+            'ToString', 'GetHashCode', 'GetType', 'Equals'))
+        def _hetero_vetoed(_nm_post):
+            """True when a later use forbids retyping the temp to object.
+
+            Matches pre-rename spellings in the masked shadow: the
+            rename is structure-preserving token substitution, while
+            `shadow` is the only literal-masked view available here.
+            """
+            try:
+                _pre = tok_of.get(_nm_post, _nm_post)
+                _te = _re.escape(_pre)
+                _esc_rx = _re.compile(
+                    r'(?:&\s*%s\b|\b(?:ref|out|in)\s+%s\b)' % (_te, _te))
+                _mem_rx = _re.compile(
+                    r'(?<![\w.])(%s)\s*\.\s*([A-Za-z_]\w*)' % _te)
+                _idx_rx = _re.compile(r'(?<![\w.])(%s)\s*\[' % _te)
+                _ret_rx = _re.compile(r'^\s*return\s+(%s)\s*;' % _te)
+                _ret_box_rx = _re.compile(
+                    r'^\s*return\s+\(\s*object\s*\)')
+                _declmap = {}
+                _dmulti = set()
+                for _sh in shadow:
+                    _dm = _re.match(
+                        r'^\s*([A-Za-z_@][^=;(){}]*?)\s+([A-Za-z_@]\w*)\s*=(?![=>])',
+                        _sh)
+                    if _dm is None:
+                        continue
+                    _ty, _tn = _dm.group(1).strip(), _dm.group(2)
+                    if _tn in _dmulti:
+                        continue
+                    if _tn in _declmap:
+                        if _declmap[_tn] != _ty:
+                            _dmulti.add(_tn)
+                            del _declmap[_tn]
+                        continue
+                    _declmap[_tn] = _ty
+                _ref_rx = _re.compile(r'\b(?:ref|out|in)\s+(%s)(?![\w])' % _te)
+                _def_rx = _re.compile(
+                    r'^\s*(?:[A-Za-z_@][^=;(){}]*?\s+)?%s\s*=(?![=>])' % _te)
+                _box_rx = _re.compile(
+                    r'\(\s*object\s*\)\s*(?:\(\s*%s\s*\)|%s(?![\w]))' % (_te, _te))
+                _objm_rx = _re.compile(
+                    r'(?<![\w.])%s\s*\.\s*(?:ToString|GetHashCode|GetType|Equals)\b' % _te)
+                _occ_rx = _re.compile(r'(?<![\w.@])%s(?![\w])' % _te)
+                _amp_rx = _re.compile(r'&\s*(%s)(?![\w])' % _te)
+                for _sh in shadow:
+                    if _ref_rx.search(_sh):
+                        return True
+                    for _am in _amp_rx.finditer(_sh):
+                        if _untyped_helper_arg(_sh, _am.start()):
+                            continue
+                        _bm = _re.match(
+                            r'^\s*(?:[A-Za-z_@][^=;(){}]*?\s+)?([A-Za-z_@]\w*)\s*=\s*&\s*%s\s*;\s*$' % _te,
+                            _sh)
+                        if _bm is None:
+                            return True
+                        _bt = _bm.group(1)
+                        # The binder's spelling is what the decl pass will print: an
+                        # undeclared/`var` binder resolves through `_decl_type_of`
+                        # (mi 1242 `v188 = &s_10;` prints `object obj10 = &obj1;`).
+                        _bdt = _declmap.get(_bt)
+                        if _bdt in (None, 'var') and _bt not in _dmulti:
+                            try:
+                                _bdt = self._decl_type_of(_bt, '&' + _pre)
+                            except Exception:
+                                _bdt = None
+                        if _bt in _dmulti or _bdt not in ('object', 'System.Object'):
+                            return True
+                    _mm = _mem_rx.search(_sh)
+                    if _mm is not None and _mm.group(2) not in _OBJ_MEMBERS:
+                        return True
+                    if _idx_rx.search(_sh):
+                        return True
+                    if _ret_rx.match(_sh) is not None \
+                            and _ret_box_rx.match(_sh) is None:
+                        try:
+                            _rok = False
+                            if method is not None:
+                                _ri = getattr(method, 'return_type', -1)
+                                _rty = self.L.il.types[_ri] \
+                                    if 0 <= _ri < len(self.L.il.types) \
+                                    else None
+                                if isinstance(_rty, tuple) and \
+                                        ((_rty[1] >> 16) & 0xFF) == 0x1c:
+                                    _rok = True
+                        except Exception:
+                            _rok = False
+                        if not _rok:
+                            return True
+                    # Box-only reads (decline-by-default): after masking the def
+                    # (`X =` / `T X =`), boxing casts `(object)(X)` / `(object)X`,
+                    # `&X` (proven above), builtin object members and an object-
+                    # method `return X;`, ANY other occurrence is a typed read and
+                    # vetoes -- call args incl. generic and nested-paren calls,
+                    # field/element stores, arithmetic, casts, compound assigns
+                    # (mscorlib ActivationServices `_activator = X`, MemoryStream
+                    # `TryGetArray<byte>(X, ...)`, Decimal `X * k`, RuntimeType
+                    # `FilterApplyMethodBase(..., (BindingFlags)(n), ..., X)`).
+                    _rest = _def_rx.sub(' ', _sh, count=1)
+                    _rest = _box_rx.sub(' ', _rest)
+                    _rest = _amp_rx.sub(' ', _rest)
+                    _rest = _objm_rx.sub(' ', _rest)
+                    _rest = _ret_rx.sub(' ', _rest)
+                    if _occ_rx.search(_rest):
+                        return True
+                return False
+            except Exception:
+                return False
+        _hetero_assigns = {}
+        try:
+            _nm_alt = '|'.join(_re.escape(_n) for _n in new_names)
+            _as_rx = _re.compile(r'^\s*(' + _nm_alt + r')\s*=(?!=|>)(.*);\s*$')
+            for _st in lines:
+                _am = _as_rx.match(_st)
+                if _am is None:
+                    continue
+                _hetero_assigns.setdefault(_am.group(1), []).append(_am.group(2).strip())
+        except Exception:
+            _hetero_assigns = {}
+        def _hetero_decl(_nm_post, _dt, _rhs=''):
+            try:
+                if '.' not in (_dt or ''):
+                    return _dt
+                if _dt in ('object', 'System.Object', 'System.Type'):
+                    return _dt
+                if _hetero_vetoed(_nm_post):
+                    return _dt
+                _r0 = (_rhs or '').strip()
+                if _r0.endswith(';'):
+                    _r0 = _r0[:-1].strip()
+                if _r0 != _nm_post and _re.fullmatch(r'[A-Za-z_]\w*', _r0):
+                    _hetero_assigns.setdefault(_nm_post, []).insert(0, _r0)
+                _dt0 = _tracked_of_post(_nm_post)
+                if _dt0 is None:
+                    return _dt
+                _k0 = _closed_key(_dt0)
+                if _k0 is None:
+                    return _dt
+                _seen = set()
+                for _rhs in _hetero_assigns.get(_nm_post, ()):
+                    _rm = _re.fullmatch(r'([A-Za-z_]\w*)', (_rhs or '').strip())
+                    if not _rm:
+                        continue
+                    _rn = _rm.group(1)
+                    if _rn == _nm_post:
+                        continue
+                    _rt = _tracked_of_post(_rn)
+                    if _rt is None:
+                        continue
+                    _k = _closed_key(_rt)
+                    if _k is None or _k == _k0:
+                        continue
+                    if _hetero_derived(_dt0, _rt):
+                        continue
+                    _seen.add(_k)
+                    if len(_seen) >= 2:
+                        return 'object'
+                return _dt
+            except Exception:
+                return _dt
         out = []
         depth = 0
         # fix 97c: declarations are block-scoped. A temp declared in a
@@ -1377,6 +1641,10 @@ class _HighLevelMixin:
                 rhs = m.group(4)
                 if nm not in decl:
                     dt = self._decl_type_of(tok_of[nm], rhs)
+                    try:
+                        dt = _hetero_decl(nm, dt, rhs)
+                    except Exception:
+                        pass
                     if tok_of[nm] in gp_blocked and dt not in ('object', 'System.Type'):
                         cm = callno_rx.match(rhs)
                         if cm:
@@ -1393,6 +1661,10 @@ class _HighLevelMixin:
                     nm = b.group(2)
                     rhs = b.group(3)
                     dt = self._decl_type_of(tok_of.get(nm, nm), rhs)
+                    try:
+                        dt = _hetero_decl(nm, dt, rhs)
+                    except Exception:
+                        pass
                     if tok_of.get(nm, nm) in gp_blocked and dt not in ('object', 'System.Type'):
                         cm = callno_rx.match(rhs)
                         if cm:

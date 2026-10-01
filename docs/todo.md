@@ -1,5 +1,67 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: twin single-field-return relax + box-only hetero guard (2026-10-01, LANDED)
+
+Closes the DEFERRED twin item below (branches `twin-guard-wip` +
+`twin-hardening`, squashed onto `main`). Two halves:
+
+- **Twin relax** (`il2cpp/lifter/calls.py`, the resolved-dispatch
+  return gate): single-field struct returns now flow whole; only
+  unreadable typedefs/field chains decline. Consumers that want the lane
+  still get it through F2-C1 (decls) / F2-C2 (call args). This resolves
+  the `sub_180006590(14, typeof(IConvertible), c, p)` dispatch to
+  `c.ToDateTime(p)` (Convert.cs x4, mi 86310).
+- **Hetero-decl guard** (`il2cpp/dec/highlevel.py` `_rename_locals`,
+  `_hetero_decl` / `_hetero_vetoed`): a namespaced decl whose slot takes
+  >= 2 distinct non-derived closed types from single-identifier RHS
+  assignments is printed `object` -- but ONLY when every read of the temp
+  is a boxing use. Box-only rule: mask the def (`X =` / `T X =`),
+  `(object)(X)` / `(object)X`, builtin object members
+  (`ToString/GetHashCode/GetType/Equals`), an object-method `return X;`,
+  and `&X` either bound to an `object` binder (undeclared/`var` binders
+  resolve through `_decl_type_of`: mi 1242 `v188 = &s_10;`) or passed to
+  an unresolved `sub_<hex>(...)` helper (innermost enclosing call; no C#
+  signature, no parameter type). Any other occurrence vetoes: ref/out/in,
+  members, indexers, typed returns, call args incl. generic
+  (`TryGetArray<byte>(X, ...)`) and nested-paren calls, field/element
+  stores (`_activator = X`), arithmetic (`X * k`), casts, compound
+  assigns, plain copies. Subclass tolerance via `base_chain_tds`.
+
+mi 1242 (`Convert.ChangeType` box-staging slot `s_10`, every arm writes
+then `&slot` -> object binder / helper): today's `object obj1` is kept
+while the ToDateTime arm resolves (`DateTime dateTime1 =
+convertible1.ToDateTime(provider); obj1 = dateTime1;`). The first
+candidate (twin + guard + helper/binder exemptions, no box-only rule)
+retyped 7 more mscorlib/Assembly-CSharp files with typed consumers
+(Decimal `Buf16` -> `object obj6`, MemoryStream/UnmanagedMemoryStream
+`ReadOnlyMemory`, RuntimeType `BindingFlags`, ActivationServices
+`IActivator`, TaskToApm `IAsyncResult`, LAM_DirectionalMovement) --
+the box-only rule cleared all of them.
+
+Gates: paired scoped builds vs `main` 19916ac (mscorlib +
+Assembly-CSharp, 1844/1844 files, file sets identical; 17337 bodies,
+0 failed / 0 fallbacks / 0 type-emit failures): 2 files changed --
+Convert.cs (exactly the 4 `ToDateTime` dispatch recoveries) and
+PlatformManager_Steam.cs (renumbering, one pure-copy fold
+`CSteamID cSteamId2 = num1; (object)(cSteamId2)` -> `(object)(num1)`
+x3, and 3 stores `cSteamId2 = <GetSteamID temp>;` dropped -- each
+proven dead in text: no read of `cSteamId2` before the next sibling
+decl). Brace 0; parse 0 bad / 0 ERROR / 0 MISSING. One golden moved
+and was read: mi 86310 `DateTimeStorage.Set`, the single line
+`(DateTime)sub_180006590(14, ...)` -> `convertible1.ToDateTime(
+formatProvider1)` (no `._dateData` projection; the 2026-09-28 hazard
+stays closed). Tests: tests/test_hetero_veto.py (21: escape/member/
+return/call-arg vetoes, boxing carve-outs, subclass tolerance, helper
+`&` + undeclared-object-binder exemptions, value-read/field-store/
+generic/nested-paren vetoes); goldens hash-synced for mi 86310 only
+(64/64 after sync); full suite 1435 passed / 0 failed (pre-sync run:
+1434 + the one reviewed mi 86310 move).
+
+Still open (unchanged by this landing): sidecar consumer redesign
+(dry-pass tile proofs for loops, same-tile-respell detection) -- the
+natural home for per-arm types that would also unblock the
+primitive-hetero guard; Cpp2IL side B.
+
 ## Current work: single-field call-arg fold F2-C2 + interface-zero (2026-10-01, OPEN)
 
 Second slice of the single-field use-proof, plus the interface-zero
@@ -22,7 +84,7 @@ escapes); yoda/`!=` fold in place; mask-then-splice throughout. mi
 5694 `customFormatter12 == 0` was an untyped indirect-call temp at
 TEST time; the declaration knows `System.ICustomFormatter`.
 
-DEFERRED with evidence (own branch next): the twin single-field-return
+DEFERRED with evidence (since LANDED -- see the section above): the twin single-field-return
 relax + decl-heterogeneity guard. The twin resolves dispatch sites
 (Convert.cs `convertible1.ToDateTime(provider)` x4) but retypes mi
 1242's box-temp; the guard fixed that yet fired on slots with typed
@@ -62,8 +124,8 @@ wirings, display-only with raw-text bookkeeping; latent on this
 corpus -- paired mscorlib (1353 files) + Assembly-CSharp (493
 files) 0 changed, file sets identical; brace 0; parse 0/0/0;
 goldens 64/64 unmoved; suite 1417/0; returns/byref stay declined);
-twin+guard branch (`twin-guard-wip`: consumer vetoes +
-subclass tolerance + drop attribution, then re-measure); isinst slice
+twin+guard LANDED 2026-10-01 (box-only reads rule; section
+above); isinst slice
 2 (fence helper `_bare_typeof_target` LANDED + 9 pins; `_call` gate
 DECLINED with a full-tree census (11,183 files / 114,458 bodies):
 exactly 17 typeof-carrying `sub_180434690` sites, all declined --

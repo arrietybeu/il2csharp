@@ -1817,12 +1817,12 @@ class _CallsMixin:
         if rty is None or not self.il._return_abi_is_known(rty) \
                 or self.il.returns_sret(rty):
             return None
-        # Single-field struct returns project to their field on stack
-        # reloads (the F2 whole-value guard keeps `this.m_State`
-        # spellings) without consumer proof, so `dateTime3 = dateTime2`
-        # becomes the uncompilable `dateTime3 = dateTime2._dateData`
-        # (mi 86310 `Set`). Decline them; enums flow cleanly
-        # (mi 104498 `ProcessRegularUpdates`).
+        # Single-field struct returns flow whole unless a consumer
+        # provably wants the lane: struct-typed declarations fold
+        # through F2-C1 and struct-typed call args through F2-C2,
+        # while int/ulong/object consumers keep lane spellings.
+        # Unreadable typedefs/chains stay declined; enums flow
+        # cleanly (mi 104498 `ProcessRegularUpdates`).
         try:
             _rte = self.il._type_enum(rty)
         except Exception:
@@ -1834,9 +1834,8 @@ class _CallsMixin:
                 _rfm = self.il.instance_field_chain(_rtd) if _rtd is not None else None
             except Exception:
                 _rtdo, _rfm = None, None
-            if _rtdo is None or _rfm is None or not getattr(_rtdo, 'is_enum', False):
-                if _rfm is None or len(_rfm) <= 1:
-                    return None
+            if _rtdo is None or _rfm is None:
+                return None
         if method.param_count == 0:
             return mi, receiver, rty
         if method.param_count == 1:
