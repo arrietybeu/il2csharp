@@ -90,7 +90,12 @@ compiler plumbing + game mscorlib syntax==0 green; 1350 files,
 `!mem:` tiles, `__slots__` + default; no consumer reads it yet;
 paired Assembly-CSharp 493/493 files 0 changed, file sets identical,
 brace 0; goldens 64/64; portable 1176 + full suite 1414/0; 11 proof
-pins; consumers open next); Cpp2IL
+pins; census over 26 merge-heavy methods: 777 merge sites, 0
+exact-unanimous (354 partial-presence incl. loop headers, 219
+asymmetric-slice, 204 divergent) -- the record is honest but
+coverless as designed; consumers need redesign (dry-pass tile
+proofs for loops a la `_dry_proof`, same-tile-respell detection),
+not wiring; open next); Cpp2IL
 side B (external binary).
 
 ## Current work: single-field assign fold F2-C1 (2026-10-01, LANDED)
