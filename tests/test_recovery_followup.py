@@ -690,6 +690,23 @@ def test_nonzero_slice_reroots_to_base():
     assert lift._piece_value(frag, 4, 4, F32).text == 'm.z'
 
 
+def test_zero_offset_slice_resolves_through_base():
+    lift = struct_lifter()
+    lift._stack_store(0x20, 4, Expr('a', F32, 'float'))
+    lift._stack_store(0x24, 4, Expr('b', F32, 'float'))
+    tiled = lift._stack_piece(0x20, 8)
+    frag = lift._fragment(tiled, 0, 4)
+    assert lift._piece_value(frag, 0, 4, F32).text == 'a'
+
+
+def test_slice_overhang_declines():
+    from il2cpp import Expr as _Expr
+    lift = struct_lifter()
+    base = _Expr('m', V3, 'obj')
+    frag = lift._fragment(base, 0, 4)
+    assert lift._piece_value(frag, 0, 8, F32) is None
+
+
 def test_straddling_fragment_keeps_origin_type():
     lift = struct_lifter()
     origin = Expr('v', V3, 'obj')
