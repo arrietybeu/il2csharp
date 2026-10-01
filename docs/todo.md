@@ -1,5 +1,18 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: interface-zero probe (2026-10-01, OPEN)
+
+`if (customFormatter12 == 0)` (mi 5694, pre-existing) is NOT the
+TEST-null rewrite: a spy on every `_test_is_value` call during the
+lift shows the single customFormatter test (an `as`-result,
+te 0x12, kind `obj`) correctly returns False, and disassembly shows
+exactly one TEST and zero CMP-reg-0 in the method. A guard extension
+to all reference tes (0x12/0x14/0x1c/0x1d) changed nothing and was
+reverted to the proven 0x0e/0x0f guard. Remaining suspects: a
+rename-desync (condition built on an int-kind temp later renamed to
+the interface-typed name) or a non-TEST/CMP flag source. Needs a
+lift-time (kind, ty) trace at the exact flag-setting instruction.
+
 ## Current work: bounds slice B (`arr[i].field`) -- probed, built, measured, DECLINED (2026-10-01, DOCUMENTED)
 
 Slice A named `il2cpp_array_addr(arr, idx)` (764 sites). Slice B would
