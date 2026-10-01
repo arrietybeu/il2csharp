@@ -131,6 +131,74 @@ def test_diff_field_static():
     assert diff_dump_extracted(dump, ext1) == []
 
 
+def test_diff_property():
+    dump = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "P N.W.P s=0 get=1 set=1 string",
+    ]
+    ext = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "P N.W.P s=0 g=0 n=3",
+    ]
+    assert diff_dump_extracted(dump, ext) == []
+    ext2 = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "P N.W.P s=0 g=0 n=1",
+    ]
+    assert diff_dump_extracted(dump, ext2) != []
+
+
+def test_diff_event():
+    dump = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "E N.W.E s=0 add=1 rem=1 System.Action",
+    ]
+    ext = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "E N.W.E s=0 g=0 n=3",
+    ]
+    assert diff_dump_extracted(dump, ext) == []
+    ext2 = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "E N.W.E s=1 g=0 n=3",
+    ]
+    assert diff_dump_extracted(dump, ext2) != []
+
+
+def test_diff_indexer():
+    dump = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "P N.W.this s=0 get=1 set=1 int",
+    ]
+    ext = [
+        "A mscorlib.dll",
+        "T N.W kind=class base=- ebase=- ifaces=-",
+        "P N.W.this s=0 g=0 n=3",
+    ]
+    assert diff_dump_extracted(dump, ext) == []
+
+
+def test_extract_property_event_indexer(tmp_path):
+    from extract_decls import extract_tree
+    src = ("namespace N { class W { public int P { get; set; } "
+           "public event System.Action E; "
+           "public int this[int i] => i; "
+           "public static string S { get; } } }")
+    (tmp_path / "W.cs").write_text(src, encoding="utf-8")
+    lines, nfiles, skipped = extract_tree(str(tmp_path), "X.dll")
+    assert "P N.W.P s=0 g=0 n=3" in lines
+    assert "E N.W.E s=0 g=0 n=3" in lines
+    assert "P N.W.this s=0 g=0 n=1" in lines
+    assert "P N.W.S s=1 g=0 n=1" in lines
+
+
 def test_diff_qualifier_compatible():
     dump = [
         "A m.dll",

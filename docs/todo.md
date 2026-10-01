@@ -68,7 +68,11 @@ live in unbuilt images; the gate needs a full-tree census and a
 firing repro (exact-2-arg, kind!=klass, nameable T) before it is
 written); decl-gate v2 field-statics LANDED (`F s=` both sides via
 `field_attrs`, enum members exempt s=0; 15 portable + tiny e2e green,
-mscorlib 18,894 decls 0 problems); sidecar phase 1 (spec'd); Cpp2IL
+mscorlib 18,894 decls 0 problems) + property/event rows LANDED
+(`P s/get/set`, `E s/add/rem` both sides, mirrored on emitter truth:
+indexers as bare `this`, incomplete event pairs skipped, expression
+bodies count as getters; 19 portable incl. snippet-extract pins +
+tiny e2e green, mscorlib 20,874 decls 0 problems, 0 skipped); sidecar phase 1 (spec'd); Cpp2IL
 side B (external binary).
 
 ## Current work: single-field assign fold F2-C1 (2026-10-01, LANDED)

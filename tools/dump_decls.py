@@ -154,6 +154,17 @@ def enum_ebase(il, td):
         return None
 
 
+def _rel_acc(meta, td, rel):
+    """Absolute MethodDef for a relative property/event accessor row."""
+    try:
+        if rel is None or rel < 0:
+            return None
+        mi = td.method_start + rel
+        return meta.methods[mi] if 0 <= mi < len(meta.methods) else None
+    except Exception:
+        return None
+
+
 def accessor_methods(meta, td):
     """Absolute MethodDef indices folded into property/event decls."""
     out = set()
@@ -301,6 +312,85 @@ def dump_image(il, meta, img, nest):
                 owner_path(meta, nest, td, ti), fn, _fst, type_name(il, ft)))
         frows.sort()
         out.extend(frows)
+        try:
+            prs = [(td.property_start + k,
+                    meta.properties[td.property_start + k])
+                   for k in range(td.property_count or 0)
+                   if 0 <= td.property_start + k < len(meta.properties)]
+        except Exception:
+            prs = []
+        prows = []
+        for pi, pr in prs:
+            try:
+                raw = meta.getstr(pr[0])
+            except Exception:
+                continue
+            g = _rel_acc(meta, td, pr[1])
+            s = _rel_acc(meta, td, pr[2])
+            try:
+                gp = list(meta.method_params(g)) if g is not None else []
+            except Exception:
+                gp = []
+            try:
+                sp = list(meta.method_params(s)) if s is not None else []
+            except Exception:
+                sp = []
+            idx = gp if g is not None else sp[:-1]
+            if idx:
+                nm = (raw.rpartition(".")[0] + ".") if "." in raw else ""
+                nm += "this"
+            else:
+                nm = raw
+            try:
+                pt = None
+                if g is not None:
+                    pt = il.types[g.return_type] \
+                        if 0 <= g.return_type < len(il.types) else None
+                if pt is None and sp:
+                    vt = sp[-1].type
+                    pt = il.types[vt] if 0 <= vt < len(il.types) else None
+                pty = type_name(il, pt)
+            except Exception:
+                pty = "object"
+            try:
+                present = [a for a in (g, s) if a is not None]
+                st = 1 if (present and all(a.is_static for a in present)) else 0
+            except Exception:
+                st = 0
+            prows.append("P %s.%s s=%d get=%d set=%d %s" % (
+                owner_path(meta, nest, td, ti), nm, st,
+                1 if g is not None else 0, 1 if s is not None else 0, pty))
+        prows.sort()
+        out.extend(prows)
+        try:
+            evs = [(td.event_start + k, meta.events[td.event_start + k])
+                   for k in range(td.event_count or 0)
+                   if 0 <= td.event_start + k < len(meta.events)]
+        except Exception:
+            evs = []
+        erows = []
+        for ei, ev in evs:
+            add = _rel_acc(meta, td, ev[2])
+            rem = _rel_acc(meta, td, ev[3])
+            if add is None or rem is None:
+                continue
+            try:
+                raw = meta.getstr(ev[0])
+            except Exception:
+                continue
+            try:
+                et = il.types[ev[1]] if 0 <= ev[1] < len(il.types) else None
+                ety = type_name(il, et)
+            except Exception:
+                ety = "System.Action"
+            try:
+                st = 1 if (add.is_static and rem.is_static) else 0
+            except Exception:
+                st = 0
+            erows.append("E %s.%s s=%d add=1 rem=1 %s" % (
+                owner_path(meta, nest, td, ti), raw, st, ety))
+        erows.sort()
+        out.extend(erows)
     return out
 
 

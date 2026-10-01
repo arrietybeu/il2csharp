@@ -255,8 +255,102 @@ class Extractor:
                                         ("F", text(src, w).strip(),
                                          1 if static else 0, 0, 0))
             return
-        if t in ("property_declaration", "event_declaration",
-                 "indexer_declaration", "accessor_list", "accessor_declaration"):
+        if t in ("property_declaration", "indexer_declaration"):
+            try:
+                want_this = (t == "indexer_declaration")
+                static = any(c.type == "modifier"
+                             and text(src, c).strip() == "static"
+                             for c in node.children)
+                prefix, names = "", []
+                for c in node.children:
+                    if c.type == "explicit_interface_specifier":
+                        prefix = text(src, c).strip()
+                        if not prefix.endswith("."):
+                            prefix += "."
+                    elif c.type in ("accessor_list", "arrow_expression_clause"):
+                        break
+                    elif c.type == "identifier":
+                        names.append(text(src, c).strip())
+                kinds = set()
+                for c in node.children:
+                    if c.type == "accessor_list":
+                        for a in c.children:
+                            if a.type == "accessor_declaration":
+                                for k in a.children:
+                                    kt = text(src, k).strip()
+                                    if kt in ("get", "set", "init",
+                                              "add", "remove"):
+                                        kinds.add(kt)
+                    elif c.type == "arrow_expression_clause":
+                        kinds.add("get")
+                get = 1 if "get" in kinds else 0
+                st_ = 1 if ({"set", "init"} & kinds) else 0
+                name = prefix + "this" if want_this else (
+                    prefix + names[-1] if names else "")
+                if not owners or not name or not kinds:
+                    self.skipped_props += 1
+                    return
+                path = (ns + "." if ns else "") + "+".join(owners)
+                self.types.setdefault(path, {"kind": "?", "base": None,
+                                             "ifaces": [], "members": []})
+                self.types[path]["members"].append(
+                    ("P", name, 1 if static else 0, 0, get + 2 * st_))
+            except Exception:
+                self.skipped_props += 1
+            return
+        if t in ("event_declaration", "event_field_declaration"):
+            try:
+                static = any(c.type == "modifier"
+                             and text(src, c).strip() == "static"
+                             for c in node.children)
+                path = (ns + "." if ns else "") + "+".join(owners)
+                if any(c.type == "variable_declaration"
+                       for c in node.children):
+                    if not owners:
+                        self.unhandled.append("ownerless-event")
+                        return
+                    self.types.setdefault(path, {"kind": "?", "base": None,
+                                                 "ifaces": [], "members": []})
+                    for c in node.children:
+                        if c.type == "variable_declaration":
+                            for v in c.children:
+                                if v.type == "variable_declarator":
+                                    for w in v.children:
+                                        if w.type == "identifier":
+                                            self.types[path]["members"].append(
+                                                ("E", text(src, w).strip(),
+                                                 1 if static else 0, 0, 3))
+                else:
+                    kinds = set()
+                    prefix, names = "", []
+                    for c in node.children:
+                        if c.type == "explicit_interface_specifier":
+                            prefix = text(src, c).strip()
+                            if not prefix.endswith("."):
+                                prefix += "."
+                        elif c.type == "identifier":
+                            names.append(text(src, c).strip())
+                        elif c.type == "accessor_list":
+                            for a in c.children:
+                                if a.type == "accessor_declaration":
+                                    for k in a.children:
+                                        kt = text(src, k).strip()
+                                        if kt in ("add", "remove"):
+                                            kinds.add(kt)
+                    name = prefix + names[-1] if names else ""
+                    if not owners or not name or not kinds:
+                        self.skipped_props += 1
+                        return
+                    a = 1 if "add" in kinds else 0
+                    r = 1 if "remove" in kinds else 0
+                    self.types.setdefault(path, {"kind": "?", "base": None,
+                                                 "ifaces": [], "members": []})
+                    self.types[path]["members"].append(
+                        ("E", name, 1 if static else 0, 0, a + 2 * r))
+            except Exception:
+                self.skipped_props += 1
+            return
+        if t in ("accessor_list", "accessor_declaration"):
             self.skipped_props += 1
             return
         if t in ("declaration_list", "compilation_unit", "{", "}", ";",

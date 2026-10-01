@@ -97,7 +97,7 @@ def parse_dump(lines):
             cur = {"kind": kind, "base": base, "ebase": ebase, "ifaces": ifaces,
                    "members": []}
             types[path] = cur
-        elif ln[0] in ("M", "F") and cur is not None:
+        elif ln[0] in ("M", "F", "P", "E") and cur is not None:
             if ln.startswith("M "):
                 m = re.match(r"^M (.*) s=(\d+) g=(\d+)(.*)$", ln)
                 if not m:
@@ -114,6 +114,26 @@ def parse_dump(lines):
                 else:
                     nargs = 0
                 cur["members"].append((kind, name, int(s), int(g), nargs))
+            elif ln.startswith("P "):
+                m = re.match(r"^P (.*) s=(\d+) get=(\d+) set=(\d+) (.*)$", ln)
+                if not m:
+                    raise ValueError("bad member line: %r" % ln)
+                dotted, s, g, st, _ty = m.groups()
+                if not dotted.startswith(_cur_raw + "."):
+                    raise ValueError("bad member line: %r" % ln)
+                name = dotted[len(_cur_raw) + 1:]
+                cur["members"].append(
+                    ("P", name, int(s), 0, int(g) + 2 * int(st)))
+            elif ln.startswith("E "):
+                m = re.match(r"^E (.*) s=(\d+) add=(\d+) rem=(\d+) (.*)$", ln)
+                if not m:
+                    raise ValueError("bad member line: %r" % ln)
+                dotted, s, a, r, _ty = m.groups()
+                if not dotted.startswith(_cur_raw + "."):
+                    raise ValueError("bad member line: %r" % ln)
+                name = dotted[len(_cur_raw) + 1:]
+                cur["members"].append(
+                    ("E", name, int(s), 0, int(a) + 2 * int(r)))
             else:
                 m = re.match(r"^F\s+(.+?)\s+s=(\d+)\s+(.+)$", ln)
                 if not m:
@@ -171,8 +191,8 @@ def parse_extracted(lines):
             cur = {"kind": kind, "base": base, "ebase": ebase, "ifaces": ifaces,
                    "members": []}
             types[path] = cur
-        elif ln[0] in ("M", "F") and cur is not None:
-            m = re.match(r"^(M|F) (.*) s=(\d+) g=(\d+) n=(\d+)$", ln)
+        elif ln[0] in ("M", "F", "P", "E") and cur is not None:
+            m = re.match(r"^(M|F|P|E) (.*) s=(\d+) g=(\d+) n=(\d+)$", ln)
             if not m:
                 raise ValueError("bad member line: %r" % ln)
             kind, dotted, s, g, n = m.groups()
