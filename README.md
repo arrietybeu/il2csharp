@@ -5,7 +5,7 @@
 tree out, with every method body reconstructed from the native x64 code and
 cross-referenced against IL2CPP metadata.
 
-**Status: r10 (2026-09-28).** 1253 tests pass (1027 portable + 226 game
+**Status: r11 (2026-10-01).** 1435 tests pass (1197 portable + 238 game
 fixture-backed); the strict build covers 11,183 files / 114,458 bodies with
 0 failures or structured fallbacks; the brace audit and the tree-sitter
 parse gate are clean. The recovered game **does not yet compile** — clean
@@ -139,8 +139,8 @@ python tools/validate_corpus.py parse  <built-tree> --report parse.json
 python tools/validate_corpus.py sweep  --metadata <file> --binary <file> --report sweep.json
 ```
 
-Latest r10 evidence: `validation_reports/promotion_r10.json` (aggregate
-`b0c87509…b9fe`, 0 mismatches) and `validation_reports/audit_batch3.json`.
+Latest r11 evidence: `validation_reports/promotion_r11.json` (aggregate
+`735f2e9a…1707f`, 0 mismatches); r10 audit evidence: `validation_reports/audit_batch3.json`.
 Gate history and methodology: [`docs/reference.md`](docs/reference.md).
 
 ## Limitations

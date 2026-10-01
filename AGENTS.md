@@ -45,7 +45,7 @@ start there, then `docs/todo.md` (Current work section).
   `tree_brace_audit.py`, `ts_gate.py`; routing in `work/README.md`).
 - `testgame/` — local, git-ignored licensed fixture (never tracked or
   redistributed; see `docs/public_release.md`).
-- `final_out/` — last promoted tree (r10, 2026-09-28). Read-only reference.
+- `final_out/` — last promoted tree (r11, 2026-10-01). Read-only reference.
   Never edit, never rebuild into.
 - `validation_reports/` — frozen gate evidence. Don't touch.
 - Temp scratch: `C:\Users\crax\AppData\Local\Temp\opencode` (outside repo).
@@ -103,7 +103,20 @@ unproven shape keeps today's spelling; raw is always honest.
   without an explicit user call. Stash-prove-clean before attributing a
   break to your change.
 
-## Current state (2026-09-28, `main` clean; `final_out/` = r10)
+## Current state (2026-10-01, `main` clean; `final_out/` = r11)
+
+Promoted 2026-10-01 on user call after a full rebuild from `main` `1cafd3f`
+(twin single-field-return relax + box-only hetero-decl guard):
+`python il2csharp.py testgame -o r11_out1 --strict --workers 8` gave 11,183
+files / 114,458 bodies / 0 failed / 0 fallbacks / 0 type-emit failures.
+Brace audit 0 unbalanced; tree-sitter parse gate bad=0 ERROR=0 MISSING=0.
+Versus r10: 0 added, 0 removed, 2,838 files changed (top: mscorlib 368,
+UIElementsModule 226, Assembly-CSharp 210). Per-file sha256 proof: 11,276
+files, aggregate `735f2e9a…1707f`, 0 mismatches / 0 missing / 0 stale
+(`validation_reports/promotion_r11.json`). Suite at landing: 1435 passed
+(1197 portable + 238 game), goldens 64/64.
+
+## Previous state (2026-09-28, `final_out/` was r10)
 
 Promoted 2026-09-28 on user call without rebuilding (per-file sha256 proof:
 11,276 files, aggregate `b0c87509…b9fe`, 0 mismatches / 0 stale; 302 files

@@ -1,6 +1,10 @@
 # Validation evidence
 
-**Current live tree: r10 (2026-09-28, audit batch 3).** Start with
+**Current live tree: r11 (2026-10-01, rebuilt from `main` `1cafd3f`).**
+Start with `promotion_r11.json` (11,276 files, aggregate `735f2e9a…1707f`, 0
+mismatches; strict build 0 failures, brace + parse gates clean).
+
+**Previous tree: r10 (2026-09-28, audit batch 3).** Start with
 `promotion_r10.json` (11,276 files, aggregate `b0c87509…b9fe`, 0
 mismatches) and `audit_batch3.json` (landing evidence: strict build,
 brace + parse gates, paired sweep, golden review), then `../docs/todo.md`

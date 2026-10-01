@@ -1,5 +1,13 @@
 # il2csharp — TODO (open work and historical triage)
 
+## final_out promoted to r11 (2026-10-01)
+
+Rebuilt from `main` `1cafd3f` (strict, 8 workers): 11,183 files / 114,458
+bodies, 0 failed / 0 fallbacks; brace 0; parse 0/0/0; 2,838 files changed vs
+r10 (0 added / 0 removed). 11,276 files, aggregate `735f2e9a…1707f`, 0
+mismatches (`validation_reports/promotion_r11.json`). r10 tree kept outside
+the repo for rollback.
+
 ## Current work: twin single-field-return relax + box-only hetero guard (2026-10-01, LANDED)
 
 Closes the DEFERRED twin item below (branches `twin-guard-wip` +

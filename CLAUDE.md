@@ -1,6 +1,12 @@
 # CLAUDE.md
 
-## Current source and validation authority — r10 promoted tree
+## Current source and validation authority — r11 promoted tree
+
+**r11 (2026-10-01):** `final_out/` was rebuilt from `main` `1cafd3f` (twin
+relax + box-only hetero guard): strict build 11,183 files / 114,458 bodies,
+0 failures; brace 0; parse 0/0/0; 2,838 files changed vs r10; 11,276 files,
+aggregate `735f2e9a…1707f`, 0 mismatches (`promotion_r11.json`). The r10 notes
+below are history.
 
 The working source contains fixes 114 (method dispatch flags, generic
 constructor names), 115 (unsafe on pointer-signature methods/ctors), 116
