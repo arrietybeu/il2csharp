@@ -1,5 +1,22 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: loop-carried proof primitive pins, test-only (2026-10-01, LANDED)
+
+`_merge_arr_proof` (il2cpp/expr.py:76-94) is the per-input primitive
+behind the landing-9 dry-unanimous merge (il2cpp/dec/analyze.py:479-484):
+live `_newarr` + ty or `_dry_proof` (ty, True) proves exact, everything
+else declines (params/fields/statics covariance-unproven). Six unit pins
+(tests/test_loop_proof.py): newarr fire, dry-proof fire, plain decline,
+newarr-without-ty decline, malformed-dry-proof decline, non-Expr decline.
+No source change, no goldens moved. Gates: 6/6 new, portable 1085 passed
+/ 0 failed (231 game deselected), game goldens 64/64 still green on main.
+
+Still open: dry-header merge-level fixture (entry proven + latch dry
+end_state at loop header, unanimous vs divergent vs entry-unproven
+discriminants); field-store identity (91, needs callee-store analysis);
+slice 2/3; single-field use-proof; sidecar phase 1 (merge-side unanimous
+whole-tile, analyze.py-owned); Cpp2IL side B; parallel-build residual.
+
 ## Current work: interface-zero probe (2026-10-01, OPEN)
 
 `if (customFormatter12 == 0)` (mi 5694, pre-existing) is NOT the
