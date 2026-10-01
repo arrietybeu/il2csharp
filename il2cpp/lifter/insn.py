@@ -2066,6 +2066,45 @@ class _InsnMixin:
             if fp is not None:
                 lv, src = fp[0], fp[1]
                 self._lv_ty = fp[2]
+            # single-field whole store (F2-S2): `X.f = Y` displays as
+            # `X = Y` when the holder X and Y resolve to the same closed
+            # non-enum single-field valuetype, f is its field at the
+            # written displacement, and the width covers the struct.
+            # Display-only: every bookkeeping key below stays on raw `lv`.
+            _fold = None
+            try:
+                _mx = re.fullmatch(r'([A-Za-z_]\w*)\.([A-Za-z_]\w*)',
+                                    (lv or '').strip())
+                if _mx is not None and ins.op_kind(1) == OpKind.REGISTER:
+                    _re2 = self.reg(reg_name(ins.op1_register))
+                    _rty = _re2.ty if _re2 is not None else None
+                    _hty = None
+                    for _mp in ('_var_types', '_type_hints', 'slot_types'):
+                        try:
+                            _mm = getattr(self, _mp, None)
+                            _hty = _mm.get(_mx.group(1)) if _mm else None
+                        except Exception:
+                            _hty = None
+                        if isinstance(_hty, tuple):
+                            break
+                    if isinstance(_hty, tuple):
+                        _xtd = self._td_of(_hty) if hasattr(self, '_td_of') else None
+                        _xtdo = self.meta.typedefs[_xtd] \
+                            if _xtd is not None and 0 <= _xtd < len(self.meta.typedefs) else None
+                        if _xtdo is not None:
+                            _ch = self.il.instance_field_chain(_xtd) \
+                                if _xtd is not None else None
+                            _en = bool(getattr(_xtdo, 'is_enum', False))
+                            _vt = bool(getattr(_xtdo, 'is_valuetype', False))
+                            try:
+                                _sz = self.il.value_type_size(_xtd)
+                            except Exception:
+                                _sz = None
+                            _fold = self._single_field_store(
+                                lv, _hty, _rty, width, _sz,
+                                ins.memory_displacement, _ch or {}, _en, _vt)
+            except Exception:
+                _fold = None
         if lv in self.stack_map.values():
             sev = None
             if ins.op_kind(1) in IMM_OPS:

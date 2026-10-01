@@ -55,9 +55,14 @@ into bool methods, so object-ifying trades 15 broken assigns for 1
 broken return with no net compile win; vetoing returns leaves zero
 known fires. Needs sidecar/use->def per-arm types (or duotone
 temps), not a decl-level rule; scripts in temp scratch); `default\b` veto-boundary hardening (LANDED in the zero
-pass); single-field v2 (stores
-lifter-side with width proof; returns/byref declined; probe points
-detailed); twin+guard branch (`twin-guard-wip`: consumer vetoes +
+pass); single-field v2 stores LANDED (`_single_field_store` pure
+helper + plain-path (`_write_mem`, holder type from base temp) and
+barrier-path (`_wb_operands`, name-match + pointer-size proof)
+wirings, display-only with raw-text bookkeeping; latent on this
+corpus -- paired mscorlib (1353 files) + Assembly-CSharp (493
+files) 0 changed, file sets identical; brace 0; parse 0/0/0;
+goldens 64/64 unmoved; suite 1417/0; returns/byref stay declined);
+twin+guard branch (`twin-guard-wip`: consumer vetoes +
 subclass tolerance + drop attribution, then re-measure); isinst slice
 2 (fence helper `_bare_typeof_target` LANDED + 9 pins; `_call` gate
 DECLINED with a full-tree census (11,183 files / 114,458 bodies):

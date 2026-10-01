@@ -1898,6 +1898,47 @@ class _CallsMixin:
             # `*(...) = v;`
             if not _deref_spans_all(dst):
                 dst = '*(%s)' % dst
+        # single-field whole store through a barrier (F2-S2 twin of the
+        # plain fold): `X.f` displays as `X` under the same closed-type
+        # proof. Barrier writes are pointer-sized, so the struct must be
+        # 8 bytes; the field name (not a displacement) selects the single
+        # field. Dedups in `_wb_finish` then see the same spelling as a
+        # paired plain store instead of a permanent twin.
+        try:
+            _mx = re.fullmatch(r'([A-Za-z_]\w*)\.([A-Za-z_]\w*)', (dst or '').strip())
+            if _mx is not None and len(arg_exprs) > 1:
+                _ve = arg_exprs[1]
+                _rty = _ve.ty if _ve is not None else None
+                _hty = None
+                for _mp in ('_var_types', '_type_hints', 'slot_types'):
+                    try:
+                        _mm = getattr(self, _mp, None)
+                        _hty = _mm.get(_mx.group(1)) if _mm else None
+                    except Exception:
+                        _hty = None
+                    if isinstance(_hty, tuple):
+                        break
+                if isinstance(_hty, tuple) and isinstance(_rty, tuple):
+                    _xtd = self._td_of(_hty) if hasattr(self, '_td_of') else None
+                    _xtdo = self.meta.typedefs[_xtd] \
+                        if _xtd is not None and 0 <= _xtd < len(self.meta.typedefs) else None
+                    if _xtdo is not None:
+                        _ch = self.il.instance_field_chain(_xtd) \
+                            if _xtd is not None else None
+                        try:
+                            _sz = self.il.value_type_size(_xtd)
+                        except Exception:
+                            _sz = None
+                        if _sz == 8:
+                            _got = self._single_field_store(
+                                dst, _hty, _rty, 8, 8, 0,
+                                _ch or {},
+                                bool(getattr(_xtdo, 'is_enum', False)),
+                                bool(getattr(_xtdo, 'is_valuetype', False)))
+                            if _got is not None:
+                                dst = _got
+        except Exception:
+            pass
         return dst, src2
 
     def _wb_finish(self, ip, dst, src2, asm, tail=False):
@@ -2007,6 +2048,58 @@ class _CallsMixin:
             except Exception:
                 return None
             if _fn != f:
+                return None
+            return x
+        except Exception:
+            return None
+
+    @staticmethod
+    def _single_field_store(lv_text, lv_ty, rhs_ty, width, size, disp,
+                            chain, is_enum, is_valuetype=True):
+        """Folded `X` for a single-field whole store, else None (F2-S2).
+
+        Pure decision: `X.f = Y` becomes `X = Y` when the holder and
+        the RHS resolve to the same closed value type, that type is a
+        non-enum single-field valuetype, f is its single field at the
+        written displacement, and the access width covers the whole
+        struct (size caller-proven, mirroring the C1 unanimity gate).
+        Open holders decline via chain resolution at the call site
+        (no chain, no fold). Everything else (partial stores,
+        mismatched/unknown types, multi-field, enums, non-valuetypes,
+        non-`X.f` shapes) keeps today's spelling.
+        """
+        try:
+            import re as _re
+            m = _re.fullmatch(r'([A-Za-z_]\w*)\.([A-Za-z_]\w*)',
+                               (lv_text or '').strip())
+            if not m:
+                return None
+            x, f = m.group(1), m.group(2)
+            if not isinstance(lv_ty, tuple) or not isinstance(rhs_ty, tuple):
+                return None
+            if lv_ty != rhs_ty:
+                return None
+            if is_enum or not is_valuetype:
+                return None
+            if not chain or len(chain) != 1:
+                return None
+            try:
+                (_fo, (_fn, _fti)), = chain.items()
+            except Exception:
+                return None
+            if _fn != f:
+                return None
+            try:
+                if disp + 0x10 != _fo:
+                    return None
+            except Exception:
+                return None
+            if size is None:
+                return None
+            try:
+                if width != size:
+                    return None
+            except Exception:
                 return None
             return x
         except Exception:

@@ -169,3 +169,25 @@ def test_c2_fires_valuetype_flag():
 def test_c2_declines_ref_class():
     assert Lifter._single_field_arg(
         "obj._ticks", TS_T, False, TS_T, CHAIN1, False, False) is None
+
+
+def test_store_fires_whole_size():
+    assert Lifter._single_field_store(
+        "obj._ticks", TS_T, TS_T, 8, 8, 0x0, CHAIN1, False, True) == "obj"
+
+
+def test_store_partial_decline():
+    f = Lifter._single_field_store
+    assert f("obj._ticks", TS_T, TS_T, 4, 8, 0x0, CHAIN1, False, True) is None
+    assert f("obj.a", TS_T, TS_T, 8, 8, 0x0, CHAIN2, False, True) is None
+    assert f("obj._ticks", TS_T, INT_T, 8, 8, 0x0, CHAIN1, False, True) is None
+    assert f("obj._ticks", TS_T, TS_T, 8, 8, 0x8, CHAIN1, False, True) is None
+
+
+def test_store_lane_decline():
+    f = Lifter._single_field_store
+    assert f("Foo()._ticks", TS_T, TS_T, 8, 8, 0x0, CHAIN1, False, True) is None
+    assert f("obj.value__", TS_T, TS_T, 8, 8, 0x0, CHAIN1, True, True) is None
+    assert f("obj._ticks", TS_T, TS_T, 8, 8, 0x0, CHAIN1, False, False) is None
+    assert f("obj._ticks", TS_T, None, 8, 8, 0x0, CHAIN1, False, True) is None
+    assert f("obj._ticks", TS_T, TS_T, 8, None, 0x0, CHAIN1, False, True) is None
