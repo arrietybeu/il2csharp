@@ -1,5 +1,59 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: single-field call-arg fold F2-C2 + interface-zero (2026-10-01, OPEN)
+
+Second slice of the single-field use-proof, plus the interface-zero
+close. F2-C2 folds `Foo(X.f)` to `Foo(X)` at struct-typed params
+(`Lifter._single_field_arg`, il2cpp/lifter/calls.py: pure decision --
+exact param/arg tuple match, closed non-enum single-field VALUETYPE
+holder, field-name match, bare `X.f` only; generic/sret/arity/byref/
+call-base/unknown declines at the `_call` site). C1
+(il2cpp/dec/sugar.py) and C2 both require `is_valuetype` (audit
+close: a single-field reference holder is a field load, not the whole
+value).
+
+Interface-zero textpass (`_null_zero_rewrite`, il2cpp/dec/flow.py,
+wired outermost in il2cpp/dec/structure.py): `X == 0` -> `X == null`
+when X's unique declaration spelling resolves to a non-valuetype
+non-enum non-Object type (`_eq_typedef_map`; unique shorts count,
+strings fire, `object` declines). Slot-reuse veto (nonzero numerics,
+true/false, literals, primitive-declared RHS, `&`/ref/out/in
+escapes); yoda/`!=` fold in place; mask-then-splice throughout. mi
+5694 `customFormatter12 == 0` was an untyped indirect-call temp at
+TEST time; the declaration knows `System.ICustomFormatter`.
+
+DEFERRED with evidence (own branch next): the twin single-field-return
+relax + decl-heterogeneity guard. The twin resolves dispatch sites
+(Convert.cs `convertible1.ToDateTime(provider)` x4) but retypes mi
+1242's box-temp; the guard fixed that yet fired on slots with typed
+consumers (paired mscorlib + Assembly-CSharp diffs, 31 + 14 files:
+`ref Vector3` -> `ref obj`, typed call args `TryGetArray(obj11)` /
+`Synchronized(obj13)`, `return obj5` for Component, an unproven
+dropped store in PlatformManager_Steam). Next: consumer vetoes
+(escape, non-boxing call args, member reads) + subclass tolerance,
+then re-measure. mi 86310 keeps today's lane spelling meanwhile
+(golden untouched).
+
+Gates: paired mscorlib (1353/1353 files, 19 changed, file sets
+identical; 10715 bodies, 0 failed / 0 fallbacks / 0 type-emit
+failures) + Assembly-CSharp (493/493 files, 3 changed; 6622 bodies,
+0 failed); every hunk an `X == 0` -> `X == null` rewrite on a proven
+reference decl (no retypes, drops, or renumbers); brace 0 both trees;
+parse 0 bad / 0 ERROR / 0 MISSING both trees; goldens 64/64 unmoved;
+suite 1377 passed / 0 failed. Tests:
+tests/test_single_field.py (18: C1 + C2 fire/declines + valuetype),
+tests/test_null_zero.py (22), tests/test_game_null_zero.py (mi 5694 +
+obj84/span controls), goldens hash-synced (no moves; mi 5694 not in
+set).
+
+Open follow-ups: primitive-hetero guard (bool-numeric 95 sites, no
+implicit conversion either way; spec'd); `default\b` veto-boundary
+hardening; single-field v2 (stores lifter-side with width proof;
+returns/byref declined; probe points detailed); twin+guard branch
+(above); isinst slice 2 (implementation planned); decl-gate v2
+(field-statics first); sidecar phase 1 (spec'd); Cpp2IL side B
+(external binary).
+
 ## Current work: single-field assign fold F2-C1 (2026-10-01, LANDED)
 
 First slice of the single-field use-proof: `T t = X.f` (decl or plain

@@ -1112,6 +1112,266 @@ class _FlowMixin:
                     (' ' + brace) if brace else '')
         return out
 
+
+    _NULL_ZERO_KW = frozenset(
+        'this base null true false default typeof sizeof nameof checked unchecked'.split())
+    _NULL_ZERO_PRIM = frozenset(
+        ('bool byte sbyte short ushort int uint long ulong float double char decimal void '
+         'nint nuint').split())
+
+    def _null_zero_is_ref(self, tt):
+        """True when a declaration spelling provably names a reference type.
+
+        Only exact map hits count: `_eq_typedef_map` holds printed full
+        spellings plus unique short names (ambiguous shorts are absent,
+        `'object'` is excluded). Anything the map cannot name --
+        primitives (keyword set), generics/arrays/pointers/nullable/byref
+        (any of `<[(*?&` or whitespace), unresolvable spellings --
+        declines, as do `object`, valuetypes and enums. `string` is
+        named explicitly: it is sealed, so any `string` spelling is a
+        reference regardless of keyword-vs-dotted render.
+        """
+        try:
+            L = getattr(self, 'L', None)
+            if L is None:
+                return False
+            s = (tt or '').strip()
+            import re as _re
+            s = _re.sub(r'^global::', '', s).strip()
+            if not s or s in ('object', 'System.Object'):
+                return False
+            if s in ('string', 'String', 'System.String'):
+                return True
+            if s in self._NULL_ZERO_PRIM:
+                return False
+            if _re.search(r'[<\[(*?&\s]', s):
+                return False
+            try:
+                mp = self._eq_typedef_map()
+            except Exception:
+                return False
+            tdi = mp.get(s)
+            if tdi is None:
+                return False
+            try:
+                tdo = L.meta.typedefs[tdi]
+            except Exception:
+                return False
+            if getattr(tdo, 'is_enum', False):
+                return False
+            if getattr(tdo, 'is_valuetype', False):
+                return False
+            try:
+                if (getattr(tdo, 'namespace', ''), getattr(tdo, 'name', '')) == ('System', 'Object'):
+                    return False
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
+    def _null_zero_is_prim(self, tt):
+        """True when a declaration spelling provably names a value type."""
+        try:
+            L = getattr(self, 'L', None)
+            if L is None:
+                return False
+            s = (tt or '').strip()
+            import re as _re
+            s = _re.sub(r'^global::', '', s).strip()
+            if not s or s in ('object', 'System.Object', 'string', 'String', 'System.String'):
+                return False
+            if s in self._NULL_ZERO_PRIM:
+                return True
+            if _re.search(r'[<\[(*?&\s]', s):
+                return False
+            try:
+                mp = self._eq_typedef_map()
+            except Exception:
+                return False
+            tdi = mp.get(s)
+            if tdi is None:
+                return False
+            try:
+                tdo = L.meta.typedefs[tdi]
+            except Exception:
+                return False
+            return bool(getattr(tdo, 'is_enum', False) or getattr(tdo, 'is_valuetype', False))
+        except Exception:
+            return False
+
+    def _null_zero_rewrite(self, lines, m=None):
+        """`X == 0` -> `X == null` for proven reference locals (interface-zero).
+
+        Lift-time root (mi 5694 `AppendFormatHelper`): `GetFormat` returns
+        through an indirect `call rax`, so its result temp is untyped with
+        int kind; the TEST parks a `'null'` rhs that analyze's kind gate
+        re-picks as `'0'` (a None type passes the string-only exemption).
+        By render time the temp carries an interface-typed declaration,
+        and `Iface == 0` never compiles -- the native was a null test.
+
+        Runs outermost, after the last rename: needs final identifiers
+        and final declaration spellings. Fires only when X has exactly
+        one declaration spelling (decls, foreach/catch binders and exact
+        method-param types all count; clashes decline), that spelling
+        resolves to a non-valuetype non-enum non-Object type, no
+        `&X`/`ref`/`out`/`in` escape exists, and no store to X carries a
+        provably-primitive value (nonzero numerics, `true`/`false`,
+        string/char literals, primitive-declared single-identifier RHS;
+        lone-`0`, `null` and `default` stores are null-shaped and fine,
+        as are unresolvable RHSs). Yoda and `!=` shapes fold in place;
+        literals/comments never match (mask-then-splice). Primitives,
+        `object`, valuetypes, enums, unresolvable spellings, member
+        bases (`a.X`, `X.Y`) and keyword operands keep today's spelling.
+        """
+        try:
+            L = getattr(self, 'L', None)
+            if L is None or getattr(L, 'il', None) is None:
+                return lines
+            import re as _re
+            masked = []
+            in_bc = False
+            for st in lines:
+                try:
+                    mm, in_bc = self._mask_literals(st, in_bc)
+                except Exception:
+                    mm = st
+                masked.append(mm)
+            found = {}
+            multi = set()
+
+            def _add(nm, ty):
+                if not nm or nm in multi:
+                    return
+                if nm in found:
+                    if found[nm] != ty:
+                        multi.add(nm)
+                        del found[nm]
+                    return
+                found[nm] = ty
+
+            for mm in masked:
+                s = mm.strip()
+                dm = self._STUB_DECL_RX.match(s)
+                if dm is not None:
+                    ty = dm.group(1).strip()
+                    try:
+                        kw = ty.split()[0] in self._STUB_KEYWORDS
+                    except Exception:
+                        kw = True
+                    if not kw:
+                        _add(dm.group(2), ty)
+                    continue
+                fm = self._STUB_FOREACH_RX.match(s)
+                if fm is not None:
+                    _add(fm.group(2), fm.group(1).strip())
+                    continue
+                cm = self._STUB_CATCH_RX.match(s)
+                if cm is not None:
+                    _add(cm.group(2), cm.group(1).strip())
+            try:
+                il = self.L.il
+                for p in self.L.meta.method_params(m):
+                    ty = il.types[p.type] if 0 <= p.type < len(il.types) else None
+                    if ty is not None:
+                        try:
+                            _add(p.name, il.type_name(ty))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            if not found:
+                return lines
+            cmp_rx = _re.compile(r'(?<![\w.])([A-Za-z_]\w*)\s*(==|!=)\s*0(?![\w.])')
+            yoda_rx = _re.compile(r'(?<![\w.])0\s*(==|!=)\s*([A-Za-z_]\w*)(?![\w.])')
+            as_rx = _re.compile(r'(?<![\w.])([A-Za-z_]\w*)\s*=(?![=>])(.*);\s*$')
+            esc_rx = _re.compile(r'(?:&\s*([A-Za-z_]\w*)|\b(?:ref|out|in)\s+([A-Za-z_]\w*)\b)')
+            cand = set()
+            for mm in masked:
+                for cm in cmp_rx.finditer(mm):
+                    if cm.group(1) not in self._NULL_ZERO_KW:
+                        cand.add(cm.group(1))
+                for cm in yoda_rx.finditer(mm):
+                    if cm.group(2) not in self._NULL_ZERO_KW:
+                        cand.add(cm.group(2))
+            fire = set()
+            for nm in cand:
+                ty = found.get(nm)
+                if ty is None or not self._null_zero_is_ref(ty):
+                    continue
+                ok = True
+                for mm in masked:
+                    for em in esc_rx.finditer(mm):
+                        if em.group(1) == nm or em.group(2) == nm:
+                            ok = False
+                            break
+                    if not ok:
+                        break
+                    dm2 = self._STUB_DECL_RX.match(mm.strip())
+                    if dm2 is not None and dm2.group(2) == nm:
+                        continue
+                    fm2 = self._STUB_FOREACH_RX.match(mm.strip())
+                    if fm2 is not None and fm2.group(2) == nm:
+                        continue
+                    cm2 = self._STUB_CATCH_RX.match(mm.strip())
+                    if cm2 is not None and cm2.group(2) == nm:
+                        continue
+                    am = as_rx.match(mm)
+                    if am is None or am.group(1) != nm:
+                        continue
+                    rhs = (am.group(2) or '').strip()
+                    if rhs in ('0', 'null') or _re.match(r'default(?!\w)', rhs):
+                        continue
+                    if rhs in ('true', 'false'):
+                        ok = False
+                        break
+                    if _re.fullmatch(r'-?\d[\w.]*', rhs):
+                        ok = False
+                        break
+                    if rhs and all(c == '\x00' for c in rhs):
+                        ok = False
+                        break
+                    im = _re.fullmatch(r'@?([A-Za-z_]\w*)', rhs)
+                    if im is not None:
+                        rn = im.group(1)
+                        if rn == nm or rn in self._NULL_ZERO_KW or rn == 'null':
+                            continue
+                        rt = found.get(rn)
+                        if rt is None:
+                            continue
+                        if self._null_zero_is_prim(rt):
+                            ok = False
+                            break
+                if ok:
+                    fire.add(nm)
+            if not fire:
+                return lines
+            out = list(lines)
+            for i, (st, mm) in enumerate(zip(lines, masked)):
+                spans = []
+                for cm in cmp_rx.finditer(mm):
+                    if cm.group(1) in fire:
+                        spans.append((cm.end() - 1, cm.end()))
+                for cm in yoda_rx.finditer(mm):
+                    if cm.group(2) in fire:
+                        spans.append((cm.start(), cm.start() + 1))
+                if not spans:
+                    continue
+                spans.sort()
+                parts = []
+                last = 0
+                for a, b in spans:
+                    if a < last:
+                        continue
+                    parts.append(st[last:a])
+                    parts.append('null')
+                    last = b
+                parts.append(st[last:])
+                out[i] = ''.join(parts)
+            return out
+        except Exception:
+            return lines
+
     def _hoist_shared_tails(self, lines: List[str]) -> List[str]:
         """Kill the `goto` that jumps INTO a sibling/nested block -- illegal
         C# -- by hoisting the label's tail out past the construct it sits in.

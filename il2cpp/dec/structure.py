@@ -194,8 +194,9 @@ class _StructureMixin:
         # first definition survives; this folds exactly those pairs
         # (adjacent overwrite, pure unknown RHS, no use between).
         rendered = self._drop_dead_unknown_store(rendered)
-        return self._boxed_bool_null_fold(
-            self._semantic_local_names(rendered, m))
+        return self._null_zero_rewrite(
+            self._boxed_bool_null_fold(
+                self._semantic_local_names(rendered, m)), m)
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------

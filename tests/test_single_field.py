@@ -1,7 +1,7 @@
 """Single-field assign fold (F2-C1) unit pins, no fixture needed."""
 from types import SimpleNamespace as NS
 
-from il2cpp import Decompiler
+from il2cpp import Decompiler, Lifter
 
 INT = (0, 0x08 << 16)
 LONG = (0, 0x0B << 16)
@@ -112,3 +112,60 @@ def test_reassign_fires():
         "System.TimeSpan timeSpan2 = t0;",
         "System.TimeSpan offset = t1;",
         "timeSpan2 = offset;"]
+
+
+TS_T = (7, 0x11 << 16)
+INT_T = (0, 0x08 << 16)
+CHAIN1 = {0x10: ("_ticks", 1)}
+CHAIN2 = {0x10: ("a", 1), 0x18: ("b", 1)}
+
+
+def test_c2_fires():
+    assert Lifter._single_field_arg(
+        "obj._ticks", TS_T, False, TS_T, CHAIN1, False) == "obj"
+
+
+def test_c2_declines_byref():
+    assert Lifter._single_field_arg(
+        "obj._ticks", TS_T, True, TS_T, CHAIN1, False) is None
+
+
+def test_c2_declines_type_mismatch():
+    assert Lifter._single_field_arg(
+        "obj._ticks", TS_T, False, INT_T, CHAIN1, False) is None
+    assert Lifter._single_field_arg(
+        "obj._ticks", TS_T, False, None, CHAIN1, False) is None
+
+
+def test_c2_declines_enum():
+    assert Lifter._single_field_arg(
+        "obj.value__", TS_T, False, TS_T, CHAIN1, True) is None
+
+
+def test_c2_declines_multi_field():
+    assert Lifter._single_field_arg(
+        "obj.a", TS_T, False, TS_T, CHAIN2, False) is None
+
+
+def test_c2_declines_wrong_field():
+    assert Lifter._single_field_arg(
+        "obj.other", TS_T, False, TS_T, CHAIN1, False) is None
+
+
+def test_c2_declines_shapes():
+    f = Lifter._single_field_arg
+    assert f("obj", TS_T, False, TS_T, CHAIN1, False) is None
+    assert f("Foo(obj._ticks)", TS_T, False, TS_T, CHAIN1, False) is None
+    assert f("", TS_T, False, TS_T, CHAIN1, False) is None
+    assert f(None, TS_T, False, TS_T, CHAIN1, False) is None
+    assert f("ref obj._ticks", TS_T, False, TS_T, CHAIN1, False) is None
+
+
+def test_c2_fires_valuetype_flag():
+    assert Lifter._single_field_arg(
+        "obj._ticks", TS_T, False, TS_T, CHAIN1, False, True) == "obj"
+
+
+def test_c2_declines_ref_class():
+    assert Lifter._single_field_arg(
+        "obj._ticks", TS_T, False, TS_T, CHAIN1, False, False) is None

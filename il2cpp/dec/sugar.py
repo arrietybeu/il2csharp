@@ -434,7 +434,7 @@ class _SugarMixin:
                     chain = il.instance_field_chain(tdi) or {}
                 except Exception:
                     continue
-                if getattr(tdo, 'is_enum', False) or len(chain) != 1:
+                if getattr(tdo, 'is_enum', False) or not getattr(tdo, 'is_valuetype', False) or len(chain) != 1:
                     continue
                 try:
                     (foff, (fname, _fti)), = chain.items()

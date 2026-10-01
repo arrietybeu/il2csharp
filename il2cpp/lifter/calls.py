@@ -1980,6 +1980,38 @@ class _CallsMixin:
             self.stack_values.pop(name, None)
             self._kill_stale(name)
 
+    @staticmethod
+    def _single_field_arg(arg_text, param_ty, param_byref, x_ty, chain, is_enum, is_valuetype=True):
+        """Folded `X` for a single-field lane arg, else None (F2-C2).
+
+        Pure decision: `X.f` becomes `X` when the parameter declares
+        the same closed value type X resolves to, that type is a
+        non-enum single-field valuetype struct, and f is the field.
+        Everything else (byref, mismatched/unknown types, multi-field,
+        enums, non-valuetype holders, non-`X.f` shapes) keeps today's
+        spelling.
+        """
+        try:
+            import re as _re
+            m = _re.fullmatch(r'([A-Za-z_]\w*)\.([A-Za-z_]\w*)',
+                               (arg_text or '').strip())
+            if not m or param_byref:
+                return None
+            x, f = m.group(1), m.group(2)
+            if not isinstance(x_ty, tuple) or x_ty != param_ty:
+                return None
+            if is_enum or not is_valuetype or not chain or len(chain) != 1:
+                return None
+            try:
+                (_fo, (_fn, _fti)), = chain.items()
+            except Exception:
+                return None
+            if _fn != f:
+                return None
+            return x
+        except Exception:
+            return None
+
     def _call(self, ins, asm):
         target = None
         self.ind_slot = None
@@ -2826,6 +2858,68 @@ class _CallsMixin:
             if self.il.returns_sret(rty):
                 rest_off += 1
             rest = args[rest_off:] if args else []
+            # F2-C2: single-field lane args at struct-typed params.
+            # `Foo(X.f, ...)` becomes `Foo(X, ...)` when X resolves
+            # to the same closed non-enum single-field value type
+            # the parameter declares (exact tuple match) and f is
+            # that field. Dotted args are never type-hinted, so no
+            # stale hint survives; evaluation count is unchanged
+            # (one read either way). Generic/sret/arity-mismatched
+            # calls, byref params/args, call/complex bases and
+            # unknown types keep today's spelling.
+            try:
+                _c2ps = self.meta.method_params(m2)
+            except Exception:
+                _c2ps = None
+            if _c2ps is not None and m2.generic_container == -1 \
+                    and not self.il.returns_sret(rty) \
+                    and len(rest) == len(_c2ps):
+                for _i, (_a, _p) in enumerate(zip(rest, _c2ps)):
+                    try:
+                        _pt = self.il.types[_p.type] \
+                            if 0 <= _p.type < len(self.il.types) else None
+                    except Exception:
+                        _pt = None
+                    if _pt is None:
+                        continue
+                    try:
+                        _pb = bool((_pt[1] >> 29) & 1)
+                    except Exception:
+                        continue
+                    _m = re.fullmatch(r'([A-Za-z_]\w*)\.([A-Za-z_]\w*)', (_a or '').strip())
+                    if not _m:
+                        continue
+                    _x = _m.group(1)
+                    _xt = None
+                    for _mp in ('_var_types', '_type_hints', 'slot_types'):
+                        try:
+                            _mm = getattr(self, _mp, None)
+                            _xt = _mm.get(_x) if _mm else None
+                        except Exception:
+                            _xt = None
+                        if isinstance(_xt, tuple):
+                            break
+                    if not isinstance(_xt, tuple):
+                        continue
+                    try:
+                        _xtd = self._td_of(_xt) if hasattr(self, '_td_of') else None
+                        _xtdo = self.meta.typedefs[_xtd] \
+                            if _xtd is not None and 0 <= _xtd < len(self.meta.typedefs) else None
+                        _ch = self.il.instance_field_chain(_xtd) if _xtd is not None else None
+                        _en = bool(getattr(_xtdo, 'is_enum', False)) if _xtdo is not None else True
+                        _vt = bool(getattr(_xtdo, 'is_valuetype', False)) if _xtdo is not None else False
+                    except Exception:
+                        continue
+                    if _xtdo is None:
+                        continue
+                    _got = self._single_field_arg(_a, _pt, _pb, _xt, _ch or {}, _en, _vt)
+                    if _got is None:
+                        continue
+                    rest[_i] = _got
+                    try:
+                        args[rest_off + _i] = _got
+                    except Exception:
+                        pass
             # Constructors are not callable members in C#. Recover the source
             # initializer when the receiver is this, or complete the exact
             # il2cpp_object_new Expr in place so every alias observes one
