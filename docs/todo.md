@@ -85,7 +85,12 @@ bit-identical; 24 portable incl. strict pins + tiny e2e green,
 mscorlib default 0, strict 0 problems) + compile gate LANDED
 (syntax-vs-binding split with exit codes; 6 portable incl. fake-
 compiler plumbing + game mscorlib syntax==0 green; 1350 files,
-0 syntax, 40 binding residuals); sidecar phase 1 (spec'd); Cpp2IL
+0 syntax, 40 binding residuals); sidecar phase 1 record LANDED
+(`_tile_proof_for` pure primitive + merge-side attach on unanimous
+`!mem:` tiles, `__slots__` + default; no consumer reads it yet;
+paired Assembly-CSharp 493/493 files 0 changed, file sets identical,
+brace 0; goldens 64/64; portable 1176 + full suite 1414/0; 11 proof
+pins; consumers open next); Cpp2IL
 side B (external binary).
 
 ## Current work: single-field assign fold F2-C1 (2026-10-01, LANDED)

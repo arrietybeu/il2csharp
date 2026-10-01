@@ -37,7 +37,12 @@ class Expr:
                   # value is a same-method newarr of the carried array
                   # type. Pass 2 reads dry end_states at loop back-edges,
                   # so without this the proof dies at every loop header.
-                  '_dry_proof')
+                  '_dry_proof',
+                  # sidecar phase 1: merge-side unanimous whole-tile
+                  # proof (origin text, offset, width, closed type key,
+                  # bytes). Consumers reroot exact tiles through it;
+                  # nothing reads it yet (record-only).
+                  '_tile_proof')
 
     def __init__(self, text, ty=None, kind='?', recv=None):
         self.text = text      # rendered C# expression
@@ -67,6 +72,8 @@ class Expr:
             return None
         if name == '_dry_proof':
             return None
+        if name == '_tile_proof':
+            return None
         raise AttributeError(name)
 
     def __repr__(self):
@@ -92,6 +99,48 @@ def _merge_arr_proof(v):
             and isinstance(dp[0], tuple):
         return dp[0]
     return None
+
+
+def _tile_proof_for(vals, type_key):
+    """Unanimous whole-tile proof for merge-side preservation, else None.
+
+    Sidecar phase 1 (record side): at a CFG merge, per-pred fragment
+    values that agree exactly -- same origin text, same closed type,
+    same slice offset and width, same bytes -- prove the merged value
+    is that whole tile on every path, so a later consumer may reroot
+    to the origin instead of dying to unknown (F1 lanes) or
+    miscompiling through a lossy whole-vector phi (piece0 offset-0).
+    Anything else (missing/non-Expr inputs, sliceless values,
+    disagreement, uncomparable keys) declines: the honest phi stands.
+    No merge here, no rendering: pure per-pred evidence check.
+    """
+    try:
+        if not vals:
+            return None
+        ids = []
+        for v in vals:
+            if not isinstance(v, Expr):
+                return None
+            sl = getattr(v, '_slice', None)
+            if sl is None or len(sl) != 3:
+                return None
+            o, off, w = sl
+            ot = getattr(o, 'text', None)
+            oty = getattr(o, 'ty', None)
+            if not ot or not isinstance(oty, tuple):
+                return None
+            try:
+                ck = type_key(oty)
+            except Exception:
+                return None
+            if ck is None:
+                return None
+            ids.append((ot, ck, off, w, getattr(v, '_bytes', None)))
+        if len(set(ids)) != 1:
+            return None
+        return ids[0]
+    except Exception:
+        return None
 
 
 def e_const(v, ty=None, kind='int'):

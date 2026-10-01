@@ -589,6 +589,17 @@ class _AnalyzeMixin:
                             width = int(k.rsplit(':', 1)[1])
                             if L.il._sf_field_size(pty, 0) == width:
                                 merged[k] = L._fragment(merged[k], 0, width)
+                        if k.startswith('!mem:'):
+                            try:
+                                from il2cpp.expr import _tile_proof_for as _tpf
+                                _tp = _tpf(vals, type_key)
+                            except Exception:
+                                _tp = None
+                            if _tp is not None:
+                                try:
+                                    merged[k]._tile_proof = _tp
+                                except Exception:
+                                    pass
                 # Kill-on-write across phi copies: a copy on an in-edge
                 # assigns the phi var, so any register whose text reads that
                 # var would re-render with the post-copy value inside this
