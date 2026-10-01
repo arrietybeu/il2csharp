@@ -47,8 +47,12 @@ obj84/span controls), goldens hash-synced (no moves; mi 5694 not in
 set).
 
 Open follow-ups: primitive-hetero guard (bool-numeric 95 sites, no
-implicit conversion either way; spec'd); `default\b` veto-boundary
-hardening (LANDED in the zero pass); single-field v2 (stores
+implicit conversion either way; spec'd; repro MI 807
+`TryCreateAdjustmentRules` pure `bool flag1 = num1` decl copies +
+MI 113095 `SendOutgoingCommands` `int num1 = flag3` slot-reuse --
+te-exact trigger, narrowing-only int-float, declaring-RHS vote
+mandatory); `default\b` veto-boundary hardening (LANDED in the zero
+pass); single-field v2 (stores
 lifter-side with width proof; returns/byref declined; probe points
 detailed); twin+guard branch (`twin-guard-wip`: consumer vetoes +
 subclass tolerance + drop attribution, then re-measure); isinst slice
