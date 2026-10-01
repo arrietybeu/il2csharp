@@ -1,5 +1,36 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: bounds slice B (`arr[i].field`) -- probed, built, measured, DECLINED (2026-10-01, DOCUMENTED)
+
+Slice A named `il2cpp_array_addr(arr, idx)` (764 sites). Slice B would
+fold `((W*)addr + 0xK)[0]` to `arr[idx].field`. Designed twice:
+first lifter-side (addr-proof on Exprs, mirroring landing-9), then --
+after the reassignment analysis showed temps are SSA-frozen but field
+idcs are not -- as a dec text pass (`_array_index_fold` after
+`_selfcopy_drop`) with per-use intervening-write scans (redefinitions,
+ref/out/&, foreach/catch binders, calls for dotted tokens,
+return/throw; loop trips containing the use extend the scan instead
+of declining). Stride needs no check (compiler pairs helper stride
+with element size by construction; field offsets are layout-fixed).
+
+Measured on TextMeshPro (135 types / 1,743 bodies / 0 failed):
+**0 folds from the pass** (330 addr sites remain; the 6
+`arr[i].field` shapes in TMP_Text are pre-existing inline
+`_arr_elem_expr` renders). Root cause, proved with per-rule
+attribution on mi 96741: the population is loop-carried -- addr temps
+defined once before goto/brace loops, used across trips with a
+per-trip-incremented field index (`this.m_characterCount += 1`
+caught live by the scan twice). Folding those reads the fresh index
+against the frozen address: silently wrong, not prettier. The scan
+is correct to decline; the remaining straight-line population does
+not justify ~250 lines of scanning machinery. Reverted in full (no
+source residue); no goldens moved; suite green before/after.
+
+Resurrection path (not planned): field sidecar + use->def proving
+loop-invariance per pair, or a straight-line-only variant if a
+census shows a straight-line population worth it. Nested-suboffset,
+merge-composed proofs and class elements stay open regardless.
+
 ## Current work: parameterized dispatch, multi-param + typed-unknown R9 (2026-10-01, LANDED)
 
 The A-family twin (`_param_interface_dispatch`) resolves two more
