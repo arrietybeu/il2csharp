@@ -8,7 +8,9 @@ only with newarr provenance; everything else keeps the honest marker.
 mi 84 (Type[]) and mi 471 (BigInteger[]) fold and absorb; mi 30694
 folds the allocated array but keeps the field-loaded one; object
 elements (mi 2717/4020), `as`-refined arrays (mi 10829), static fields
-(mi 200) and unknown provenance (mi 7021/32342) decline.
+(mi 200) and unknown provenance (mi 7021/32342) decline. Closed
+generic-instance elements (slice 1: mi 113247/105419/123638) fold the
+same way; nested arrays (mi 102073) decline.
 """
 import pytest
 
@@ -65,3 +67,26 @@ def test_unknown_provenance_declines(game_decompiler):
     assert '(System.Runtime.Remoting.Messaging.IMethodCallMessage)sub_180434690(obj87, obj85)' in text
     text = _body(game_decompiler, 32342)
     assert '((byte*)this.touchControlArray.getClass() + 0x40)[0]' in text
+
+
+def test_closed_generic_instance_elements_fold(game_decompiler):
+    text = _body(game_decompiler, 113247)
+    assert text.count('sub_180434690') == 0
+    assert 'structWrapper1Array1 = new ExitGames.Client.Photon.StructWrapping.StructWrapper_1<byte>[256];' in text
+
+
+def test_closed_comparer_array_folds(game_decompiler):
+    text = _body(game_decompiler, 105419)
+    assert text.count('sub_180434690') == 0
+    assert 'comparer1Array1[0x0] = comparer11;' in text
+
+
+def test_proof_typed_open_array_folds(game_decompiler):
+    text = _body(game_decompiler, 123638)
+    assert text.count('sub_180434690') == 0
+    assert 'processor1Array1[0x0] = this.proc;' in text
+    assert 'v.RemoveProcessor(processor1Array1);' in text
+
+
+def test_nested_array_elements_decline(game_decompiler):
+    assert _body(game_decompiler, 102073).count('sub_180434690') == 3

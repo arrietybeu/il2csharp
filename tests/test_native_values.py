@@ -374,7 +374,109 @@ def test_cvtdq2ps_with_float_lanes_keeps_todays_spelling():
     assert lift.regs['XMM0'] is dst
 
 
-def test_shufps_with_placeholder_lane_text_keeps_todays_spelling():
+# --- IsInst slice 1: closed generic-instance class elements ---
+#
+# `_elem_klass_name` accepts a 0x15 (GENERICINST) element only when the
+# instantiation is closed, its definition is a non-valuetype non-enum
+# typedef, and the existing nameability guards pass. Open VAR/MVAR at
+# any depth, unreadable args, nested-definition bases, valuetype
+# definitions and unnameable spellings keep the honest marker.
+
+_GCPTR = 0x18001000
+_GENINST = (_GCPTR, 0x15 << 16)
+_CLOSED_INT = (0, 0x08 << 16)
+_BASEPTR = 0x18002000
+
+
+def geninst_lifter(synth=None, typedefs=None, names=None, va2off=None,
+                   blob=None, ptrs=None):
+    il = NS(types=[INT, FLOAT],
+            _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
+            _synthetic_lookup=lambda v: (synth or {}).get(v),
+            type_from_ptr=lambda p: (ptrs or {}).get(p),
+            type_name=lambda t: (names or {}).get(t, 'object'),
+            _closed_type_key=lambda t: t)
+    meta = NS(typedefs=typedefs if typedefs is not None
+              else [NS(is_valuetype=False, is_enum=False)])
+    lift = Lifter.__new__(Lifter)
+    lift.il, lift.meta = il, meta
+    lift.bin = NS(va2off=va2off or (lambda v: None),
+                  d=blob if blob is not None else b'')
+    lift.regs = {}
+    lift.out, lift._type_hints, lift._var_types = [], {}, {}
+    lift.slot_types, lift.stack_map, lift.stack_values, lift.addr_of = {}, {}, {}, {}
+    lift.rsp_delta = lift.var_n = 0
+    lift.dry = lift.asm_comments = lift._copying = False
+    lift._cur_ip = 0
+    lift.flags = None
+    return lift
+
+
+def _closed_fire_lifter():
+    base = (0, 0x12 << 16)
+    return geninst_lifter(
+        synth={_GCPTR: (base, [_CLOSED_INT])},
+        typedefs=[NS(is_valuetype=False, is_enum=False)],
+        names={_GENINST: 'List<int>'},
+        va2off=lambda v: {_GCPTR: 0}.get(v),
+        blob=struct.pack('<Q', _BASEPTR),
+        ptrs={_BASEPTR: base})
+
+
+def test_closed_generic_instance_class_folds():
+    lift = _closed_fire_lifter()
+    assert lift._geninst_as_target(_GENINST) == ('List<int>', _GENINST)
+
+
+def test_open_var_argument_declines():
+    lift = geninst_lifter(
+        synth={_GCPTR: ((0, 0x12 << 16), [(7, 0x13 << 16)])})
+    assert lift._geninst_as_target(_GENINST) is None
+
+
+def test_nested_open_argument_declines():
+    inner = (_GCPTR + 8, 0x15 << 16)
+    lift = geninst_lifter(
+        synth={_GCPTR: ((0, 0x12 << 16), [inner]),
+               _GCPTR + 8: ((0, 0x12 << 16), [(3, 0x1e << 16)])})
+    assert lift._geninst_as_target(_GENINST) is None
+
+
+def test_valuetype_definition_declines():
+    base = (0, 0x12 << 16)
+    lift = geninst_lifter(
+        synth={_GCPTR: (base, [_CLOSED_INT])},
+        typedefs=[NS(is_valuetype=True, is_enum=False)],
+        names={_GENINST: 'Nullable<int>'},
+        va2off=lambda v: {_GCPTR: 0}.get(v),
+        blob=struct.pack('<Q', _BASEPTR),
+        ptrs={_BASEPTR: base})
+    assert lift._geninst_as_target(_GENINST) is None
+
+
+def test_object_spelling_declines():
+    lift = _closed_fire_lifter()
+    lift.il.type_name = lambda t: 'object'
+    assert lift._geninst_as_target(_GENINST) is None
+
+
+def test_paren_spelling_declines():
+    lift = _closed_fire_lifter()
+    lift.il.type_name = lambda t: 'A<B>(c)'
+    assert lift._geninst_as_target(_GENINST) is None
+
+
+def test_unreadable_args_decline():
+    lift = geninst_lifter()
+    assert lift._geninst_as_target(_GENINST) is None
+
+
+def test_open_generic_direct():
+    lift = geninst_lifter()
+    assert lift._open_generic((7, 0x13 << 16)) is True
+    assert lift._open_generic(None) is True
+    assert lift._open_generic(_CLOSED_INT) is False
+    assert lift._open_generic(_GENINST) is True
     # A lane carrying the bare `?` placeholder is proven-looking but
     # unspellable (`real27 * ?` is unparseable -- LegsAnimator gate).
     dst = _packed('a', 'b', 'c', 'd')
@@ -388,3 +490,12 @@ def test_movss_with_placeholder_src_lane_keeps_full_copy():
                          'XMM1': _packed('?', 'f', 'g', 'h')})
     execute(lift, 'f30f10c1')
     assert _lane_texts(lift, 'XMM0') == ['?', 'f', 'g', 'h']
+
+
+def test_shufps_with_placeholder_lane_text_keeps_todays_spelling():
+    # A lane carrying the bare `?` placeholder is proven-looking but
+    # unspellable (`real27 * ?` is unparseable -- LegsAnimator gate).
+    dst = _packed('a', 'b', 'c', 'd')
+    lift = lanes_lifter({'XMM0': dst, 'XMM1': _packed('e', '?', 'g', 'h')})
+    execute(lift, '0fc6c11b')
+    assert lift.regs['XMM0'] is dst

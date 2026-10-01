@@ -778,6 +778,8 @@ class _ValuesMixin:
         te = self.il._type_enum(ety)
         if te == 0x0e:
             return (self.il.type_name(ety), ety)
+        if te == 0x15:
+            return self._geninst_as_target(ety)
         if te not in (0x11, 0x12):
             return None
         td = self._td_of(ety)
@@ -795,6 +797,84 @@ class _ValuesMixin:
                 or nm.startswith('object<') or '(' in nm or ')' in nm:
             return None
         return (nm, ety)
+
+    def _geninst_as_target(self, ety):
+        """`(name, ety)` for a closed generic-instance class element.
+
+        Slice 1 of the IsInst remainder (see `_elem_klass_name`):
+        landing-9's newarr proof fixes the array's runtime klass to
+        exactly `E[]`, so `[klass+0x40]` is definitionally `E` and
+        `isinst(obj, E)` renders `obj as E`. The gate admits only
+        closed instantiations of non-valuetype, non-enum definitions
+        with a nameable spelling; everything else keeps the honest
+        marker (open VAR/MVAR, unreadable args, nested-definition
+        bases, `Nullable<T>` and other valuetypes by construction,
+        `object`, paren spellings, nested arrays).
+        """
+        if self._open_generic(ety):
+            return None
+        args = self._generic_class_args(ety)
+        if not args:
+            return None
+        try:
+            o = self.bin.va2off(ety[0])
+        except Exception:
+            return None
+        if o is None:
+            return None
+        try:
+            basep = u64(self.bin.d, o)
+        except Exception:
+            return None
+        base = self.il.type_from_ptr(basep) if basep else None
+        if base is None or self.il._type_enum(base) not in (0x11, 0x12):
+            return None
+        td = self._td_of(base)
+        tdt = self.meta.typedefs[td] \
+            if td is not None and 0 <= td < len(self.meta.typedefs) else None
+        if tdt is None or tdt.is_valuetype or tdt.is_enum:
+            return None
+        try:
+            nm = self.il.type_name(ety)
+        except Exception:
+            return None
+        if not nm or nm in ('object', 'System.Object') \
+                or nm.startswith('object<') or '(' in nm or ')' in nm:
+            return None
+        return (nm, ety)
+
+    def _open_generic(self, ty, depth=0):
+        """True if VAR/MVAR (0x13/0x1e) occurs in `ty` at any depth."""
+        if depth > 8:
+            return True
+        if ty is None:
+            return True
+        if not isinstance(ty, tuple) or len(ty) != 2:
+            return False
+        te = self.il._type_enum(ty)
+        if te in (0x13, 0x1e):
+            return True
+        if te == 0x15:
+            # unreadable args (no bin/va2off in test doubles, corrupt
+            # rows) decline: openness is unprovable, never assumed.
+            try:
+                args = self._generic_class_args(ty)
+            except Exception:
+                return True
+            if not args:
+                return True
+            return any(self._open_generic(a, depth + 1) for a in args)
+        if te in (0x1d, 0x14):
+            inner = self._elem_type(ty)
+            if inner is None:
+                return True
+            return self._open_generic(inner, depth + 1)
+        if te in (0x0f, 0x10):
+            inner = self.il.type_from_ptr(ty[0])
+            if inner is None:
+                return True
+            return self._open_generic(inner, depth + 1)
+        return False
 
     def _is_byte_ptr_ty(self, ty) -> bool:
         """A genuine metadata `byte*` tuple (PTR-to-U1), reused for

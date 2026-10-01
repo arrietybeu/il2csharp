@@ -1,5 +1,69 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: IsInst element-class slice 1 -- closed generic-instance `as` (2026-10-01, LANDED)
+
+The opaque-klass IsInst remainder (~4,666 sites post-landing-9) is
+dominated by covariance-barred klass sources (fields, params, statics,
+unknowns) and object-element noise. The first closable slice: arrays
+whose element is a CLOSED generic-instance class (`StructWrapper_1`,
+`IComparer_1`, `List_1`, `Task_1`, `IProcessor_1` on corpus -- zero
+struct instantiations, zero open args observed). Landing-9's newarr
+proof already fixes the array's runtime klass to exactly `E[]`, so
+`element_class` is definitionally `E` and covariance is irrelevant;
+the gate is only about rendering `obj as E` legally.
+
+- `_elem_klass_name` admits `te == 0x15` to a dedicated
+  `_geninst_as_target` validator: closed (no VAR/MVAR at any depth
+  via `_open_generic`), definition typedef non-valuetype/non-enum
+  (`Nullable<T>` by construction), readable args, nameable spelling
+  (existing object/paren guards reused).
+- `_open_generic` deep walk (depth-capped): 0x15 recurses class args,
+  0x1d/0x14 recurse element, 0x0f/0x10 recurse pointee; unreadable
+  (None) or over-deep reads as open. Bin access is exception-guarded
+  so pre-existing bin-less Lifter doubles decline instead of crashing
+  (landing-9's `test_gate_genericinst_ptr_nested_decline` pin holds).
+- Methodology note: `tools/inspect_methods.py` defaults `--source`
+  to the repo, silently voiding worktree lifts (three null-probe
+  cycles burned on this). Always pass `--source` explicitly for
+  worktree lifts.
+
+Evidence (paired lifts with explicit `--source`):
+- mi 113247 StructWrapperPools..cctor: 133 sites -> 0 (535 -> 402
+  lines, exactly one line per site; OBJs already closed-typed so the
+  folds DCE-collapse entirely, mi-84/471 class).
+- mi 105419 PointKDTree..cctor: 3 sites -> 0, read line by line
+  (dead null-guarded checks + empty guards + unsafe wrapper drop;
+  stores and static assignment identical).
+- mi 123638: 1 site -> 0; the gate keys on the PROOF type
+  (`IProcessor_1<short>` allocation), not the local's declared open
+  type (`IProcessor_1<T>[]`).
+- Declines hold: mi 102073 nested arrays (3 sites retained), mi 2717
+  object elements (3 retained), mi 200 field (pinned), mi 30694
+  field (pinned).
+
+Gates: scoped strict builds (Photon3Unity3D + AstarPathfindingProject
++ PhotonVoice.API/Fusion/Voice: 407 type files / 3848 bodies /
+0 failed / 0 structured fallbacks / 0 type-emission failures in
+69,595 ms); brace 0 unbalanced / 407; parse 0 bad / 0 ERROR /
+0 MISSING; goldens 64/64 (0 moves -- no golden MI folds, no regen);
+suite 1285 passed / 0 failed (1055 portable + 230 game); sweep
+116178 methods / 0 crashes / into_block 8075/2046 identical to
+baseline / tail-args identical (JSON); in-scope remaining
+`sub_180434690` call sites 0 (5 stub declarations retained per
+image by pre-existing policy); declines live outside these images
+per the census buckets.
+
+Tests: +8 portable (`tests/test_native_values.py`: closed fire,
+open-VAR/nested-open/valuetype/object/paren/unreadable declines,
+direct open-generic table) + 4 game (`tests/test_game_elemclass.py`:
+113247/105419/123638 folds, 102073 nested decline) + docstring line.
+
+Still open (isinst program): slice 2 -- typeof-residual text-exact
+fold (17 sites); slice 3 -- initmeta-wrapper klass identity (15);
+loop-carried proof loss (~25, needs dry-header discriminating test,
+not a textual rule); field-store identity (91, needs callee-store
+analysis); the covariance kernel stays declined with prejudice.
+
 ## Current work: F1 lane modeling, model-only + spellability + unknown tail (2026-10-01, LANDED)
 
 SIMD lane provenance for the audit's F1 (unmodelled instructions leave a
