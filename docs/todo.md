@@ -1,5 +1,45 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: parameterized dispatch, multi-param + typed-unknown R9 (2026-10-01, LANDED)
+
+The A-family twin (`_param_interface_dispatch`) resolves two more
+shapes, both probed with native evidence: (1) multi-parameter targets
+recover params 1.. from the Win64 stack homes `[rsp+0x20+8k]` via
+`_stack_piece` with per-parameter GPR-class, width (4 for int32, 8
+for words) and spelling gates (mi 6160
+`TransformFinalBlock(inputBuffer, 0, inputCount)`); (2) a merged
+`default`-poisoned R9 keeps the exact declared type under kind `?`
+and is accepted only on exact-or-closed type proof (mi 104027
+`onSearchPath = action1`, which folds to the setter). Float/double,
+struct, byref, generic-var and sub-word stack params decline; stack
+recovery snapshots/restores the ambient hint tables so speculative
+proving never leaks into declined methods (Blinker-class pollution,
+caught by pair diff: 112 files -> 19). The twin's new string-typed
+results exposed a latent miscompile: call results classify te < 0x10
+by register (string lands on kind `int`), and the analyze TEST-null
+rewrite trusted kind over type (`text5 != 0` on a string, mi 5694).
+The rewrite now treats the type tuple as authoritative for 0x0e/0x0f
+(~993 reference null-tests fixed tree-wide: `s != null`,
+`ReadLine() == null`, `bytePtr1 != null`, `ptr == null`).
+
+Gates: paired scoped builds (Astar/mscorlib/Assembly-CSharp, F1-only
+vs F1+dispatch+guard): 19 files changed, file sets identical, 22
+dispatcher sites resolved, 0 gained, every hunk a resolution +
+downstream cleanup (setter folds, `Compare`/`CopyTo`/`Activate`/
+indexer renders, stub pruning); brace 0; parse 0/0/0/0. Full strict
+build: 11,183 files / 114,458 bodies / 0 failed / 0 fallbacks, brace
+0, parse 0/0/0. Two goldens moved and read (mi 5769 `chars != null`,
+mi 26747 `Ptr != null`); hashes synced. Suite 1289 passed / 0 failed.
+
+Correction to the 2026-10-01 stride entry: the committed F1 models
+(`29ebbd9`, model-only + spellability guard) are sounder than the
+quarantine note claims -- Blinker lanes render r/g/b/a-distinct and
+all 64 goldens pass on that tree. The earlier 2-golden failures came
+from uncommitted working-tree states, not the commit. Open remains
+the invalidation half, the `_piece_value` offset-0 slice fix, and
+interface-typed zero rendering (`customFormatter12 == 0`, mi 5694,
+pre-existing, different path).
+
 ## Current work: IsInst element-class slice 1 -- closed generic-instance `as` (2026-10-01, LANDED)
 
 The opaque-klass IsInst remainder (~4,666 sites post-landing-9) is

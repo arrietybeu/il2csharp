@@ -190,9 +190,23 @@ class _AnalyzeMixin:
                         b.cond = lt if op in ('!=', '>') else '!%s' % lt
                     elif rt == 'null':
                         # `test r,r` renders its zero as null; only a reference
-                        # comparison should read that way
+                        # comparison should read that way. A string or
+                        # pointer result can carry an int kind (call
+                        # results classify te < 0x10 by register, so
+                        # 0x0e/0x0f land on 'int'); the type tuple is
+                        # authoritative there: never 0 (mi 5694
+                        # `text5 != 0` on a string, via resolved
+                        # ICustomFormatter.Format).
+                        _lte = None
+                        try:
+                            _lil = getattr(L, 'il', None)
+                            _lte = _lil._type_enum(lhs.ty) \
+                                if _lil is not None and lhs is not None and lhs.ty is not None else None
+                        except Exception:
+                            _lte = None
                         zero = '0' if (op not in ('==', '!=')
-                                       or (lhs is not None and lhs.kind in ('int', 'float'))) \
+                                       or (lhs is not None and lhs.kind in ('int', 'float')
+                                           and _lte not in (0x0e, 0x0f))) \
                             else 'null'
                         b.cond = '%s %s %s' % (lt, op, zero)
                     else:

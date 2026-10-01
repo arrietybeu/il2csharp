@@ -1646,6 +1646,23 @@ class _CallsMixin:
             return None
         return mi, receiver, rty
 
+    def _iface_ty_match(self, a, b):
+        """Exact-or-closed type equality for the typed-unknown R9 proof.
+
+        A merged `default`-poisoned local (kind '?') may still carry the
+        exact declared type; accept it only on proof, never on text.
+        """
+        try:
+            if a is not None and b is not None and a == b:
+                return True
+            ck = getattr(self.il, '_closed_type_key', None)
+            if ck is None:
+                return False
+            ka, kb = ck(a), ck(b)
+            return ka is not None and ka == kb
+        except Exception:
+            return False
+
     def _param_interface_dispatch(self, target, arg_exprs):
         """(mi, receiver, rty[, r9arg]) for a forwarded interface call.
 
@@ -1654,10 +1671,11 @@ class _CallsMixin:
         argument the helper forwards through R9 (proved live on entry
         by `_iface_dispatch_arity`, never by address). A zero-parameter
         target drops the R9 spray the same way arity trimming drops
-        unread registers. Multi-parameter methods (stack-home args),
-        byref first parameters, non-GPR R9 values and unclosable
-        returns keep the honest `sub_` fallback. A different runtime
-        keeps `sub_` too.
+        unread registers. Multi-parameter targets recover params 1..
+        from the Win64 stack homes [rsp+0x20+8k] behind per-parameter
+        GPR-class, width and spelling gates. Byref parameters,
+        non-GPR R9 values and unclosable returns keep the honest
+        `sub_` fallback. A different runtime keeps `sub_` too.
         """
         if target is None or len(arg_exprs) < 4:
             return None
@@ -1679,10 +1697,35 @@ class _CallsMixin:
             return None
         mi = td.method_start + offset
         method = self.meta.methods[mi]
-        if method.is_static or method.param_count not in (0, 1) \
-                or not 0 <= method.return_type < len(self.il.types):
+        if method.is_static or not 0 <= method.return_type < len(self.il.types):
             return None
-        if method.param_count == 1:
+        # Zero-parameter targets never consult the parameter table
+        # (the landed arity-0 path predates it); consistency between
+        # the table and the declared arity binds only param >= 1.
+        _ps = []
+        if method.param_count >= 1:
+            try:
+                _ps = self.meta.method_params(method)
+            except Exception:
+                return None
+            if len(_ps) != method.param_count:
+                return None
+        try:
+            _pts = [self.il.types[p.type] if 0 <= p.type < len(self.il.types) else None
+                    for p in _ps]
+        except Exception:
+            return None
+        if any(t is None or ((t[1] >> 29) & 1) for t in _pts):
+            return None
+        # Word-sized GPR parameter types only: floats travel in XMM (a
+        # stack home holds shadow garbage, not the argument) and structs
+        # span homes. The arity-1 path below keeps its landed gates;
+        # the class allowlist binds only the new multi-parameter shape.
+        _GPR_TES = (0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                    0x0a, 0x0b, 0x0e, 0x0f, 0x12, 0x14, 0x1b, 0x1c, 0x1d)
+        _STK_TES = {0x08: 4, 0x09: 4, 0x0a: 8, 0x0b: 8, 0x0e: 8, 0x0f: 8,
+                    0x12: 8, 0x14: 8, 0x1b: 8, 0x1c: 8, 0x1d: 8}
+        if method.param_count >= 1:
             try:
                 r9t = (r9e.text or '').strip()
             except Exception:
@@ -1690,14 +1733,75 @@ class _CallsMixin:
             if not r9t or r9t in ('_', '?'):
                 return None
             if getattr(r9e, 'kind', None) not in ('obj', 'int', 'ptr', 'arr', 'str', 'local'):
-                return None
+                # A merged `default`-poisoned local keeps the exact
+                # declared type under kind '?': accept it only when the
+                # type closes to the parameter's own type (mi 104027
+                # `action1` vs `System.Action`), never on text alone.
+                if getattr(r9e, 'kind', None) != '?' \
+                        or not self._iface_ty_match(getattr(r9e, 'ty', None), _pts[0]):
+                    return None
+            if method.param_count >= 2:
+                try:
+                    _te0 = self.il._type_enum(_pts[0])
+                except Exception:
+                    return None
+                if _te0 not in _GPR_TES:
+                    return None
+        _stack_args = []
+        if method.param_count >= 2:
             try:
-                ps0 = self.meta.method_params(method)
-                pt0 = self.il.types[ps0[0].type] if len(ps0) == 1 and 0 <= ps0[0].type < len(self.il.types) else None
+                _rsp = self.rsp_delta
             except Exception:
                 return None
-            if pt0 is None or ((pt0[1] >> 29) & 1):
-                return None
+            # Tile proving records phi-source types in the ambient
+            # hint tables; a speculative recovery must not leak
+            # those into statements the twin never names -- snapshot
+            # and restore around the loop, resolve or decline.
+            _hint_mark = None
+            try:
+                _hint_mark = (dict(self._type_hints),
+                              dict(getattr(self, '_aggregate_phi_types', None) or {}))
+            except Exception:
+                _hint_mark = None
+            try:
+                for _i in range(1, method.param_count):
+                    try:
+                        _te = self.il._type_enum(_pts[_i])
+                    except Exception:
+                        return None
+                    _w = _STK_TES.get(_te)
+                    if _w is None:
+                        return None
+                    try:
+                        _sa = self._stack_piece(_rsp + 0x20 + 8 * (_i - 1), _w, _pts[_i])
+                    except Exception:
+                        return None
+                    if _sa is None:
+                        return None
+                    try:
+                        _sat = (_sa.text or '').strip()
+                    except Exception:
+                        return None
+                    if not _sat or _sat in ('_', '?'):
+                        return None
+                    _sak = getattr(_sa, 'kind', None)
+                    if _sak not in ('obj', 'int', 'ptr', 'arr', 'str', 'local'):
+                        # Stack tiles of bare constants carry kind 'bits':
+                        # accept only a provable integer-literal spelling.
+                        if not (_sak == 'bits' and _int_lit(_sat) is not None):
+                            return None
+                    _stack_args.append(_sa)
+            finally:
+                if _hint_mark is not None:
+                    try:
+                        self._type_hints.clear()
+                        self._type_hints.update(_hint_mark[0])
+                        _pht = getattr(self, '_aggregate_phi_types', None)
+                        if _pht is not None:
+                            _pht.clear()
+                            _pht.update(_hint_mark[1])
+                    except Exception:
+                        pass
         rty = self.il.types[method.return_type]
         closed_key = getattr(self.il, '_closed_type_key', None)
         if closed_key is not None and closed_key(rty) is None:
@@ -1735,7 +1839,9 @@ class _CallsMixin:
                     return None
         if method.param_count == 0:
             return mi, receiver, rty
-        return mi, receiver, rty, r9e
+        if method.param_count == 1:
+            return mi, receiver, rty, r9e
+        return (mi, receiver, rty, r9e) + tuple(_stack_args)
 
     def _wb_operands(self, args, arg_exprs):
         """`il2cpp_codegen_write_barrier(&field, value)` -> (lvalue text,
@@ -2363,7 +2469,7 @@ class _CallsMixin:
                 rty = iface_rty
                 name = self.il.method_simple_name(mi)
                 if len(_pif) > 3:
-                    args, arg_exprs = [recv.text, _pif[3].text], [recv, _pif[3]]
+                    args, arg_exprs = [recv.text] + [a.text for a in _pif[3:]], [recv] + list(_pif[3:])
                 else:
                     args, arg_exprs = [recv.text], [recv]
                 iface_identity = True

@@ -541,14 +541,15 @@ def test_iface_arity_memoizes_structural_proof():
     assert lift._iface_arity(0x9999) is None
 
 
-def _param_dispatcher_lifter(body, n_params=1, r9_kind='obj', r9_text='arg1'):
+def _param_dispatcher_lifter(body, n_params=1, r9_kind='obj', r9_text='arg1', r9_ty=None):
     target = 0x5000
     RET = (9, 0x12 << 16)
     il = NS(
         types=[INT, RET],
         _type_enum=lambda t: (t[1] >> 16) & 0xFF if t else 0,
         _return_abi_is_known=lambda rt: True,
-        _closed_type_key=None,
+        _closed_type_key=lambda t: t,
+        _sf_field_size=lambda fty, depth: 4 if fty == INT else None,
         returns_sret=lambda rt: False,
         type_name=lambda t: 'IFoo' if t == RET else 'int',
         function_extent=lambda va: (target, target + len(body)),
@@ -561,7 +562,7 @@ def _param_dispatcher_lifter(body, n_params=1, r9_kind='obj', r9_text='arg1'):
         methods=[NS(return_type=1, is_static=False, param_count=n_params,
                     name='Take', generic_container=-1, declaring=0)
                  for _ in range(4)],
-        method_params=lambda m: [NS(type=0)],
+        method_params=lambda m: [NS(type=0)] * n_params,
     )
     lift.bin = NS(
         read=lambda va, n: body if va == target and n == len(body) else None,
@@ -570,7 +571,7 @@ def _param_dispatcher_lifter(body, n_params=1, r9_kind='obj', r9_text='arg1'):
     )
     lift.rt_iface = {target: 1}
     args = [Expr('3', INT, 'int'), Expr('typeof(IFoo)', (0, 0x12 << 16), 'klass'),
-            Expr('rec', CLASS, 'obj'), Expr(r9_text, INT, r9_kind)]
+            Expr('rec', CLASS, 'obj'), Expr(r9_text, r9_ty or INT, r9_kind)]
     return lift, target, args
 
 
@@ -592,11 +593,34 @@ def test_param_dispatch_declines_multi_param():
 
 
 def test_param_dispatch_declines_untyped_r9():
-    for kind, text in (('?', 'v1'), ('float', 'real1'), ('obj', '?'),
-                       ('obj', '_'), ('obj', '')):
+    for kind, text, ty in (('float', 'real1', None), ('obj', '?', None),
+                           ('obj', '_', None), ('obj', '', None),
+                           ('?', 'v1', CLASS)):
         lift, target, args = _param_dispatcher_lifter(
-            A_DISPATCH, r9_kind=kind, r9_text=text)
+            A_DISPATCH, r9_kind=kind, r9_text=text, r9_ty=ty)
         assert lift._param_interface_dispatch(target, args) is None, (kind, text)
+
+
+def test_param_dispatch_resolves_typed_unknown_r9():
+    lift, target, args = _param_dispatcher_lifter(
+        A_DISPATCH, r9_kind='?', r9_text='v1')
+    got = lift._param_interface_dispatch(target, args)
+    assert got is not None and len(got) == 4 and got[3].text == 'v1'
+
+
+def test_param_dispatch_resolves_stack_args():
+    lift, target, args = _param_dispatcher_lifter(A_DISPATCH, n_params=3)
+    lift._stack_store(32, 4, Expr('0', INT, 'int'))
+    lift._stack_store(40, 4, Expr('count1', INT, 'int'))
+    got = lift._param_interface_dispatch(target, args)
+    assert got is not None and len(got) == 6 and got[0] == 3
+    assert got[4].text == '0' and got[5].text == 'count1'
+
+
+def test_param_dispatch_declines_missing_stack_tile():
+    lift, target, args = _param_dispatcher_lifter(A_DISPATCH, n_params=3)
+    lift._stack_store(32, 4, Expr('0', INT, 'int'))
+    assert lift._param_interface_dispatch(target, args) is None
 
 
 def test_param_dispatch_declines_writes_first_body():
