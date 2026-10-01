@@ -53,8 +53,11 @@ lifter-side with width proof; returns/byref declined; probe points
 detailed); twin+guard branch (`twin-guard-wip`: consumer vetoes +
 subclass tolerance + drop attribution, then re-measure); isinst slice
 2 (fence helper `_bare_typeof_target` LANDED + 9 pins; `_call` gate
-open pending residual census -- 459 isinst lines in the
-Photon3Unity3D/Astar/Voice trees); decl-gate v2 (field-statics
+open pending owner-exact residual census -- 459 isinst lines / 123
+file-level candidates in the Photon3Unity3D/Astar/Voice trees, but
+only 1 site lifts live (MI 123442, arity-4 decline); the rest is
+shared-body aliasing, so the census must lift each VA through the
+built file's own owner MI before writing the gate); decl-gate v2 (field-statics
 first); sidecar phase 1 (spec'd); Cpp2IL side B (external binary).
 
 ## Current work: single-field assign fold F2-C1 (2026-10-01, LANDED)
