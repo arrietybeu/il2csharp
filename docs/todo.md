@@ -1,5 +1,56 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: dry-pass merge keeps frame address + unanimous tiles (2026-10-01, LANDED)
+
+Answers census next-step (1) below ("why does the dry loop body drop the
+`!mem:` key"): it is neither kill nor clobber. Pass 1's merge
+(il2cpp/dec/analyze.py) rebuilt every merged value as `Expr(text)`, so
+an RBP / RSP-copy base lost `_stack_offset` at the first CFG merge.
+`_stack_address` then returns None and every later `[base+N]` in the dry
+pass takes the legacy disp-keyed slot (`&s_50` where pass 2 says
+`&s_b0`, mi 29353 @0x180646d04), so the sret `_stack_store` never runs
+and the dry back-edge carries no tile at all. Probe
+(`%TEMP%\opencode\dropprobe.py`: TrackingDict on dry `L.regs` + per-block
+start snapshots) on the 333 FIMSpace missing-key sites: 249 absent at the
+dry header (this cause), 81 retiled, 3 other, 0 killed.
+
+Fix, pass 1 only: on a unanimous-text merge keep `_stack_offset` when
+every pred agrees on it, and for `!mem:` keys keep `_slice`/`_bytes`
+when `_tile_proof_for` proves a whole-tile (same origin, closed type,
+offset, width, bytes) -- the dry analogue of `_dry_proof`. FIMSpace
+re-census: missing back keys 333 -> 112 (80 retiled-sliceless, 15
+retiled-sliced, 9 killed by `_stack_store`/`_call`, 5 absent, 3 other);
+loop sites with a sliced back edge 3 -> 457.
+
+Gates: paired scoped builds vs `main` 02cf261 (HEAD worktree). Assembly-
+CSharp 493/493 files, sets identical, 14 changed, -77 lines; `unknown`,
+`goto`, `sub_`, `((byte*)` flat; `object obj` -8. mscorlib 1353/1353,
+57 changed, -778 lines; `unknown`/`goto`/`sub_`/`= default` flat,
+`object obj` -115, `((byte*)` +35 (re-inlined loop-invariant klass
+loads, e.g. TypeSpec's dispatch loop condition, where the phi temp
+disappears). Read diffs: loop-invariant `this`/param copies stop being
+phis (SaveManager `saveManager1..6` -> `this`, MiscHelpers `list11 =
+source`, Rijndael `byteArray18` -> `inputBuffer`, mi 5694
+`stringBuilder1.Append` -> `this.Append`), and TypeSpec's interface
+dispatch result stops aliasing the enumerator phi (`list13 = list14` ->
+`obj28 = <dispatch address>`). Brace 0 both trees. Suite: 1432 passed /
+3 failed, all three reviewed renumber-only moves (mi 80548 comment
+`vN` shift, golden hash-synced; mi 5694 pins `obj172/obj76` ->
+`obj171/obj75`, `obj84` -> `obj83`), re-run green; +2 game pins
+(tests/test_game_dry_merge.py: dry RCX keeps `&s_b0`/-632; mi 5694
+`this.Append`). Portable 1197/1197.
+
+Note: a pure field-load text now survives where a phi temp used to pin
+it (FusionNetworkManager `action11` -> `pendingSpawnCallback1._callback`
+read after an interface call). That is the decompiler's standing model
+for unanimous texts, not new to this change, but it is visible here.
+
+Next: the remaining 112 (80 retiled-sliceless: dry stores whose value
+has no slice re-tile the range; look at `_scalar_parts` on dry values),
+then re-run tcensus for the `fwdU+backSlDiff` 239 bucket (dry
+renumbering `t1000` vs `t1001` -- step (3) below is now the larger
+share), then the first consumer.
+
 ## Current work: sidecar consumer redesign -- census (2026-10-01, OPEN)
 
 Why phase 1 is coverless: `_tile_proof_for` is only reached on the phi

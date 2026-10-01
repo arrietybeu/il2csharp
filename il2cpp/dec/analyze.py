@@ -2,6 +2,7 @@ from il2cpp.prelude import *  # noqa: F401,F403
 from il2cpp.cfg import _Sink, _TEMP_RX
 from il2cpp.common import csharp_type_name
 from il2cpp.expr import Expr, _BARE_TOKEN_RX, _R8_TY, _mentions, _merge_arr_proof, _recv_fold, _recv_shaped
+from il2cpp.expr import _tile_proof_for as _dry_tile_proof
 from il2cpp.text import imm_of, reg_name
 from il2cpp.x64 import ARG_REGS, GPRS, flag_cond
 
@@ -476,6 +477,29 @@ class _AnalyzeMixin:
                         L.regs[k] = v
                     elif isinstance(v, str):
                         e = Expr(v)
+                        # The text-only rebuild drops every Expr fact. Keep
+                        # the frame address when all preds agree on it: an
+                        # RBP / RSP-copy base that loses _stack_offset sends
+                        # every later [base+N] in the dry pass to the legacy
+                        # disp-keyed slot (s_50 where pass 2 says s_b0), so
+                        # the dry back-edge carries no `!mem:` tile at all
+                        # (FIMSpace census: 249 of 333 missing back keys).
+                        sos = {getattr(p.end_state.get(k), '_stack_offset', None)
+                               for p in preds_done}
+                        if len(sos) == 1 and None not in sos:
+                            e._stack_offset = next(iter(sos))
+                        # Same for a stack tile: a unanimous whole-tile
+                        # proof (same origin, closed type, offset, width,
+                        # bytes) keeps the slice, so dry piece reads and
+                        # the back-edge end_state pass 2 merges against see
+                        # the tile instead of a sliceless text copy.
+                        if k.startswith('!mem:'):
+                            vs = [p.end_state.get(k) for p in preds_done]
+                            tk = getattr(L.il, '_closed_type_key', lambda t: t)
+                            if _dry_tile_proof(vs, tk) is not None:
+                                e._slice = vs[0]._slice
+                                if getattr(vs[0], '_bytes', None) is not None:
+                                    e._bytes = vs[0]._bytes
                         pts = [_merge_arr_proof(p.end_state.get(k))
                                for p in preds_done]
                         if pts and all(t is not None for t in pts) \
