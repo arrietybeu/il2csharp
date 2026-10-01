@@ -1,5 +1,41 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: `_piece_value` offset-0 slice -- probed, built, measured, DECLINED (2026-10-01, DOCUMENTED)
+
+The `_slice` unwrap in `Lifter._piece_value`
+(il2cpp/lifter/aggregates.py:94-96) skips `sl[1] == 0`, so offset-0
+fragment chains never reroot to their base (inconsistent with the
+`_scalar_parts` sibling, which unwraps all slices). Three guarded
+variants were built in the `piece0` worktree and measured with paired
+`--only Assembly-CSharp` strict builds (490 types / 6622 bodies /
+0 failed / 0 fallbacks both sides) plus recursive per-file diffs:
+- v1 (unwrap all contained slices + overhang decline): 16/490 files
+  changed, `unknown` 1338 both sides (delta 0).
+- v2 (+ only unwrap unrefined chains by text equality): 14/490.
+- v3 (+ offset-0 only when `origin.ty is None`): 14/490, regressions
+  persist -- the miscompiled frags are untyped too.
+Regressions (decline reason): dropped scalar lanes
+(`vector34 * vector34.x` -> `vector34 * vector34`,
+`vector33.x`/`vector31.x` -> whole vector where a float is required)
+and a re-pointed base (`Vector3.zeroVector.z` -> `vector34.z`) on
+merge-heavy FIMSpace sites. Mechanism: unwrapping exposes the lossy
+whole-vector phi path (offset == 0 returns the whole origin text) at
+sites where the old fall-through declined honestly. No guard on this
+unwrap is safe without merge-side provenance (sidecar phase 1); the
+benign hunks in the same diff (repeated-expression hoists,
+`Vector3.upVector` component recovery) do not justify the miscompiles.
+Reverted in full (no source residue).
+
+Kept: two regression pins (tests/test_recovery_followup.py:
+zero-offset slice resolves through base, overhang declines) that hold
+pre/post patch, plus the loop-proof primitive pins. Gates for the kept
+pins: portable 1087 passed / 0 failed, game goldens 64/64 on main.
+
+Resurrection path (not planned): merge-side unanimous whole-tile
+preservation first (sidecar phase 1), then re-measure; or a
+result-checking unwrap that declines whenever the rerooted spelling
+is coarser than the frag's own refined text.
+
 ## Current work: loop-carried proof primitive pins, test-only (2026-10-01, LANDED)
 
 `_merge_arr_proof` (il2cpp/expr.py:76-94) is the per-input primitive
