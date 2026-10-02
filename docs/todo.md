@@ -1,5 +1,31 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Note: slice-2 throw-vs-null reconciliation (2026-10-02, DOCUMENTED)
+
+`183a92b` closed slice 2 with all 17 typeof sites declining, including
+3 my tail fold also covers (2x Attribute tails, 1x Recorder tail), on
+two grounds: the callee throws like castclass (so `as` would trade
+throw for null), and trimming the arity-4 spray is unsound. Native
+evidence disproves both grounds FOR THIS ADDRESS FAMILY
+(`0x180434690` thunk -> `0x180479f80` final, exactly `rt_isinst`):
+- The final's 79-instruction body has 3 exits, all value-returning:
+  mismatch falls through to `xor eax,eax` (`0x18047A051`, NULL),
+  with the System.Object short-circuit `cmove rax,rdi` and match
+  `mov rax,rdi` (object), null input `xor eax,eax` (NULL). Its 6
+  calls are IsAssignableFrom/interface-resolve/indirect slots --
+  no exception/throw helper is invoked anywhere.
+- R8 appears only as `lea r8,[rsp+30h]` / `mov r8,[rsp+30h]`
+  (callee spill/scratch); R9 never appears; no incoming stack-arg
+  home is read. The helper consumes exactly RCX (obj) + RDX (klass),
+  so dropping trailing spray args is sound (same proof shape as the
+  array-addr and class-init trims).
+The 4 landed tail folds stand on this evidence. Everything else in
+the foreign verdict stands unmodified: Obi discarded-result
+statements gain nothing from `as` (decline kept), non-klass `_call`
+kinds still decline via the kind gate, and the sibling addresses
+outside `rt_isinst` (e.g. `0x1804346B0`) can never fire the gate --
+whatever their semantics, today's `sub_` spelling holds there.
+
 ## Current work: Dec F5 residuals R1-R4, guarded (2026-10-02, LANDED)
 
 Four verified-red literals/comments-blind substitutions beyond the
