@@ -735,7 +735,8 @@ class _HighLevelMixin:
                 if '.List_1<' in tn or tn.startswith('List_1<'):
                     return '%s %s %s.Count' % (m.group(1), m.group(2), recv)
             return '%s %s %s.Length' % (m.group(1), m.group(2), recv)
-        return self._LEN_RX.sub(rep, cond)
+        masked, _ = self._mask_literals(cond, False)
+        return self._sub_outside_literals(self._LEN_RX, rep, cond, masked)
 
     _NATIVELEN_RX = re.compile(r'(?:\(\(byte\*\)([\w.]+) \+ 0x28\)\[0\]|\*\(([\w.]+) \+ 0x28\))')
 

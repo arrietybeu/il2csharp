@@ -1,5 +1,51 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: Dec F5 residuals R1-R4, guarded (2026-10-02, LANDED)
+
+Four verified-red literals/comments-blind substitutions beyond the
+landed Dec F5 families: `_fix_select` appending ` : default` inside
+comments (R1), `_strip_dangling_default` stripping `: default` inside
+comments (R2), `_rewrite_unknowns` rewriting `?` operands inside
+comments (R3), and `_len_sugar` matching `*(a + 0x18)` with no masking
+at all -- including inside string literals (R4, the only one touching
+literal bytes). All four reproduced red on `main` with in-memory
+probes before the fix; code-fire controls fired throughout.
+
+Guards mirror the landed fix (match on the NUL mask, splice into the
+original by offsets): R1 scans the mask and re-masks after each
+insertion; R2/R3 copy masked spans through at the char-walk top (the
+old quote-skips stay as dead-but-harmless); R4 matches `_LEN_RX` on
+`self._mask_literals` output and splices via the highlevel
+`_sub_outside_literals` twin (function reps supported), so no new
+import was needed.
+
+Evidence (paired `--only Assembly-CSharp` strict builds on the
+landing base): 490 types / 6622 bodies / 0 failed / 0 structured
+fallbacks both sides; recursive per-file diff exactly 3 files / 24
+lines, every changed line inside a dead-placeholder `//` comment
+(`unknown` -> raw `?`, the honest-raw direction; strict check: 0
+changed lines carry `?`/`unknown` outside `//`). Tree-wide static
+census over r11 `final_out` (11,183 files) bounds it: 0 R4-shaped
+literal lines, 23 R2-shaped + 57 R1-shaped comment lines (mostly full
+ternaries the old gates already declined on).
+
+Gates: brace 0 unbalanced / 490; parse 0 bad / 0 ERROR / 0 MISSING
+(JSON); goldens 64/64 post-regen (exactly one move: mi-80548
+`Execute`, 56 -> 56 lines, all 17 diff lines in dead-placeholder
+comments, zero real code -- read line by line); portable 1217 passed
+/ 0 failed (20 new + 6 mixin); full suite 1458 passed with only the
+pre-regen mi-80548 golden failing, then 64/64 post-regen (same
+protocol as the Dec F5 landing).
+
+Tests: +20 (`tests/test_decF5_residuals.py`: each family x
+string/verbatim/line-comment/block-comment byte-identity plus
+code-fire controls, incl. the R4 splice case where code folds and
+the comment survives on one line).
+
+Still open: the `_call` text-exact typeof fallback (non-klass kinds);
+Cpp2IL side B (spec + side-A tools landed by others); single-field
+follow-ups and dispatch in flight elsewhere; sidecar next phases.
+
 ## Current work: IsInst tail-path `as` fold, slice 2b (2026-10-02, LANDED)
 
 Direct tail jumps to the proved IsInst helper (`rt_isinst =

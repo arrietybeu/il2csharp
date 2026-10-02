@@ -309,9 +309,10 @@ class _TextPassMixin:
         # below already re-checks `:` per paren GROUP (`ln[k:j]`), which is
         # the actually-correct, narrower rule this docstring describes.
         n = len(ln)
+        mk, _ = _mask_line_spans(ln, False)
         i = 0
         while i < n:
-            qi = ln.find('?', i)
+            qi = mk.find('?', i)
             if qi < 0:
                 break
             if _in_string(ln, qi):
@@ -320,8 +321,8 @@ class _TextPassMixin:
                 # ` : default` appended after the literal)
                 i = qi + 1
                 continue
-            nxt1 = ln[qi + 1] if qi + 1 < n else ''
-            prv1 = ln[qi - 1] if qi > 0 else ''
+            nxt1 = mk[qi + 1] if qi + 1 < n else ''
+            prv1 = mk[qi - 1] if qi > 0 else ''
             if nxt1 == '?':
                 # `??` -- the second `?` is part of the operator too
                 i = qi + 2
@@ -336,7 +337,7 @@ class _TextPassMixin:
             k = qi - 1
             depth = 0
             while k >= 0:
-                c2 = ln[k]
+                c2 = mk[k]
                 if c2 == ')':
                     depth += 1
                 elif c2 == '(':
@@ -353,7 +354,7 @@ class _TextPassMixin:
             j = qi + 1
             depth = 0
             while j < n:
-                c2 = ln[j]
+                c2 = mk[j]
                 if c2 == '(':
                     depth += 1
                 elif c2 == ')':
@@ -363,7 +364,7 @@ class _TextPassMixin:
                 elif c2 == ';' and depth == 0:
                     break
                 j += 1
-            if any(ln[_m] == ':' and not _in_string(ln, _m) for _m in range(k, j)):
+            if any(mk[_m] == ':' and not _in_string(mk, _m) for _m in range(k, j)):
                 # the group is already a ternary; never re-process this `?`
                 # (j can sit BEFORE the `?` inside a `for` header, so a bare
                 # `i = j` would re-find the same mark forever). A `:` inside a
@@ -373,6 +374,7 @@ class _TextPassMixin:
                 continue
             ln = ln[:j] + ' : default' + ln[j:]
             n = len(ln)
+            mk, _ = _mask_line_spans(ln, False)
             i = j + len(' : default')
         return ln
 
@@ -590,8 +592,13 @@ class _TextPassMixin:
             n = len(ln)
             i = 0
             s = ln
+            mk, _ = _mask_line_spans(s, False)
             while i < n:
                 c = s[i]
+                if mk[i] == '\x00':
+                    out.append(s[i])
+                    i += 1
+                    continue
                 if c in ('"', "'"):
                     delim = c
                     j = i + 1
@@ -663,6 +670,7 @@ class _TextPassMixin:
             n = len(ln)
             i = 0
             s = ln
+            mk, _ = _mask_line_spans(s, False)
             # Depths of the paren groups holding a live ternary/select
             # `?` mark. A `?` governs a later `: default` only while
             # its own group stays open, so a call's parens inside the
@@ -674,6 +682,10 @@ class _TextPassMixin:
             depth = 0
             while i < n:
                 c = s[i]
+                if mk[i] == '\x00':
+                    out.append(s[i])
+                    i += 1
+                    continue
                 if c in ('"', "'"):
                     j = i + 1
                     while j < n:
