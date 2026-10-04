@@ -103,6 +103,21 @@ unproven shape keeps today's spelling; raw is always honest.
   without an explicit user call. Stash-prove-clean before attributing a
   break to your change.
 
+## In flight (2026-10-04)
+
+- Fix 124 (wide raw stores byte-address their displacement) is complete
+  on branch `fix124-wide-store-byte-offsets`, not merged or promoted:
+  paired Assembly-CSharp + whole 91-image tree gates clean, 9,339 changed
+  bodies proven pure fix-124, 5 goldens re-pinned, suite 1,463/1,465.
+  The 2 failures are this sandbox's named-pipe denial in
+  `tests/test_game_parallel_build.py` (a bare `ProcessPoolExecutor(2)`
+  reproduces it), so `--workers` builds are unavailable here — split
+  multi-image work into per-image processes instead. Evidence:
+  `validation_reports/review124_*`.
+- Compiler-error backlog (process P1-P4, families C1-C10): the gates
+  prove parseability, not compilability. Roslyn error count is the
+  new primary metric. Both live at the top of `docs/todo.md`.
+
 ## Current state (2026-10-01, `main` clean; `final_out/` = r11)
 
 Promoted 2026-10-01 on user call after a full rebuild from `main` `1cafd3f`

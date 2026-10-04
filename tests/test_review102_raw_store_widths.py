@@ -251,7 +251,7 @@ def decode(code, ip=0x1000):
 def test_write_mem_dword_imm_widens():
     lift = lift_of({"RBX": Expr("num1", None, "int")})
     lift._write_mem(decode(bytes((0xC7, 0x03, 0xFE, 0xFF, 0xFF, 0xFF))), None)
-    assert lift.out == [(0x1000, "((uint*)num1 + 0x0)[0] = 4294967294;", None)]
+    assert lift.out == [(0x1000, "((uint*)((byte*)num1 + 0x0))[0] = 4294967294;", None)]
     # the side-channel records the raw parts; kills/slots keep raw text
     assert lift._lv_width == 4
     assert lift._lv_raw_parts == ("num1", "+ 0x0")
@@ -261,7 +261,7 @@ def test_write_mem_reg_src_widens_by_type():
     lift = lift_of({"RBX": Expr("num1", None, "int"),
                     "RAX": Expr("num2", INT, "int")})
     lift._write_mem(decode(bytes((0x89, 0x03))), None)
-    assert lift.out == [(0x1000, "((int*)num1 + 0x0)[0] = num2;", None)]
+    assert lift.out == [(0x1000, "((int*)((byte*)num1 + 0x0))[0] = num2;", None)]
 
 
 def test_write_mem_byte_store_untouched():
@@ -289,7 +289,7 @@ def test_write_mem_wide_reg_mismatch_stays_raw():
 def test_rmw_dword_widens():
     lift = lift_of({"RBX": Expr("num1", None, "int")})
     lift._rmw_mem(decode(bytes((0x83, 0x03, 0x0B))), None, "+")
-    assert lift.out == [(0x1000, "((int*)num1 + 0x0)[0] = ((int*)num1 + 0x0)[0] + 11;", None)]
+    assert lift.out == [(0x1000, "((int*)((byte*)num1 + 0x0))[0] = ((int*)((byte*)num1 + 0x0))[0] + 11;", None)]
 
 
 def test_rmw_word_stays_raw():
@@ -312,7 +312,7 @@ def test_mem_lvalue_dotted_raw_records_parts():
 def test_write_mem_dotted_base_widens():
     lift = lift_of({"RBX": Expr("this.ropeRenderer", None, "obj")})
     lift._write_mem(decode(bytes((0xC7, 0x43, 0x54, 0x00, 0x00, 0x80, 0x40))), None)
-    assert lift.out == [(0x1000, "((int*)this.ropeRenderer + 0x54)[0] = 1082130432;", None)]
+    assert lift.out == [(0x1000, "((int*)((byte*)this.ropeRenderer + 0x54))[0] = 1082130432;", None)]
 
 
 def test_unsafify_keeps_dotted_wide_shapes():
@@ -340,7 +340,7 @@ def test_write_mem_indexed_imm_widens():
     lift = lift_of({"RBX": Expr("obj41", None, "int"),
                     "RSI": Expr("obj40", None, "int")})
     lift._write_mem(decode(bytes((0xC7, 0x44, 0xB3, 0x20, 0xFF, 0xFF, 0xFF, 0xFF))), None)
-    assert lift.out == [(0x1000, "((uint*)obj41 + obj40*4 + 0x20)[0] = 4294967295;", None)]
+    assert lift.out == [(0x1000, "((uint*)((byte*)obj41 + obj40*4 + 0x20))[0] = 4294967295;", None)]
 
 
 def test_write_mem_indexed_reg_src_widens():
@@ -349,7 +349,7 @@ def test_write_mem_indexed_reg_src_widens():
                     "RSI": Expr("obj40", None, "int"),
                     "RAX": Expr("num1", INT, "int")})
     lift._write_mem(decode(bytes((0x89, 0x44, 0xB3, 0x20))), None)
-    assert lift.out == [(0x1000, "((int*)obj41 + obj40*4 + 0x20)[0] = num1;", None)]
+    assert lift.out == [(0x1000, "((int*)((byte*)obj41 + obj40*4 + 0x20))[0] = num1;", None)]
 
 
 def test_write_mem_indexed_unknown_src_stays_raw():
@@ -365,4 +365,4 @@ def test_rmw_indexed_widens():
     lift = lift_of({"RBX": Expr("obj41", None, "int"),
                     "RSI": Expr("obj40", None, "int")})
     lift._rmw_mem(decode(bytes((0x83, 0x44, 0xB3, 0x20, 0x0B))), None, "+")
-    assert lift.out == [(0x1000, "((int*)obj41 + obj40*4 + 0x20)[0] = ((int*)obj41 + obj40*4 + 0x20)[0] + 11;", None)]
+    assert lift.out == [(0x1000, "((int*)((byte*)obj41 + obj40*4 + 0x20))[0] = ((int*)((byte*)obj41 + obj40*4 + 0x20))[0] + 11;", None)]

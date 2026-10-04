@@ -41,9 +41,9 @@ def test_payload_cursor_is_a_typed_pointer(game_decompiler):
 
 def test_stores_use_typed_widths_and_pointer_first_order(game_decompiler):
     text = body(game_decompiler)
-    assert '((int*)bytePtr1 + 0x8)[0] = inventoryIds_.Length;' in text
-    assert '((int*)bytePtr1 + num3*1 + 0x0)[0] = inventoryAmounts_.Length;' in text
-    assert '((int*)bytePtr1 + num5*1 + 0x0)[0] = trash_.Length;' in text
+    assert '((int*)((byte*)bytePtr1 + 0x8))[0] = inventoryIds_.Length;' in text
+    assert '((int*)((byte*)bytePtr1 + num3*1 + 0x0))[0] = inventoryAmounts_.Length;' in text
+    assert '((int*)((byte*)bytePtr1 + num5*1 + 0x0))[0] = trash_.Length;' in text
     assert '*1 + 0x0' not in text.replace('num3*1', '').replace('num5*1', '')
     assert 'bytePtr1*' not in text
 

@@ -19,7 +19,9 @@ owner paths via `nested_types`), 121 (mirror-nested own-suffix +
 owner-first distribution), 122 (receiver-proven stub temps take the
 unique owner's type with a caller-proven cast), and 123
 (collision-aware using-strip with full-depth generic arguments; CS0246
-fully zero), plus three unnumbered follow-ups: shortest round-trip float32
+fully zero), and 124 (wide raw stores byte-address their displacement —
+`((T*)((byte*)E + N))[0]`, where the pre-fix spelling scaled N by
+sizeof(T)), plus three unnumbered follow-ups: shortest round-trip float32
 literals with fixed-point tie-break, entry stack-parameter names/types
 surviving the pass wipe with slot reloads restoring the recorded kind, and
 exact runtime type on klass-equality cmov select — and, since, the
@@ -28,8 +30,12 @@ via System.Array, rename barrier + param exclusion, interface dispatch
 naming, boxed-bool null fold, SIMD consumer-side recovery (tails and
 direct calls), each decline-by-default with portable + game pins; plus
 documented disproofs (hinted receivers, ?addr tightening,
-receiver-driven generics). 1253 tests pass (1027 portable + 226 game),
-suite fully green. Rebuilt and gated twice after fix 123 — r4a then r4c,
+receiver-driven generics). 1465 tests (1223 portable + 242 game): 1463
+pass, and the two failures are this sandbox's named-pipe denial for
+`tests/test_game_parallel_build.py` (`ProcessPoolExecutor` cannot create
+its pipe; proven by a three-line repro, see
+`validation_reports/review124_environment.json`), not fix 124. Rebuilt
+and gated twice after fix 123 — r4a then r4c,
 both 114,458 bodies / 0 failed / 0 fallbacks, brace 0, parse 0/0/0 —
 and promoted 2026-09-23: `final_out/` holds r4c (11,183 `.cs` files /
 11,276 paths, aggregate `c0ee1b78…1236`). Promotions since (r4d, r5, r7, r8

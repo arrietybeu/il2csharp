@@ -1,5 +1,17 @@
 # Validation evidence
 
+**Fix 124 (wide raw stores byte-address their displacement, 2026-10-04,
+branch `fix124-wide-store-byte-offsets`, not promoted).** Start with
+`review124_summary.json` (native table, gate matrix, environment caveat),
+then `review124_ab_ac.json` (paired Assembly-CSharp tree diff),
+`review124_sweep.json` + `review124_sweep_compare.json` (whole-corpus
+direct sweep and main-vs-branch compare: 9,339 changed methods, 0
+structural changes, 0 crashes), `review124_purity.json` (9,339/9,339 pure
+fix-124), `review124_parse.json` (whole 91-image tree, 0/0/0/0),
+`review124_golden_repin.json` (5 of 64 snapshots re-pinned) and
+`review124_environment.json` (the sandbox's multiprocessing-pipe denial,
+which fails 2 parallel-build tests and blocks `--workers` builds).
+
 **Current live tree: r11 (2026-10-01, rebuilt from `main` `1cafd3f`).**
 Start with `promotion_r11.json` (11,276 files, aggregate `735f2e9a…1707f`, 0
 mismatches; strict build 0 failures, brace + parse gates clean).

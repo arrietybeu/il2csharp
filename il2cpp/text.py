@@ -286,7 +286,12 @@ def _canon_wide_cast(s):
                     depth -= 1
                 j += 1
             if j < n and s.startswith('[0]', j + 1):
-                out.append('*(' + _canon_wide_cast(s[k:j]) + ')')
+                inner = s[k:j]
+                # fix 124: the wide spelling byte-addresses its offset,
+                # `((T*)((byte*)E + N))[0]`; the raw twin is `*(E + N)`.
+                if inner.startswith('((byte*)') and _paren_spans_all(inner):
+                    inner = inner[len('((byte*)'):-1]
+                out.append('*(' + _canon_wide_cast(inner) + ')')
                 i = j + 4
                 continue
         out.append(s[i])

@@ -26,7 +26,7 @@ CASES = [
      ['this.buf[num2] = v0;', 'this.buf[num8] = v3;',
       'this.buf[num16] = v7;']),
     (1935, 'Initialize', '0x181c9fee0',
-     ['((uint*)v1 + 0x0)[0] = System.HashCode.s_seed + 606290984;']),
+     ['((uint*)((byte*)v1 + 0x0))[0] = System.HashCode.s_seed + 606290984;']),
     (79519, 'ValuesEquals', '0x181e1c5e0',
      ['if (v1 != v2)',
       'return Newtonsoft.Json.Linq.JValue.Compare(v1._valueType, v1._value, v2._value) == 0;']),

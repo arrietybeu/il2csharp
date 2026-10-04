@@ -1,5 +1,167 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: fix 124 wide-store byte offsets (2026-10-04, DONE on branch)
+
+**Status: complete on branch `fix124-wide-store-byte-offsets`.** Source fix,
+tests, goldens and the full gate set landed together; evidence in
+`validation_reports/review124_*` (raw artifacts in the git-ignored
+`work/fix124_ab/`). Next up is the compiler-error backlog below.
+
+- Native re-check of all 8 affected MethodDefs: every re-spelled store's
+  byte offset equals the native memory displacement; each pre-fix typed
+  spelling wrote `offset * sizeof(T)` (mi 25626 byte 0x20, 26747 0x90,
+  32837 0x40, 75101 0x20/0x50/0x80, 109194 0x10/0x20/0x30, 128953 0x80;
+  1935 is offset 0 and spelling-only).
+- Paired strict `--only Assembly-CSharp` builds (main source from
+  `git archive HEAD` vs branch; both 490 files / 6,622 bodies / 0 failed
+  / 0 fallbacks / 0 type-emit failures): 155 files, 1,701 changed lines,
+  **every changed line a pure fix-124 reshuffle, 0 unexpected, 0
+  line-count deltas**; brace 0 unbalanced; parse 0/0/0/0.
+- Whole tree (91 images, 11,183 unique files, built as 10 balanced
+  concurrent per-image runs because this sandbox denies the `--workers`
+  process pool): brace 0 unbalanced, parse 11,183 files 0/0/0/0.
+- Paired whole-corpus direct sweep (116,178 bodies): 0 crashes, brace
+  0/0, dangling 0, empty-args 0, `into_block` 8,075/2,046 unchanged;
+  main-vs-branch compare 9,339 changed methods, **0 structural changes,
+  0 new crashes**; purity proof 9,339/9,339 pure fix-124 (9,313 by exact
+  canonical-body hash, 26 by fresh-process line-pair comparison).
+- Goldens: 64 snapshots, 59 unchanged, 5 re-pinned (26747, 32837, 75101,
+  80548, 128953) -- every diff line read and confirmed pure fix-124.
+- Suite: 1,463 passed / 2 failed of 1,465 (portable 1,223 + game 242);
+  both failures are this sandbox's named-pipe denial for
+  `test_game_parallel_build.py`, reproduced by a three-line
+  `ProcessPoolExecutor(2)` call with no il2cpp code involved (see
+  `validation_reports/review124_environment.json`).
+- Unrelated untracked `.freebuff/` in the worktree: not ours, leave it.
+
+Branch `fix124-wide-store-byte-offsets`. Fix 102/103's
+wide display rendered `((T*)E + N)[0]`; C# pointer arithmetic scales N
+by sizeof(T), so every non-byte raw store wrote the wrong address.
+Native proof (fixture): mi 24267 `BabyDoll.set_NetworkedPosition`,
+`0x18060cdaa mov [rcx+8],eax` rendered `((float*)this.Ptr + 0x8)[0]`
+(= byte 0x20). Census: 1,636 such store lines in fixture r11
+Assembly-CSharp alone. Parse/brace gates could never see it.
+
+Landed on the branch:
+- `il2cpp/lifter/insn.py` `_wide_store_disp` / `_wide_rmw_disp`:
+  emit `((T*)((byte*)E + N))[0]` (indexed: `((T*)((byte*)E + i*s + N))[0]`),
+  the same shape `_wide_raw_lvalue` already used. CRLF binary patch.
+- `il2cpp/text.py` `_canon_wide_cast`: strips a whole-span inner
+  `((byte*)...)` so `_norm_twin` still meets the raw barrier twin
+  `*(E + N)`; a byte-cast READ base (`((byte*)b + 0x10)[0] + N`) is
+  untouched.
+- Tests: 7 end-to-end pins repinned in
+  `tests/test_review102_raw_store_widths.py` (input-only canon/unsafify
+  tests keep the old spelling as valid input); new
+  `tests/test_fix124_wide_store_byte_offsets.py` (+6: address shape,
+  canon strip, byte-load-base decline, twin bridge, unsafify fixpoint).
+
+Repins landed with the fix: the 3 non-golden failures were old-spelling
+pins only (`test_game_param_names[1935]` `((uint*)v1 + 0x0)`,
+`test_game_review81::test_packed_float_intrinsic_...` (mi 109194; its
+0x4/0x8/0xc lanes were bytes 0x10/0x20/0x30 under the old spelling),
+`test_game_rpc_payload::test_stores_use_typed_widths_...`), plus the 5
+goldens (mi 26747, 32837, 75101, 80548, 128953). Portable suite 1,223
+passed; `work/fix124_ab/golden_diff.txt` holds every golden diff line,
+and `work/fix124_ab/purity.json` + `pair_purity.json` the corpus proof.
+
+Two process notes for the next fix, both paid for here:
+- `--workers` cannot run in this sandbox (named-pipe denial). Multi-image
+  builds must be split into per-image/per-group processes; a single-image
+  `--only` build silently takes the serial path, so it is *not* evidence
+  that the pool works.
+- The whole-body "canonicalize the new body and hash it" purity method is
+  unsound when pre-existing `((T*)((byte*)E + N))[0]` lines from
+  `_wide_raw_lvalue` are present in both sources; it over-strips them.
+  Use the line-pair predicate (only *differing* pairs must reduce to the
+  other side), which is sound and found 0 real deltas.
+
+Known sibling (not fixed here): an 8-byte `movsd qword [rcx], xmm0`
+store of two float lanes renders `((byte*)this.Ptr + 0x0)[0] = value.x;`
+(mi 24267, first store) -- width and the y lane are lost. See C3.
+
+## Compiler-error backlog (2026-10-04, PLAN)
+
+The promotion gates (brace, tree-sitter parse, goldens, 0 failed
+bodies) measure parseability, not compilability. On a second, larger
+external Unity 6 corpus (Assembly-CSharp, 8,617 type files / 60,518
+bodies, 0 failed; NOT tracked, never redistribute) the emitted tree
+carries ~498k Roslyn errors across 5,358 files while every gate is
+green. Top codes: CS0103 78.9k, CS0030 38.6k, CS1061 25.9k, CS1503
+21.0k, CS0122 12.8k, CS0019 12.6k, CS0029 11.1k, CS0246 8.1k, CS0266
+5.9k, CS0571 5.8k, CS0208 5.8k. Raw-text census of that tree: 96.9k
+`(byte*)`, 80.4k `((T*)X + N)` sites (45.0k named/param/field
+receivers, 32.7k temps, 2.7k `this`), 2,153
+`il2cpp_codegen_initialize_runtime_metadata`, 701 `__static_fields`,
+4,943 `sub_`, 3,496 `unknown`, 5,638 `goto`.
+
+Process changes (do first):
+- P1. Roslyn compile gate as the primary metric: per-rebuild census by
+  CS code + message pattern, failure SET tracked like the test-failure
+  set. A fix lands only if its family count drops with goldens/tests
+  green. Note csc reports body errors only after declaration errors are
+  zero -- clear the declaration tier first or the count is misleading.
+- P2. Add a second, larger fixture (licensed) so families that barely
+  occur in ShiftAtMidnight are exercised (see C1).
+- P3. One agent per error family, 4-6 in parallel max, worktrees, same
+  landing protocol. `dec/structure` pass order matters and goldens regen
+  serializes; more parallelism mostly produces conflicts.
+- P4. "Compiles" never outranks "correct": every fix still needs native
+  proof; decline-by-default stays. Don't make code compile by guessing
+  casts.
+
+Families, by expected yield:
+- C1. Shared/ICF call naming (largest CS0103 driver). In the external
+  corpus 92% of sampled undeclared `obj#`/`num#` sites (552/597, files
+  untouched by hand) are spray args of one shape:
+  `Unrelated_1<bool>.SomeMethod(this, Base_1<TModel>.ctor, obj1, obj2);`
+  (anonymized; the external tree is never quoted verbatim)
+  inside a ctor that should be `: base()` with an empty body. The jump
+  target is a shared (ICF-folded / generic-shared) body; naming by VA
+  picks an unrelated owner, while the hidden MethodInfo* arg (RDX/last
+  arg, kind `methodinfo`) names the true target. ~10.2k trailing-spray
+  sites, ~4.0k `.ctor`-as-value sites. The fixture renders its single
+  instance honestly (`sub_180de4fa0/*shared body, 229 candidates*/`,
+  mi at VA 0x18061FDB0, FEngineering), so some path (suspect the dec
+  direct-tail `_emit_tail` path, cf. slice 2b) bypasses the candidates
+  check. Fix: resolve the callee from the methodinfo arg when present,
+  drop it and spray beyond the resolved arity; base-ctor tail ->
+  `: base(...)`. Also fixes many CS1061/CS1503/CS0117.
+- C2. Field resolution for raw offsets, including interior offsets into
+  value-type fields (recursive: 0x18 inside a Vector3 field at 0x10 ->
+  `.field.z`). Must happen at Expr/lifter level where types live,
+  not in textpass. Biggest share of CS0030/CS0208.
+- C3. Lane coalescing: split SIMD/qword stores of one struct value
+  (`movsd [rcx],xmm0` + `mov [rcx+8],eax`) -> one struct assignment
+  (`this.f = v;`), and never emit a lane into a struct-typed field
+  (`this.f = v.x;` -> CS0029). Fixture repro: mi 24267.
+- C4. Compilable raw fallback: C# cannot cast a managed reference to a
+  pointer, so every residual `((T*)ref + N)` is CS0030 regardless of
+  fix 124. Emit a declared helper (e.g. `Il2CppRaw.Ref<T>(obj, 0x18)`
+  over `Unsafe.As`/`Unsafe.AddByteOffset`). Honest and compiles; track
+  the helper count as debt -- IL2CPP vs Mono object layouts can differ,
+  so these sites may be wrong at runtime.
+- C5. Runtime-bookkeeping removal: `il2cpp_codegen_initialize_runtime_metadata`,
+  `Type.typeHierarchyDepth` / `.initialized` / `.name` checks (~17k
+  klass-field matches), `IntPtr.m_target`; `__static_fields` blob ->
+  `Class.Field`.
+- C6. Undeclared outgoing stack-arg temps (`obj7 = ...;` then
+  `Call(..., obj7)`): declare with the callee parameter type or inline.
+- C7. Accessor/operator sugar: `X.get_Item(a)` -> indexer,
+  `op_Equality(a, b)` -> `==` etc. (CS0571 ~5.8k).
+- C8. Generic spellings in references: `Name_1<T>` / `Name_1<>` vs
+  declared names (CS0246/CS0103 still non-zero on the
+  external corpus although fixture CS0246 is zero).
+- C9. async/iterator state machines: `TStateMachine`/`TAwaiter`,
+  `object.Current/Dispose/Start/Task` -> `async`/`yield` re-sugar or
+  emit the compiler-generated types faithfully (~2k+ sites).
+- C10. Accessibility: CS0122 ~12.8k -- emit publicized declarations
+  (opt-in flag) or route through declared accessors.
+
+Longer-term (structural): many passes are regex over rendered text
+(`textpass`, `_sub_outside_literals`). Families C2/C3/C5 need type
+information that is gone by then; prefer moving them onto `Expr`/IR.
+
 ## Note: slice-2 throw-vs-null reconciliation (2026-10-02, DOCUMENTED)
 
 `183a92b` closed slice 2 with all 17 typeof sites declining, including

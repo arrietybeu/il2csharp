@@ -1969,10 +1969,13 @@ class _InsnMixin:
             return None
         idx = getattr(self, '_lv_raw_idx', None)
         if idx is not None:
-            return '((%s*)%s + %s*%d %s)[0]' % (
+            # fix 124: cast AFTER the byte-addressed sum -- `(T*)E + N`
+            # scales N by sizeof(T) (0x18 on float* is byte 0x60).
+            return '((%s*)((byte*)%s + %s*%d %s))[0]' % (
                 cast, _term_up(parts[0]), _term_up(idx[0], mul=True),
                 idx[1], parts[1]), st
-        return '((%s*)%s %s)[0]' % (cast, parts[0], parts[1]), st
+        # fix 124: byte-addressed displacement, then the width cast.
+        return '((%s*)((byte*)%s %s))[0]' % (cast, parts[0], parts[1]), st
 
     def _wide_rmw_disp(self, ins, lv, op, src):
         """Wide display lvalue for one raw RMW store, else None. -- fix 102"""
@@ -1994,10 +1997,13 @@ class _InsnMixin:
             return None
         idx = getattr(self, '_lv_raw_idx', None)
         if idx is not None:
-            return '((%s*)%s + %s*%d %s)[0]' % (
+            # fix 124: cast AFTER the byte-addressed sum -- `(T*)E + N`
+            # scales N by sizeof(T) (0x18 on float* is byte 0x60).
+            return '((%s*)((byte*)%s + %s*%d %s))[0]' % (
                 cast, _term_up(parts[0]), _term_up(idx[0], mul=True),
                 idx[1], parts[1])
-        return '((%s*)%s %s)[0]' % (cast, parts[0], parts[1])
+        # fix 124: byte-addressed displacement, then the width cast.
+        return '((%s*)((byte*)%s %s))[0]' % (cast, parts[0], parts[1])
 
     def _wide_raw_lvalue(self, ins, width):
         """Keep the complete native write when a Boolean blob cannot split."""
