@@ -8,13 +8,15 @@ from il2cpp.names import repr_f32, repr_f64, safe_ident, sanitize, sanitize_qual
 from il2cpp.runtime.core import Il2Cpp
 from il2cpp.runtime.meta import meta_lit_repr
 from il2cpp.text import MANGLED_IDENT_RX, reindent
+from il2cpp import rawaddr
 
 class Emitter:
     def __init__(self, il2: Il2Cpp, out_dir: str, asm_comments=False,
                  with_bodies=True, max_methods=None, verbose=False, type_filter=None,
-                 publicize=False):
+                 publicize=False, raw_addr=False):
         self.il = il2
         self.publicize = publicize
+        self.raw_addr = raw_addr
         self.meta = il2.meta
         self.out_dir = out_dir
         self.asm_comments = asm_comments
@@ -1366,6 +1368,7 @@ class Emitter:
         written = 0
         used = {}
         all_sub = set()
+        any_raw = False
         for td in top_types:
             if td.name == '<Module>' or not self._matches_type_filter(td):
                 continue
@@ -1403,6 +1406,11 @@ class Emitter:
                 members = {mn: en for mn, en in members.items() if en in toks}
                 if members:
                     buf = nameof_sugar(buf, members)
+            # Fix 128, opt-in `--raw-addr`: `(byte*)E` -> `(byte*)__addr(E)`
+            raw = False
+            if getattr(self, 'raw_addr', False):
+                buf, raw = rawaddr.rewrite_lines(buf)
+                any_raw = any_raw or raw
             hdr = ['// Decompiled by il2csharp | %s | TypeDefIndex: %d' % (img.name, td.index)]
             uses = tr.render(skip=[ns] if ns else [])
             if uses:
@@ -1411,6 +1419,9 @@ class Emitter:
             if self._stub_collect('\n'.join(buf)):
                 hdr.append('')
                 hdr.append('using static __SharedBodyStubs;')
+            if raw:
+                hdr.append('')
+                hdr.append('using static %s;' % rawaddr.CLASS)
             if ns:
                 hdr.append('')
                 hdr.append('namespace %s' % ns)
@@ -1452,6 +1463,10 @@ class Emitter:
         if all_sub:
             with open(os.path.join(asm_dir, '__SharedBodyStubs.cs'), 'w', encoding='utf-8') as fh:
                 fh.write(self._stub_file_text(all_sub))
+            written += 1
+        if any_raw:
+            with open(os.path.join(asm_dir, rawaddr.CLASS + '.cs'), 'w', encoding='utf-8') as fh:
+                fh.write(rawaddr.helper_file_text())
             written += 1
         with open(os.path.join(asm_dir, asm_name + '.csproj'), 'w', encoding='utf-8') as fh:
             fh.write('<Project Sdk="Microsoft.NET.Sdk">\n'

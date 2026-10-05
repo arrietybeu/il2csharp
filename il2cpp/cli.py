@@ -107,7 +107,7 @@ def _load_runtime(gmd, bp, verbose):
 
 
 def _worker_init(gmd, bp, out_dir, asm_comments, with_bodies, max_methods,
-                 verbose, type_filter, publicize=False):
+                 verbose, type_filter, publicize=False, raw_addr=False):
     """One runtime and one Emitter per worker process, reused for every
     image that process is handed (the load costs ~4 s, an image ~12 s)."""
     meta, il = _load_runtime(gmd, bp, verbose)
@@ -115,7 +115,7 @@ def _worker_init(gmd, bp, out_dir, asm_comments, with_bodies, max_methods,
     _W['em'] = Emitter(il, out_dir, asm_comments=asm_comments,
                        with_bodies=with_bodies, max_methods=max_methods,
                        verbose=verbose, type_filter=type_filter,
-                       publicize=publicize)
+                       publicize=publicize, raw_addr=raw_addr)
 
 
 def _worker_emit(image_name):
@@ -229,7 +229,8 @@ def _emit_assemblies(images, em, args, gmd, bp):
     from concurrent.futures import ProcessPoolExecutor
     initargs = (gmd, bp, args.out, args.asm, not args.decls_only,
                 args.max_methods, args.verbose, args.types,
-                getattr(args, 'publicize', False))
+                getattr(args, 'publicize', False),
+                getattr(args, 'raw_addr', False))
     # say the width before the pool exists: a run killed part-way (a machine
     # under memory pressure will kill the parent, not a worker) otherwise
     # leaves a log that never mentions how wide it got
@@ -281,6 +282,10 @@ def main(argv):
     ap.add_argument('--publicize', action='store_true',
                     help='emit every declaration public (recompilation aid: bodies read '
                          'private/internal members the way native code does)')
+    ap.add_argument('--raw-addr', action='store_true',
+                    help='route every `(byte*)E` raw-access base through a declared '
+                         '`__addr(E)` helper (recompilation aid: managed bases throw '
+                         'instead of failing CS0030)')
     ap.add_argument('--max-methods', type=int, default=None, help='cap lifted bodies (debug)')
     ap.add_argument('--workers', type=int, default=1,
                     help='emit assemblies in N worker processes (0 = auto: half the cores, '
@@ -397,7 +402,8 @@ def main(argv):
     em = Emitter(il, args.out, asm_comments=args.asm,
                  with_bodies=not args.decls_only and workers == 1,
                  max_methods=args.max_methods, verbose=args.verbose,
-                 type_filter=args.types, publicize=args.publicize)
+                 type_filter=args.types, publicize=args.publicize,
+                 raw_addr=args.raw_addr)
     t0 = time_ms()
     stats = _emit_assemblies(images, em, args, gmd, bp)
     em.write_script_json(os.path.join(args.out, 'script.json'))
