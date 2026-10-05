@@ -66,11 +66,17 @@ Gate results (whole tree `work/cg1/`, see `work/cg1/cmp.txt`):
   guard matched `return __ret;`, so `T __ret = default;` was never
   emitted (47,626 errors in `work/cg1` name `__ret`). Fixed on the
   branch (guard excludes `return/throw/goto`); mi 24266 relift now
-  declares it. **Rebuild `work/cg2/` was stopped part-way and deleted (see docs/handoff-2026-10-05.md); rerun launch.ps1** -- to
-  finish: wait for 10 `work\cg2\split\g*.log` `done:` lines, then
-  `powershell -ExecutionPolicy Bypass -File work\cgate\merge_gate.ps1 -Out work\cg2`
-  and read `work\cg2\cmp.txt`. Expect most of the 47.6k `__ret` errors
-  to go.
+  declares it.
+- **Rebuild `work/cg2/` (branch HEAD, all slices + guard fix), 2026-10-05:**
+  10 strict groups, 0 failed / 0 fallbacks / 0 emit failures, 11,183
+  files. **828,571 -> 727,579 errors (-100,992, -12.2%)**; vs cg1
+  -33,507. CS0103 283,183 -> 168,802; CS1061 95,250 -> 72,897;
+  CS0136 -3.6k; CS0841 -2.8k; CS0165 147 -> 10,754; surfaced CS0266
+  +11.5k, CS0029 +6.2k, CS0030 +5.5k, CS1503 +3.0k, CS0019 +2.5k
+  (statements that now bind far enough to show type errors).
+- Game suite re-run on the guard-fixed source (2026-10-05): **220
+  passed / 22 failed -- the identical 22** (16 goldens + 6 pins listed
+  below); nothing new broke. Still NOT re-pinned (user call).
 - Portable suite: 1,229 passed. Game suite (run on the cg1 source):
   220 passed / 22 failed -- **16 goldens** (mi 5769, 11974, 26747,
   32832, 32833, 32837, 37191, 39789, 42414, 45016, 64986, 70050, 75101,
