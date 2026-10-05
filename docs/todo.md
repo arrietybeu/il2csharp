@@ -66,7 +66,7 @@ Gate results (whole tree `work/cg1/`, see `work/cg1/cmp.txt`):
   guard matched `return __ret;`, so `T __ret = default;` was never
   emitted (47,626 errors in `work/cg1` name `__ret`). Fixed on the
   branch (guard excludes `return/throw/goto`); mi 24266 relift now
-  declares it. **Rebuild `work/cg2/` was started but not gated** -- to
+  declares it. **Rebuild `work/cg2/` was stopped part-way and deleted (see docs/handoff-2026-10-05.md); rerun launch.ps1** -- to
   finish: wait for 10 `work\cg2\split\g*.log` `done:` lines, then
   `powershell -ExecutionPolicy Bypass -File work\cgate\merge_gate.ps1 -Out work\cg2`
   and read `work\cg2\cmp.txt`. Expect most of the 47.6k `__ret` errors
