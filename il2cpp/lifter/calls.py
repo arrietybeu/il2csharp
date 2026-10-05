@@ -2665,6 +2665,16 @@ class _CallsMixin:
                                      m2.name.lstrip('.').replace('|', '_').replace('@', '_'))
                 rt_idx = m2.return_type
                 rty = self.il.types[rt_idx] if 0 <= rt_idx < len(self.il.types) else None
+                # fix 129b: a slot declared on the receiver's own generic
+                # definition sees its class VARs bound by the receiver's
+                # GENERICINST arguments (Comparer<float>.Compare(T, T)
+                # takes XMM1/XMM2, not RDX/R8).  An ancestor-declared
+                # slot maps VARs through the base chain: left unbound.
+                if self._call_class_args is None and m2.declaring == recv_td:
+                    _cca = self._generic_class_args(recv0.ty)
+                    if _cca:
+                        self._call_class_args = _cca
+                        rty = self._class_type_subst(rty)
         # An icall thunk cell (fix 66) names its method as firmly as a
         # vtable slot does: seat it the same way, so everything below --
         # the arity trim, `_hint_arg_types`, `_positional_args`, the
