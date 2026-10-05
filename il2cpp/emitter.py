@@ -11,8 +11,10 @@ from il2cpp.text import MANGLED_IDENT_RX, reindent
 
 class Emitter:
     def __init__(self, il2: Il2Cpp, out_dir: str, asm_comments=False,
-                 with_bodies=True, max_methods=None, verbose=False, type_filter=None):
+                 with_bodies=True, max_methods=None, verbose=False, type_filter=None,
+                 publicize=False):
         self.il = il2
+        self.publicize = publicize
         self.meta = il2.meta
         self.out_dir = out_dir
         self.asm_comments = asm_comments
@@ -243,6 +245,21 @@ class Emitter:
         except Exception:
             return False
 
+    def _pub(self, vis):
+        """Fix 127, opt-in `--publicize`: every declared accessibility
+        renders `public` (types, nested types, fields, methods, ctors,
+        properties, events, delegates), the way a publicized reference
+        assembly does. Native code reads private backing fields and
+        internal members across images because IL2CPP inlines accessors
+        and ignores accessibility, so a faithful body cannot compile
+        against the faithful declarations (CS0122). Off by default: the
+        default tree keeps the metadata's accessibility. An empty
+        modifier (explicit interface implementation, interface member,
+        static ctor) stays empty."""
+        if vis and getattr(self, 'publicize', False):
+            return 'public '
+        return vis
+
     def type_decl_line(self, td: TypeDef) -> List[str]:
         f = td.flags
         vis = TYPE_VIS.get((f >> 0) & 7, '')
@@ -251,6 +268,7 @@ class Emitter:
             vis = 'internal '  # a nested form on a top-level row: unreadable
         if self._is_blob_container(td):
             vis = 'internal '
+        vis = self._pub(vis)
         lines = []
         if f & 0x20:
             # interfaces are implicitly abstract: 0x80 is always set
@@ -546,7 +564,7 @@ class Emitter:
                 if rt is not None and self.il.type_name(rt) == 'void':
                     return '~%s()' % safe_ident(sanitize(td.name))
         f = m.flags
-        vis = METH_VIS.get(f & 7, '')
+        vis = self._pub(METH_VIS.get(f & 7, ''))
         # CLI MethodAttributes: Final=0x20, Virtual=0x40,
         # NewSlot=0x100, Abstract=0x400. TypeAttributes use different bits.
         explicit = '.' in m.name
@@ -742,6 +760,7 @@ class Emitter:
             vis = TYPE_VIS.get((td.flags >> 0) & 7, '')
             if td.declaring < 0 and (td.flags & 7) > 1:
                 vis = 'internal '
+            vis = self._pub(vis)
             rt = self.il.types[inv.return_type] \
                 if 0 <= inv.return_type < len(self.il.types) else None
             rtname = self.il.type_name(rt) if rt else 'void'
@@ -799,7 +818,7 @@ class Emitter:
             ftname = self.il.type_name(ft)
             is_static_field = bool(fa & FA_STATIC)
             off_note = self.field_off_note(td, fi, is_static_field)
-            vis = FIELD_VIS.get(fa & 7, 'public ')
+            vis = self._pub(FIELD_VIS.get(fa & 7, 'public '))
             # const is FieldAttributes.Literal, NOT `has a decodable
             # default value` -- RVA data blobs carry a dv row too, and 14
             # of them decoded to an int and printed as const.
@@ -917,7 +936,7 @@ class Emitter:
         cname = safe_ident(sanitize(td.name))
         if m.name == '.cctor':
             return 'static %s()' % cname
-        vis = METH_VIS.get((m.flags >> 0) & 7, 'public ')
+        vis = self._pub(METH_VIS.get((m.flags >> 0) & 7, 'public '))
         params = self.render_params(m)
         if '*' in params:
             return '%sunsafe %s(%s)' % (vis, cname, params)
@@ -1024,7 +1043,7 @@ class Emitter:
         access = 6 if 6 in vis else 5 if 5 in vis or {3, 4} <= vis else max(vis)
         chosen = next((a for a in present if getattr(a, 'flags', 6) & 7 == access), present[0])
         f = getattr(chosen, 'flags', 6)
-        mods = '' if explicit or td.flags & 0x20 else METH_VIS.get(access, '')
+        mods = '' if explicit or td.flags & 0x20 else self._pub(METH_VIS.get(access, ''))
         if all(a.is_static for a in present):
             mods += 'static '
         abstract = all(getattr(a, 'flags', 0) & 0x400 for a in present)
@@ -1113,7 +1132,8 @@ class Emitter:
         header = '%s    %s%s %s' % (pre, mods, ptype, pname)
         # Keep compact bodyless declarations (abstract/interface/signatures).
         vis = {getattr(a, 'flags', 6) & 7 for a in present}
-        unequal = len(present) == 2 and len(vis) > 1 and not explicit and not td.flags & 0x20
+        unequal = len(present) == 2 and len(vis) > 1 and not explicit and not td.flags & 0x20 \
+            and not getattr(self, 'publicize', False)
         def access(a):
             if not unequal:
                 return ''
