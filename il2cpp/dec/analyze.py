@@ -699,6 +699,7 @@ class _AnalyzeMixin:
         self.phi_bytes = {}
         L = self.L
         L._cur_ip = -1
+        unknown = self._unknown_phis(blocks, phi, FLAGS)
         for (bid, k), name in phi.items():
             if k == FLAGS:
                 continue
@@ -710,6 +711,15 @@ class _AnalyzeMixin:
                 v = pb.end_state.get(k)
                 txt = v.text if isinstance(v, Expr) else None
                 if not txt or txt == '?' or len(txt) > 400:
+                    continue
+                # fix 126: an edge whose value is an unknown register (never
+                # written / clobbered, `_unk`) or an all-unknown phi carries
+                # no value, so it gets no copy. The copy `phi = vN;` read a
+                # name nothing defines (CS0103) and only moved the unknown one
+                # hop; leaving the edge uncopied keeps the phi var unassigned
+                # on that path, which the compiler reports honestly (CS0165)
+                # if -- and only if -- a later read can actually see it.
+                if getattr(v, '_unk', False) or txt in unknown:
                     continue
                 # the copy renders the value once more: count it, so a
                 # value already rendered in a cond or stmt (the call
@@ -769,6 +779,36 @@ class _AnalyzeMixin:
                     continue
                 cps = self.phi_copies.setdefault((p, bid), [])
                 cps[:0] = ['%s = %s;' % (t, x) for t, x in pre]
+
+    @staticmethod
+    def _unknown_phis(blocks, phi, FLAGS):
+        """Greatest fixed point of "every incoming value is unknown": a phi
+        is unknown when each predecessor edge carries a missing value, an
+        `_unk` register, itself, or another unknown phi. Starting from all
+        phis and only ever removing keeps loop-carried unknowns (a header
+        phi fed by the entry's garbage and its own back edge) unknown."""
+        cand = {n for (bid, k), n in phi.items() if k != FLAGS}
+        while cand:
+            drop = set()
+            for (bid, k), n in phi.items():
+                if n not in cand:
+                    continue
+                for p in blocks[bid].preds:
+                    es = blocks[p].end_state
+                    if es is None:
+                        continue
+                    v = es.get(k)
+                    if v is None or getattr(v, '_unk', False):
+                        continue
+                    t = getattr(v, 'text', None)
+                    if not t or t == '?' or t == n or t in cand:
+                        continue
+                    drop.add(n)
+                    break
+            if not drop:
+                break
+            cand -= drop
+        return cand
 
     def _coalesce_phis(self, perblk):
         """Two phis in the same block that take the same value on every incoming
