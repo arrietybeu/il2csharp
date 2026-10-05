@@ -323,12 +323,30 @@ class _TypesMixin:
         return out
 
     def vtable_method(self, td_index, slot) -> Optional[int]:
-        """global method index for virtual slot of typedef, or None."""
+        """global method index for virtual slot of typedef, or None.
+
+        Fix 129: a vtable row is an encoded metadata usage, not a bare
+        MethodDef index. Usage 6 (MethodRef) rows index the binary's
+        methodSpec table -- a base method seen through a generic
+        instantiation (`Task`1.InnerInvoke` in every Task-derived
+        vtable) -- and decoding them as MethodDef rows named unrelated
+        methods (TaskNode slot 13 read `DebugLogResizeListener..ctor`;
+        only 64 of the fixture's 8,846 such rows agreed with their
+        slot). An empty row (raw 0x0/0x1) is an abstract slot with no
+        implementation in this type's chain; the declaring abstract
+        method is the unique instance method of the type or an
+        ancestor whose metadata `slot` equals it (1,523 fixture rows:
+        1,020 own-type, 503 ancestor, 0 ambiguous)."""
         td = self.meta.typedefs[td_index]
         if 0 <= slot < td.vtable_count:
             v = self.meta.vtable_methods[td.vtable_start + slot]
             idx = (v & 0x1FFFFFFE) >> 1
+            if (v >> 29) == 6:
+                return self._vt_method_ref(idx)
             if idx == 0:
+                ab = self._abstract_slot_method(td_index, slot)
+                if ab is not None:
+                    return ab
                 # rows carrying no method bits (raw 0x0/0x1) are empty
                 # entries, not a reference to method row 0: XmlNameTable
                 # slots 4-6 read 0x1 while its abstract Add/Get live
@@ -340,6 +358,38 @@ class _TypesMixin:
                     return None
             if idx < len(self.meta.methods):
                 return idx
+        return None
+
+    def _vt_method_ref(self, spec_idx) -> Optional[int]:
+        """MethodDef behind a usage-6 (MethodRef) vtable row, or None."""
+        specs = getattr(self, 'method_specs', None) or ()
+        if 0 <= spec_idx < len(specs):
+            md = specs[spec_idx][0]
+            if 0 <= md < len(self.meta.methods):
+                return md
+        return None
+
+    def _abstract_slot_method(self, td_index, slot) -> Optional[int]:
+        """The abstract method owning an empty vtable row: the unique
+        instance method of the type or its nearest ancestor whose
+        metadata `slot` is `slot`; None when absent or ambiguous."""
+        try:
+            ti, depth = td_index, 0
+            methods = self.meta.methods
+            while ti is not None and 0 <= ti < len(self.meta.typedefs) and depth < 64:
+                td = self.meta.typedefs[ti]
+                hit = [j for j in range(td.method_start, td.method_start + td.method_count)
+                       if 0 <= j < len(methods) and getattr(methods[j], 'slot', None) == slot
+                       and not methods[j].is_static]
+                if len(hit) == 1:
+                    return hit[0]
+                if hit:
+                    return None
+                p = td.parent
+                ti = self.td_of_ty(self.types[p]) if 0 <= p < len(self.types) else None
+                depth += 1
+        except (AttributeError, IndexError, TypeError):
+            return None
         return None
 
     def enum_members(self, td_idx):
@@ -425,7 +475,11 @@ class _TypesMixin:
             nm = len(self.meta.methods)
             for td in self.meta.typedefs:
                 for s in range(td.vtable_count):
-                    idx = (vt[td.vtable_start + s] & 0x1FFFFFFE) >> 1
+                    raw = vt[td.vtable_start + s]
+                    idx = (raw & 0x1FFFFFFE) >> 1
+                    if (raw >> 29) == 6:
+                        # fix 129: MethodRef rows index methodSpecs
+                        idx = self._vt_method_ref(idx) or 0
                     # raw 0x0/0x1 entries carry no method bits (the
                     # same gate `vtable_method` applies): decoding them
                     # as row 0 would inflate a slot's arity cap
