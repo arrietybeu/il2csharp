@@ -53,3 +53,10 @@ def test_interface_and_explicit_accessors_stay_bare():
     assert _em(True)._accessor_modifiers(iface, [_acc(0x6 | 0x400 | 0x40)]) == ''
     td = SimpleNamespace(flags=0)
     assert _em(True)._accessor_modifiers(td, [_acc(0x1)], explicit=True) == ''
+
+
+def test_publicize_drops_readonly_only_under_the_flag():
+    # inlined native ctors store init-only fields from other types (CS0191)
+    import inspect
+    src = inspect.getsource(Emitter)
+    assert "if fa & FA_INITONLY and not getattr(self, 'publicize', False):" in src

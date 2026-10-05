@@ -834,7 +834,10 @@ class Emitter:
             mods = vis
             if is_static_field:
                 mods += 'static '
-            if fa & FA_INITONLY:
+            # fix 127: `--publicize` also drops `readonly` -- inlined
+            # native ctors/initializers store to init-only fields from
+            # other types (CS0191 once the CS0122 wall is gone)
+            if fa & FA_INITONLY and not getattr(self, 'publicize', False):
                 mods += 'readonly '
             if '*' in ftname:
                 mods += 'unsafe '
