@@ -2287,6 +2287,34 @@ class _CallsMixin:
             self._fresh_unknowns()
             return
 
+        # Fix 130: the jmp-thunk band named after the same routine is
+        # `InitializeRuntimeMetadata(slot, true)` and RETURNS the slot's
+        # metadata item (`lea rcx,[TypeInfo slot]; call thunk; mov rcx,
+        # rax; call il2cpp_object_new` -- EnumBuilder.GetMembers 0x181BD4E80;
+        # `lea rcx,[method slot]; call thunk; mov rdx,rax` feeds the raise
+        # helper its MethodInfo). Rendering it as an ordinary call bound the
+        # result to a fresh `object objN = il2cpp_codegen_initialize_runtime_
+        # metadata(typeof(T));` temp, so the allocation read
+        # `il2cpp_object_new(objN)` instead of `new T()` (8.5k CS0103 +
+        # 3.3k on the fixture gate). The lazy init is runtime plumbing (the
+        # wrapper above already drops it); RAX carries the slot's own
+        # expression, exactly what a direct `mov rax,[slot]` load reads.
+        if target is not None and name == 'il2cpp_codegen_initialize_runtime_metadata':
+            slot_e = self.regs.get('RCX')
+            for r in VOLATILE:
+                self.regs.pop(r, None)
+            for i in range(6):
+                self.regs.pop('XMM%d' % i, None)
+            self._fresh_unknowns()
+            if slot_e is not None and not slot_e._unk and slot_e.text \
+                    and slot_e.text.strip() not in ('?', '_'):
+                res = self._mk(slot_e.text, slot_e.ty, slot_e.kind)
+                res._no_bind = True
+                self.regs['RAX'] = res
+            if self.asm_comments and asm:
+                self.emit(ins.ip, '', asm)
+            return
+
         # Unregistered scalar sqrt/domain wrapper.  The structural
         # recognizer proves a double in XMM0 and a double result in XMM0;
         # treating it as an ordinary unknown call would instead spray stale
@@ -3195,9 +3223,12 @@ class _CallsMixin:
                 if len(args) > 1 + rank:
                     args = args[:1 + rank]
                 dims = [a for a in args[1:1 + rank] if a and a != '_']
-                self.regs['RAX'] = Expr(
+                # fix 130: one allocation, one identity -- the same binder
+                # the klass-kind branch uses; a bare `new T[n]` Expr is
+                # re-printed at every use (each a fresh array).
+                self.regs['RAX'] = self._array_allocation(
                     'new %s[%s]' % (m0.group(1), ']['.join(dims) if dims else '0'),
-                    None, 'arr')
+                    None, ins.ip, asm)
                 if self.asm_comments and asm:
                     self.emit(ins.ip, '', asm)
                 return
