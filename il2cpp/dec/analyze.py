@@ -116,7 +116,11 @@ class _AnalyzeMixin:
                         rty = L.il.types[rti] if 0 <= rti < len(L.il.types) else None
                         if rty is not None and _BARE_TOKEN_RX.match(rv.text):
                             L._type_hints.setdefault(rv.text, rty)
-                        b.ret = rv.text if len(rv.text) < 160 else L._materialize(rv, 160)
+                        if rv.text == '&__ret':
+                            # the echoed hidden buffer: return the value
+                            b.ret = '__ret'
+                        else:
+                            b.ret = rv.text if len(rv.text) < 160 else L._materialize(rv, 160)
                     else:
                         b.ret = ''
                     continue

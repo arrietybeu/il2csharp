@@ -4,6 +4,8 @@ from il2cpp.lifter import Lifter
 from il2cpp.metadata import MethodDef, TypeDef
 from il2cpp.stmt_text import _cond_dewrap
 from il2cpp.text import imm_of, reg_name
+from il2cpp.names import safe_ident
+import collections
 
 class _BuildMixin:
     def __init__(self, lifter: Lifter):
@@ -324,7 +326,44 @@ class _BuildMixin:
             self._var_types.setdefault(k, v)
         if not any(b.stmts or b.cond is not None or b.ret is not None for b in blocks):
             return ['/* nothing */']
-        return self._final_text(self._structure(blocks, bmap, m))
+        lines = self._final_text(self._structure(blocks, bmap, m))
+        lines = drop_empty_init_guards(lines)
+        try:
+            params = {safe_ident(p.name) for p in self.L.meta.method_params(m)}
+        except Exception:
+            params = set()
+        params.update(('this', 'value'))
+        lines, _ = hoist_escaping_locals(lines, params)
+        return self._sret_local_decl(lines, m)
+
+    _SRET_TOK_RX = re.compile(r'(?<![\w.])__ret\b')
+
+    def _sret_local_decl(self, lines, m):
+        """Declare the hidden-sret result local (`__ret`, seeded in
+        _setup_entry) once at the top of the body when the body uses it.
+        `default` mirrors the caller-zeroed buffer IL2CPP passes for a
+        struct return; every store then writes one of its fields."""
+        if not any('__ret' in ln and self._SRET_TOK_RX.search(ln) for ln in lines):
+            return lines
+        # an existing declaration (never `return __ret;`, which the
+        # first spelling of this guard mistook for one)
+        if any(re.match(r'^\s*(?!return\b|throw\b|goto\b)[\w.<>\[\]]+ __ret( =|;)', ln)
+               for ln in lines):
+            return lines
+        try:
+            rt = self.L.il.types[m.return_type]
+            tn = self.L.il.type_name(rt)
+        except Exception:
+            return lines
+        tn = re.sub(r'`\d+(?=<|$)', '', tn or '')
+        if not tn or tn == 'void':
+            return lines
+        ind = ''
+        for ln in lines:
+            if ln.strip():
+                ind = ln[:len(ln) - len(ln.lstrip())]
+                break
+        return ['%s%s __ret = default;' % (ind, tn)] + list(lines)
 
     def _final_text(self, raw: List[str]) -> List[str]:
         """Last-pass text cleanup over the fully structured statements:
@@ -765,3 +804,189 @@ class _BuildMixin:
         return order
 
     # ------------------------------------------------------------------
+# ----------------------------------------------------------------------
+# C# scope repair (compile gate, docs/todo.md P1). Structuring places a
+# phi/merge local's declaration at its first textual assignment, which
+# is often inside one arm of an if/else or one switch section while the
+# value is read after the join -- CS0103 at every later read, CS0136
+# when another arm declares the same name again, CS0841 when a goto
+# loop reads it above its declaration. All 58k such reads in the full
+# build are one shape: the SAME minted local, one type, whose uses are
+# not all inside a scope that declares it first. The repair hoists one
+# bare `T name;` to the top of the lowest block enclosing every
+# declaration and use, and turns each inner declaration into a plain
+# assignment. Nothing is initialised: a read the native code never
+# assigns on some path stays visible as CS0165 instead of being masked
+# by an invented `= default`.
+_HOIST_KW = frozenset((
+    'return', 'goto', 'else', 'case', 'new', 'throw', 'await', 'yield',
+    'using', 'var', 'ref', 'out', 'in', 'is', 'as', 'typeof', 'default',
+    'checked', 'unchecked', 'lock', 'fixed', 'unsafe', 'const', 'static'))
+_HOIST_DECL_RX = re.compile(
+    r'^(?P<ind>\s*)(?P<ty>[A-Za-z_][\w.]*(?:<[^=;()]*>)?(?:\[,*\])*\**\??)'
+    r' (?P<nm>[A-Za-z_]\w*\d)(?P<rest> = .*|);\s*$')
+_HOIST_ID_RX = re.compile(r'(?<![\w.@])([A-Za-z_]\w*)\b')
+_HOIST_STR_RX = re.compile(
+    r'@"(?:[^"]|"")*"|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'')
+# declarations the statement regex cannot see (loop/catch/using heads,
+# out/pattern variables): their names are never touched
+_HOIST_HEADDECL_RX = re.compile(
+    r'(?:\b(?:out|is)\s+[\w.<>\[\],]+\s+([A-Za-z_]\w*)'
+    r'|^\s*(?:foreach|for|catch|using|fixed)\s*\(\s*[\w.<>\[\],*]+\s+'
+    r'([A-Za-z_]\w*))')
+
+
+def _hoist_code(ln):
+    s = _HOIST_STR_RX.sub('""', ln)
+    k = s.find('//')
+    if k >= 0:
+        s = s[:k]
+    return re.sub(r'/\*.*?\*/', '', s)
+
+
+def hoist_escaping_locals(lines, params=()):
+    """Return (lines, n_hoisted); see the block comment above."""
+    n = len(lines)
+    parent = {0: None}
+    open_line = {0: -1}
+    head_line = {0: -1}
+    scope_of = [0] * n
+    stack = [0]
+    nxt = 1
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith('}'):
+            if len(stack) > 1:
+                stack.pop()
+            scope_of[i] = stack[-1]
+            if s.endswith('{') and s != '}':
+                parent[nxt] = stack[-1]
+                open_line[nxt] = i
+                head_line[nxt] = i
+                stack.append(nxt)
+                nxt += 1
+            continue
+        scope_of[i] = stack[-1]
+        if s == '{':
+            parent[nxt] = stack[-1]
+            open_line[nxt] = i
+            j = i - 1
+            while j >= 0 and (not lines[j].strip()
+                              or lines[j].strip().startswith('//')):
+                j -= 1
+            head_line[nxt] = j
+            stack.append(nxt)
+            nxt += 1
+    if len(stack) != 1:
+        return lines, 0          # unbalanced: not ours to judge
+
+    def anc(a):
+        r = []
+        while a is not None:
+            r.append(a)
+            a = parent[a]
+        return r
+    decls = collections.defaultdict(list)
+    uses = collections.defaultdict(list)
+    excl = set(params)
+    codes = [_hoist_code(ln) for ln in lines]
+    for i, c in enumerate(codes):
+        for hm in _HOIST_HEADDECL_RX.finditer(c):
+            excl.add(hm.group(1) or hm.group(2))
+        if '=>' in c or 'delegate' in c:
+            # lambda parameters/captures: scope rules differ, decline
+            excl.update(_HOIST_ID_RX.findall(c))
+        dm = _HOIST_DECL_RX.match(c)
+        body = c
+        if dm and dm.group('ty') not in _HOIST_KW:
+            decls[dm.group('nm')].append((i, scope_of[i], dm.group('ty')))
+            body = dm.group('rest')
+        for t in _HOIST_ID_RX.findall(body):
+            if t[-1].isdigit():
+                uses[t].append((i, scope_of[i]))
+    plan = {}
+    for nm, ds in decls.items():
+        if nm in excl:
+            continue
+        tys = {d[2] for d in ds}
+        if len(tys) != 1:
+            continue             # conflicting types: no single honest decl
+        bad = len(ds) > 1
+        if not bad:
+            for (ui, us) in uses.get(nm, ()):
+                ua = anc(us)
+                if not any(di < ui and dsc in ua for (di, dsc, _) in ds):
+                    bad = True
+                    break
+        if not bad:
+            continue
+        scs = [d[1] for d in ds] + [u[1] for u in uses.get(nm, ())]
+        common = anc(scs[0])
+        for sc in scs[1:]:
+            a = set(anc(sc))
+            common = [x for x in common if x in a]
+        tgt = common[0]
+        # a switch block has no statement position before its first case
+        # label; the declaration goes to the enclosing block instead
+        while tgt != 0 and head_line[tgt] >= 0 and \
+                re.match(r'^\s*switch\b', lines[head_line[tgt]]):
+            tgt = parent[tgt]
+        plan[nm] = (tgt, tys.pop(), ds)
+    if not plan:
+        return lines, 0
+    out = list(lines)
+    drop = set()
+    for nm, (tgt, ty, ds) in plan.items():
+        for (di, _, _) in ds:
+            dm = _HOIST_DECL_RX.match(codes[di])
+            if dm.group('rest') == '':
+                drop.add(di)
+            else:
+                k0 = len(dm.group('ind')) + len(dm.group('ty')) + 1
+                out[di] = dm.group('ind') + out[di][k0:]
+    ins = collections.defaultdict(list)
+    for nm, (tgt, ty, ds) in sorted(plan.items(),
+                                    key=lambda kv: kv[1][2][0][0]):
+        ins[open_line[tgt]].append('%s %s;' % (ty, nm))
+    res = []
+    if -1 in ins:
+        ind = ''
+        for ln in lines:
+            if ln.strip():
+                ind = ln[:len(ln) - len(ln.lstrip())]
+                break
+        res.extend(ind + d for d in ins[-1])
+    for i, ln in enumerate(out):
+        if i in drop:
+            continue
+        res.append(ln)
+        if i in ins:
+            ind = ln[:len(ln) - len(ln.lstrip())] + '    '
+            res.extend(ind + d for d in ins[i])
+    return res, len(plan)
+
+
+# The runtime class-init guard whose body every earlier pass emptied
+# (`if (typeof(X).initialized == 0) { }`, 24k sites; CS1061 on Type):
+# a pure flag read guarding nothing is a no-op, so it is dropped. Only
+# the exact empty shape with a bare-identifier/literal comparand and no
+# `else` is touched; a guard that still has a body keeps it.
+_EMPTY_INIT_GUARD_RX = re.compile(
+    r'^\s*if \((?:!\()?typeof\([^()]*\)\.initialized (?:==|!=) '
+    r'(?:\w+)\)?\)\s*$')
+
+
+def drop_empty_init_guards(lines):
+    out = []
+    i, n = 0, len(lines)
+    while i < n:
+        if (i + 2 < n and _EMPTY_INIT_GUARD_RX.match(lines[i])
+                and lines[i + 1].strip() == '{'
+                and lines[i + 2].strip() == '}'
+                and not (i + 3 < n
+                         and lines[i + 3].strip().startswith('else'))):
+            i += 3
+            continue
+        out.append(lines[i])
+        i += 1
+    return out

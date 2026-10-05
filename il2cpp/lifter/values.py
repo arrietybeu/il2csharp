@@ -568,6 +568,20 @@ class _ValuesMixin:
             if sty is not None:
                 std_idx = self._td_of(sty)
                 if std_idx is not None and self.meta.typedefs[std_idx].is_valuetype:
+                    # an access WIDER than the member it starts at spans
+                    # more than one field (`movsd [rcx],xmm0` writes
+                    # Vector3.x AND .y): naming only the first member
+                    # silently drops the rest, so keep the raw deref
+                    _fm = self.il.instance_field_chain(std_idx)
+                    _fe = _fm.get(disp + 0x10) if _fm else None
+                    _fsz = None
+                    if _fe is not None and hasattr(self.il, '_sf_field_size'):
+                        _fti = _fe[1]
+                        _fsz = self.il._sf_field_size(
+                            self.il.types[_fti] if 0 <= _fti < len(self.il.types)
+                            else None, 0)
+                    if _fsz is not None and size and size > _fsz:
+                        return Expr('*(%s %s)' % (base.text, disp_add(disp)), None, 'ptr')
                     base = Expr(nm, sty, 'local')
         if base.kind == 'obj' and disp == 0 and not self._recv_is_vt(base):
             # klass pointer load: mov rax,[obj] -- never for a value

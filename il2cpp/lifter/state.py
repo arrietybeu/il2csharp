@@ -1742,6 +1742,15 @@ class _StateMixin:
             if 0 <= m.return_type < len(self.il.types) else None
         self._return_reg = self._return_value_register(rt0)
         base = 1 if self.il.returns_sret(rt0) else 0
+        if base:
+            # the hidden return buffer itself arrives in RCX: seed it as
+            # the address of the method's own result local, so stores
+            # through it fold onto `__ret.field` (the &s_N valuetype path
+            # in _field_expr) and the `mov rax,rcx` echo returns it.
+            # Unseeded, every such method read an undefined register
+            # (`((byte*)obj2 + 0x0)[0] = obj1; return obj2;`).
+            self.slot_types['__ret'] = rt0
+            self.regs[ARG_REGS[0]] = Expr('&__ret', rt0, 'ptr')
         if not m.is_static:
             self.regs[ARG_REGS[base]] = Expr(
                 'this', (td.index, 0x12 << 16), 'obj')

@@ -1,6 +1,108 @@
 # il2csharp — TODO (open work and historical triage)
 
-## Current work: fix 124 wide-store byte offsets (2026-10-04, DONE on branch)
+## Current work: fix 125 compile-gate first slice (2026-10-05, branch `fix125-compile-gate-scope`)
+
+**Status: on branch, not merged/promoted. Goldens NOT re-pinned (user call).**
+First use of the P1 Roslyn compile gate as the primary metric.
+
+Gate tooling (all git-ignored scratch in `work/cgate/`):
+- `work/cgate/rgate/` -- per-assembly Roslyn gate (SDK 10.0.302 Roslyn
+  DLLs; one `CSharpCompilation` per image wired by CompilationReferences
+  in topological order from `deps.json`, mscorlib as corlib,
+  `__Generated` referenced by all). Run:
+  `dotnet work\cgate\rgate\bin_out\rgate.dll <flat tree> work\cgate\deps.json <outdir>`
+  (~13 s whole tree) -> `log.txt` + `summary.json`.
+- `work/cgate/deps.py` (image reference graph), `cmp.py` (per-code
+  before/after), `top.py`, `sample.py`, `initshape.py` (shape census),
+  `undecl.py` (CS0103 temp classifier), `launch.ps1 -Out <dir>` (10
+  balanced per-group strict builds) + `merge_gate.ps1 -Out <dir>` (merge
+  to `flat`, run gate, compare against baseline).
+- Baseline `work/cgate/r_base/` (main @ d97dd15, 91 images, 11,107
+  files): **828,571 errors** (1,232 declaration-tier). Top: CS0103 283k,
+  CS0030 106k, CS1061 95k, CS0122 86k, CS0019 73k, CS0266 47k.
+
+Landed on the branch (three source slices + tests):
+1. **Escaping-local hoist** (`il2cpp/dec/build.py`
+   `hoist_escaping_locals`, run after `_final_text`): a minted local
+   (name ends in a digit, single declared type, not a param/pattern/
+   loop/lambda name) whose uses are not all inside a scope that declares
+   it earlier gets one bare `T name;` at the top of the lowest common
+   block (never inside a switch block) and its inner declarations become
+   assignments. No `= default` -- a path the native code never assigns
+   stays visible as CS0165. Prototype on the baseline tree: 46,339
+   hoists, CS0103 -57.9k, CS0136 -3.2k, CS0841 -2.3k, CS0165 +9.6k
+   (honest unassigned reads, mostly phi arms minted under different
+   names), and newly bound names surface ~+15k type errors
+   (CS0030/CS0266/CS1503/CS0019) that were masked behind CS0103.
+2. **Empty class-init guard drop** (`drop_empty_init_guards`):
+   `if (typeof(X).initialized ==|!= ident|0) { }` with an empty body and
+   no `else` is a no-op flag read; 24k+ sites (CS1061 on `Type`).
+   Guards with a body are untouched (`_class_init_strip` still owns them).
+3. **Callee-side hidden sret buffer** (`lifter/state.py` setup):
+   methods that return a large struct now seed RCX as `&__ret`
+   (slot type = return type), so stores through it fold to
+   `__ret.field` via the existing `&s_N` valuetype path, the
+   `mov rax,rcx` echo returns `return __ret;` (`dec/analyze.py`), and
+   `_sret_local_decl` declares `T __ret = default;` once (mirrors the
+   caller-zeroed buffer). Previously every such body read an undefined
+   register (`((byte*)obj2 + 0x0)[0] = obj1; return obj2;`, mi 24266
+   BabyDoll.get_NetworkedPosition; Unity.Mathematics swizzles).
+   Guard added in `lifter/values.py`: an access WIDER than the member
+   it starts at (`movsd [rcx],xmm0` = Vector3.x+y) keeps the raw deref
+   instead of naming only the first field (this also applies to the
+   caller-side `&s_N` echo -- correctness, P4).
+- Tests: new `tests/test_scope_repair.py` (6).
+
+Gate results (whole tree `work/cg1/`, see `work/cg1/cmp.txt`):
+- Build `work/cg1/` (all three slices, BEFORE the `__ret` decl-guard
+  fix below): 10 strict groups, 0 failed bodies / 0 fallbacks / 0
+  type-emit failures, 11,183 files. **828,571 -> 761,086 errors
+  (-67,485, -8.1%)**, declaration-tier 1,232 -> 1,217. CS0103
+  283,183 -> 216,428; CS1061 95,250 -> 72,869; CS0136 3,668 -> 60;
+  CS0841 2,824 -> 39; CS0165 147 -> 10,754 (honest unassigned reads);
+  masked type errors surface: CS0030 +5.5k, CS0266 +3.5k, CS1503 +2.8k,
+  CS0019 +2.3k, CS0029 +2.0k.
+- Bug found in that build: `_sret_local_decl`'s "already declared"
+  guard matched `return __ret;`, so `T __ret = default;` was never
+  emitted (47,626 errors in `work/cg1` name `__ret`). Fixed on the
+  branch (guard excludes `return/throw/goto`); mi 24266 relift now
+  declares it. **Rebuild `work/cg2/` was started but not gated** -- to
+  finish: wait for 10 `work\cg2\split\g*.log` `done:` lines, then
+  `powershell -ExecutionPolicy Bypass -File work\cgate\merge_gate.ps1 -Out work\cg2`
+  and read `work\cg2\cmp.txt`. Expect most of the 47.6k `__ret` errors
+  to go.
+- Portable suite: 1,229 passed. Game suite (run on the cg1 source):
+  220 passed / 22 failed -- **16 goldens** (mi 5769, 11974, 26747,
+  32832, 32833, 32837, 37191, 39789, 42414, 45016, 64986, 70050, 75101,
+  86310, 104428, 109664 list in `work/cgate/pt2.out`) and 6 text pins,
+  all expected spelling changes from this fix, NOT re-pinned (user call):
+  `test_game_fp32_unary`/`test_game_jcc_flag_chain` audio x4 (pin
+  `float real2 = ...` now hoisted `float real2;` + `real2 = ...`),
+  `test_game_single_field::test_timespan_assign_folds_to_whole`
+  (hoisted `System.TimeSpan timeSpan2;`), `test_game_review81` packed
+  lanes (raw base is now `&__ret` instead of undefined `obj3`). Every
+  golden diff must still be read line by line before re-pinning, and
+  the game suite re-run after the `__ret` guard fix.
+
+Next (ranked by gate yield, from the baseline census):
+- C6/C1 never-defined register temps (~120k CS0103): phi copies of
+  undefined registers (`object obj6 = obj7;`, 56k) and spray args of
+  shared/ICF calls (28k). Root-cause in phi seeding, not text.
+- C5 rest: `il2cpp_codegen_initialize_runtime_metadata(...)` assignments
+  (8.5k CS0103; e.g. `object obj1 = ...(typeof(NotSupportedException));
+  il2cpp_object_new(obj1)` should read `new NotSupportedException()`),
+  `il2cpp_object_new` 3.3k, `mono_object_unbox_internal` 2.5k,
+  `il2cpp_interface_get_method` 2.4k, `typeHierarchyDepth` 2.8k,
+  `__static_fields`.
+- C4 `X -> byte*` raw casts (CS0030 ~106k): compilable raw helper.
+- C10 private member access across types (CS0122 86k): emit-side
+  accessibility relaxation or accessor routing.
+- `get_Chars`/`.ctor`/`getClass` sugar (CS1061 ~20k), C8 generic
+  spellings (`Dictionary_2<...>`).
+- Phi arms minted under different names (new CS0165s): unify names.
+- Lane coalescing (C3): 8-byte movsd copies of two float fields.
+
+## Previous work: fix 124 wide-store byte offsets (2026-10-04, DONE on branch)
 
 **Status: complete on branch `fix124-wide-store-byte-offsets`.** Source fix,
 tests, goldens and the full gate set landed together; evidence in
