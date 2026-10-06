@@ -1675,6 +1675,193 @@ class _HighLevelMixin:
                     decl[nm] = (dt, depth)
                     st = '%s%s %s = %s' % (b.group(1), dt, nm, rhs)
             out.append(st)
+        try:
+            out = self._numeric_obj_retype(out)
+        except Exception:
+            pass
+        return out
+
+    # fix 135 (CS0019 slice): an untracked temp is declared `object`, so
+    # every arithmetic/compare use is `object op int` (CS0019). When every
+    # definition of the temp is provably integer -- int literals, integer
+    # operators, and other integer-declared locals (or itself) -- and no
+    # use treats it as a reference (member/index/call, null, is/as, casts,
+    # &/ref/out, __addr), declare it `int` (or `long` when a literal or a
+    # source needs 64 bits) and rename it into the num family. Anything
+    # unproven keeps `object`.
+    _NOBJ_INT_TYPES = {
+        'int': 'int', 'short': 'int', 'ushort': 'int', 'byte': 'int',
+        'sbyte': 'int', 'System.Int32': 'int', 'System.Int16': 'int',
+        'System.UInt16': 'int', 'System.Byte': 'int', 'System.SByte': 'int',
+        'long': 'long', 'uint': 'long', 'System.Int64': 'long',
+        'System.UInt32': 'long'}
+    _NOBJ_KW = frozenset(('return', 'throw', 'yield', 'case', 'goto', 'else',
+                          'new', 'await', 'using', 'lock', 'fixed'))
+    _NOBJ_DECL_RX = re.compile(
+        r'^\s*([A-Za-z_][\w.]*)\s+([A-Za-z_]\w*)\s*=(?!=)\s*(.*?);\s*$')
+    _NOBJ_ASSIGN_RX = re.compile(
+        r'^\s*([A-Za-z_]\w*)\s*(\+|-|\*|/|%|&|\||\^|<<|>>)?=(?!=)\s*(.*?);\s*$')
+    _NOBJ_INCDEC_RX = re.compile(
+        r'^\s*(?:([A-Za-z_]\w*)\s*(?:\+\+|--)|(?:\+\+|--)\s*([A-Za-z_]\w*))\s*;\s*$')
+    _NOBJ_TOK_RX = re.compile(
+        r'\s+|0[xX][0-9a-fA-F]+[lL]?|\d+[lL]?|<<|>>|[-+*/%&|^~()]|[A-Za-z_]\w*|.')
+    _NOBJ_OCC_RX = re.compile(r'(?<![\w.@])(obj\d+)(?!\w)')
+    _NOBJ_AFTER_BAD_RX = re.compile(
+        r'^(?:[.\[(?]|=(?!=)|\+\+|--|(?:\+|-|\*|/|%|&|\||\^|<<|>>)=|(?:is|as)\b)')
+    _NOBJ_BEFORE_BAD_RX = re.compile(
+        r'(?:\)|\+\+|--|(?<!&)&|\b(?:ref|out|in|lock|throw|foreach|fixed|using|typeof|sizeof|nameof)\s*\(?)$')
+
+    def _nobj_rhs_kind(self, rhs, cur):
+        """'int'/'long' for a provably integer rhs, 'dflt' for `default`."""
+        if rhs.strip() == 'default':
+            return 'dflt'
+        kind = 'int'
+        saw = False
+        for t in self._NOBJ_TOK_RX.findall(rhs):
+            if t.isspace() or t in ('<<', '>>') or (len(t) == 1 and t in '-+*/%&|^~()'):
+                continue
+            if t[0].isdigit():
+                s = t.rstrip('lL')
+                try:
+                    v = int(s, 16) if s[:2] in ('0x', '0X') else int(s, 10)
+                except ValueError:
+                    return None
+                if v > 0x7FFFFFFFFFFFFFFF:
+                    return None
+                if s != t or v > 0x7FFFFFFF:
+                    kind = 'long'
+                saw = True
+                continue
+            k = cur.get(t)
+            if k is None:
+                return None
+            if k == 'long':
+                kind = 'long'
+            saw = True
+        return kind if saw else None
+
+    def _numeric_obj_retype(self, lines):
+        masked = []
+        in_bc = False
+        for st in lines:
+            mm, in_bc = self._mask_literals(st, in_bc)
+            if len(mm) != len(st):
+                return lines
+            masked.append(mm)
+        known = {}
+        objdecl = set()
+        bad = set()
+        for mm in masked:
+            m = self._NOBJ_DECL_RX.match(mm)
+            if not m or m.group(1) in self._NOBJ_KW:
+                continue
+            ty, nm = m.group(1), m.group(2)
+            if re.fullmatch(r'obj\d+', nm):
+                if ty == 'object':
+                    objdecl.add(nm)
+                else:
+                    bad.add(nm)
+            elif ty in self._NOBJ_INT_TYPES:
+                known.setdefault(nm, set()).add(self._NOBJ_INT_TYPES[ty])
+            else:
+                known.setdefault(nm, set()).add(None)
+        known = {k: next(iter(v)) for k, v in known.items()
+                 if len(v) == 1 and None not in v}
+        cands = objdecl - bad
+        if not cands:
+            return lines
+        defs = {n: [] for n in cands}
+        def_lines = {n: set() for n in cands}
+        for i, mm in enumerate(masked):
+            m = self._NOBJ_DECL_RX.match(mm)
+            if m and m.group(1) == 'object' and m.group(2) in cands:
+                defs[m.group(2)].append(m.group(3))
+                def_lines[m.group(2)].add(i)
+                continue
+            m = self._NOBJ_ASSIGN_RX.match(mm)
+            if m and m.group(1) in cands:
+                n = m.group(1)
+                rhs = m.group(3)
+                if m.group(2):
+                    rhs = '%s %s (%s)' % (n, m.group(2), rhs)
+                defs[n].append(rhs)
+                def_lines[n].add(i)
+                continue
+            m = self._NOBJ_INCDEC_RX.match(mm)
+            if m:
+                n = m.group(1) or m.group(2)
+                if n in cands:
+                    defs[n].append('%s + 1' % n)
+                    def_lines[n].add(i)
+        for i, mm in enumerate(masked):
+            for om in self._NOBJ_OCC_RX.finditer(mm):
+                n = om.group(1)
+                if n not in cands or n in bad:
+                    continue
+                if '__addr' in mm or 'null' in mm:
+                    bad.add(n)
+                    continue
+                if i in def_lines[n]:
+                    continue
+                a, b = om.span()
+                if self._NOBJ_AFTER_BAD_RX.match(mm[b:].lstrip()) or \
+                        self._NOBJ_BEFORE_BAD_RX.search(mm[:a].rstrip()):
+                    bad.add(n)
+        cands -= bad
+        if not cands:
+            return lines
+        typ = {}
+        stable = False
+        for _round in range(32):
+            changed = False
+            for n in sorted(cands):
+                cur = dict(known)
+                cur.update(typ)
+                cur[n] = typ.get(n, 'int')
+                self_rx = re.compile(r'(?<![\w.])%s(?!\w)' % n)
+                kinds = [self._nobj_rhs_kind(r, cur) for r in defs[n]]
+                ok = bool(kinds) and all(k is not None for k in kinds) and any(
+                    k in ('int', 'long') and not self_rx.search(r)
+                    for k, r in zip(kinds, defs[n]))
+                if ok:
+                    nk = 'long' if 'long' in kinds else 'int'
+                    if typ.get(n) != nk:
+                        typ[n] = nk
+                        changed = True
+                elif n in typ:
+                    del typ[n]
+                    changed = True
+            if not changed:
+                stable = True
+                break
+        if not stable or not typ:
+            return lines
+        used = [int(x) for x in re.findall(r'(?<![\w.])num(\d+)(?!\w)', '\n'.join(lines))]
+        k = max(used) if used else 0
+        ren = {}
+        for n in sorted(typ, key=lambda s: int(s[3:])):
+            k += 1
+            ren[n] = 'num%d' % k
+        rx = re.compile(r'(?<![\w.@])(' + '|'.join(re.escape(n) for n in ren) + r')(?!\w)')
+        out = []
+        for st, mm in zip(lines, masked):
+            dm = self._NOBJ_DECL_RX.match(mm)
+            if dm and dm.group(1) == 'object' and dm.group(2) in ren:
+                a, b = dm.span(1)
+                t = typ[dm.group(2)]
+                st = st[:a] + t + st[b:]
+                mm = mm[:a] + t + mm[b:]
+            spans = [x.span() for x in rx.finditer(mm)]
+            if spans:
+                parts = []
+                last = 0
+                for a, b in spans:
+                    parts.append(st[last:a])
+                    parts.append(ren[mm[a:b]])
+                    last = b
+                parts.append(st[last:])
+                st = ''.join(parts)
+            out.append(st)
         return out
 
     _SUB_CALL_RX = re.compile(r'sub_([0-9a-f]+)')

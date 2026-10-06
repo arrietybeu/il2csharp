@@ -47,5 +47,5 @@ def test_rename_locals_keeps_literal_tokens():
 
 def test_rename_locals_keeps_comments_and_skips_literal_only_tokens():
     dec = _renamer()
-    assert dec._rename_locals(['F("v1");', 'v2 = 1;', '// v1 comment']) == \
-        ['F("v1");', 'object obj1 = 1;', '// v1 comment']
+    assert dec._rename_locals(['F("v1");', 'v2 = G();', '// v1 comment']) == \
+        ['F("v1");', 'object obj1 = G();', '// v1 comment']

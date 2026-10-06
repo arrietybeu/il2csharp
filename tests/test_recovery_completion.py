@@ -643,11 +643,11 @@ def test_rename_locals_skips_unused_param_names():
     from types import SimpleNamespace as NS
     dec = _renamer()
     dec.L.meta = NS(method_params=lambda m: [NS(name='obj1')])
-    assert dec._rename_locals(['v9 = 1;', 'return F(v9);'],
+    assert dec._rename_locals(['v9 = G();', 'return F(v9);'],
                               method=object()) == \
-        ['object obj2 = 1;', 'return F(obj2);']
-    assert _renamer()._rename_locals(['v9 = 1;', 'return F(v9);']) == \
-        ['object obj1 = 1;', 'return F(obj1);']
+        ['object obj2 = G();', 'return F(obj2);']
+    assert _renamer()._rename_locals(['v9 = G();', 'return F(v9);']) == \
+        ['object obj1 = G();', 'return F(obj1);']
 
 
 def test_rename_locals_keeps_param_spellings():

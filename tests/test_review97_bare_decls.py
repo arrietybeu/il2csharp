@@ -38,7 +38,12 @@ def rename(lines, var_types=None, hints=None):
 
 
 def test_bare_first_use_declares_object():
-    assert rename(["t1 = 0;"]) == ["object obj1 = 0;"]
+    assert rename(["t1 = G();"]) == ["object obj1 = G();"]
+
+
+def test_bare_first_use_integer_only_temp_is_int():
+    # fix 135: an untracked temp that only ever holds integers is int
+    assert rename(["t1 = 0;"]) == ["int num1 = 0;"]
 
 
 def test_bare_first_use_uses_tracked_type():
@@ -209,7 +214,7 @@ def test_matching_literals_keep_rhs():
         "int num1 = 0;"]
     assert rename(["t1 = 0f;"], var_types={"t1": FLOAT_T}) == [
         "float real1 = 0f;"]
-    assert rename(["t1 = 0;"]) == ["object obj1 = 0;"]
+    assert rename(["t1 = 0;"]) == ["int num1 = 0;"]
 
 
 def test_nonzero_literal_keeps_faithful_value():

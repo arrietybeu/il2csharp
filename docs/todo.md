@@ -2,6 +2,18 @@
 
 ## Current work: fixes 126-134 compile-gate slices (2026-10-06, on `main`)
 
+**Fix 135 (CS0019 slice, 2026-10-06): `_numeric_obj_retype` in
+`il2cpp/dec/highlevel.py` (end of `_rename_locals`) retypes an untracked
+`object objN` temp to `int`/`long` (renamed into the num family) when
+every def is an int literal / integer operator / integer local / itself
+and no use is reference-like (member/index/call, null, is/as, casts,
+&/ref/out, `__addr`). Gate b8 -> b9: total 499,479 -> 494,104 (-5,375);
+CS0019 -3,319, CS0266 -3,036, CS0029 +1,132 (relabel: the same broken
+lines now read `int -> struct` instead of `object -> struct`), no parse
+codes, brace audit 0. Portable 1,300 passed, game 263 passed. Next:
+float-used temps (`real`), the `objN + 0xK` `__addr` shapes, call-defined
+temps, CS0103 remainder.**
+
 **Status: RE-PINNED 2026-10-06 (user-approved). The 39 moved
 goldens/pins (21 goldens in `tests/goldens_review84.json` via
 `work/cg8/repin_goldens.py`, 18 pin assertions in 13 test files) were

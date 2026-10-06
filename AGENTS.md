@@ -105,6 +105,10 @@ unproven shape keeps today's spelling; raw is always honest.
 
 ## In flight (2026-10-06)
 
+- Fix 135 (CS0019 slice): integer-only `object objN` temps are declared
+  `int`/`long` (`_numeric_obj_retype`, highlevel.py). Gate -5,375
+  (CS0019 -3,319, CS0266 -3,036); suites green. Committed on `main`, not
+  pushed.
 - Compile-gate slices 125-133 are fast-forwarded onto `main` and pushed
   (2026-10-06, `8b2d724`, user call: one branch, no split branches or
   worktrees -- work each slice directly on `main` in the main checkout,
