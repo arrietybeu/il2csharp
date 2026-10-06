@@ -2176,7 +2176,12 @@ class _StateMixin:
             v = self.new_var()
             if getattr(self, 'dry', False):
                 return Expr(v, ty, kind)
-            self.emit(0, 'var %s = 0; // %s' % (v, text[:cap] + ('...' if len(text) > cap else '')), None)
+            # fix 134: the comment is opaque to textpass, so a load-
+            # width marker (`(__w_int)`) would leak into it verbatim
+            ct = text
+            if '(__w_' in ct:
+                ct = re.sub(r'\(__w_(?:sbyte|short|ushort|int)\)', '', ct)
+            self.emit(0, 'var %s = 0; // %s' % (v, ct[:cap] + ('...' if len(ct) > cap else '')), None)
             return Expr(v, ty, kind)
         return Expr(text, ty, kind)
 

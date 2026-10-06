@@ -109,10 +109,11 @@ unproven shape keeps today's spelling; raw is always honest.
   (2026-10-06, `8b2d724`, user call: one branch, no split branches or
   worktrees -- work each slice directly on `main` in the main checkout,
   one slice at a time). `final_out/` NOT promoted, goldens/pins NOT
-  re-pinned. Real Roslyn gate (`--strict --publicize --raw-addr`, chain through fix
-  133, `work/cg8/b6`): 828,571 -> 501,046 errors (-39.5%). Game suite:
-  41 moved goldens/pins, all reviewed in the top of `docs/todo.md`; they
-  need a user-approved re-pin before merge. Current state, the standard
+  re-pinned. Fix 134 (raw loads keep native width) landed directly on
+  `main`. Real Roslyn gate (`--strict --publicize --raw-addr`, through fix
+  134, `work/cg8/b8`): 828,571 -> 499,479 errors (-39.7%). Game suite
+  (main checkout): 39 moved goldens/pins, all reviewed in the top of
+  `docs/todo.md`; they need a user-approved re-pin. Current state, the standard
   per-slice procedure (probe -> patchlib patch -> tests -> 10-group
   build -> gate -> delta review -> suites -> docs/commit) and e-MCP
   session mechanics: `docs/handoff-2026-10-06.md`.

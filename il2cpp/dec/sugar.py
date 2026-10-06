@@ -279,7 +279,12 @@ class _SugarMixin:
                 # rewrite here (accessor -> property) simplified the
                 # inside to a plain token/dotted text. `(token).` is
                 # never a cast (casts take an operand, not a dot).
-                parts[k] = re.sub(r'(?<![\w.])\(([\w.]+)\)\.', r'\1.', parts[k])
+                # fix 134e: a `(` glued to `>`/`)`/`]` is a CALL
+                # paren (`Find<T>(true).Length`, `f()(x).y`) --
+                # stripping it glued callee to argument
+                # (`Find<T>true.Length`). Rendered binary operators
+                # are space-separated, so `>(` is never `a > (b)`.
+                parts[k] = re.sub(r'(?<![\w.>)\]])\(([\w.]+)\)\.', r'\1.', parts[k])
             out.append(''.join(parts))
         return out
 

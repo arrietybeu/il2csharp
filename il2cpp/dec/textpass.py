@@ -392,6 +392,7 @@ class _TextPassMixin:
             text = self._sub_outside_literals(self._CAST_NCONST_RX, r'(\1)\2', text, masked)
             text = self._sub_outside_literals(self._DSTAR_RX, r'((byte*)\1)[0]', text, masked)
             text = self._sub_outside_literals(self._NCONST_RX, r'((byte*)\1)[0]', text, masked)
+            text = self._widen_marked(text)
             if text == m:
                 m2 = self._LVAL_OFF_RX.match(text)
                 if m2:
@@ -444,6 +445,51 @@ class _TextPassMixin:
                                 text = text[:mm.start()] + '((byte*)%s)[0]' % inner + text[j + 1:]
                     if text == m:
                         break
+        # fix 134: a marker that never met its deref spells nothing
+        if '(__w_' in text:
+            masked, _ = _mask_line_spans(text, False)
+            text = self._sub_outside_literals(self._WMARK_ANY_RX, '', text, masked)
+        return text
+
+    _WMARK_RX = re.compile(r'\(__w_(sbyte|short|ushort|int)\)\*\(')
+    _WMARK_ANY_RX = re.compile(r'\(__w_(?:sbyte|short|ushort|int)\)')
+
+    def _widen_marked(self, text: str) -> str:
+        """Fix 134: `(__w_T)*(E + N)` -> `((T*)((byte*)E + N))[0]`: the
+        native load width (lifter `_width_mark`), byte-addressed
+        displacement first, then the width cast (as fix 124 stores).
+        Outermost marker first; nested derefs re-enter via the loop."""
+        if '(__w_' not in text:
+            return text
+        for _ in range(32):
+            masked, _ = _mask_line_spans(text, False)
+            mm = self._WMARK_RX.search(masked)
+            if not mm:
+                break
+            ty = mm.group(1)
+            i = mm.end() - 1
+            depth = 0
+            j = i
+            while j < len(text):
+                ch = masked[j]
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if j >= len(text):
+                text = text[:mm.start()] + text[mm.end() - 2:]
+                continue
+            inner = text[i + 1:j]
+            om = self._DEREF_OFF.search(inner)
+            if om:
+                base = inner[:om.start()].rstrip('+- ')
+                repl = '((%s*)((byte*)%s %s %s))[0]' % (ty, base, om.group(1), om.group(2))
+            else:
+                repl = '((%s*)((byte*)%s))[0]' % (ty, inner)
+            text = text[:mm.start()] + repl + text[j + 1:]
         return text
 
     @staticmethod

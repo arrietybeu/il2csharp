@@ -10,9 +10,10 @@ Historical chain (branches deleted after the fast-forward):
 `fix127-publicize` -> `fix128-raw-addr` -> `fix129-vtable-usage-decode`
 -> `fix130-init-meta-value` -> `fix131-block-flags` ->
 `fix132-entry-live-args` -> `fix133-generic-class-layout` (worktree
-`%TEMP%\opencode\wt131`). Latest gate `work/cg8/b6` (through fix 133):
-**501,046 errors (-327,525 / -39.5% vs r_base)**; b3 (through 132e)
-505,396. Handoff + standard procedure:
+`%TEMP%\opencode\wt131`). Fix 134 (load widths) was done directly on
+`main`. Latest gate `work/cg8/b8` (through fix 134):
+**499,479 errors (-329,092 / -39.7% vs r_base)**; b6 (through 133)
+501,046; b3 (through 132e) 505,396. Handoff + standard procedure:
 `docs/handoff-2026-10-06.md`.
 
 Gate (`work/cg5/`, chain through fix 130, `--strict --publicize
@@ -195,6 +196,58 @@ CS0266 66k, CS1061 66k, CS0029 52k, CS1503 43k.
    (PeopleWalkPath.DrawCurved) now reads `if (this.pathPoint._size >=
    2)`. Loop content unchanged (all six direction strings, both
    `this._forward[num2] = true/false`, no goto).
+9. **Fix 134 -- raw loads keep their native width** (on `main`;
+   `lifter/insn.py`, `dec/textpass.py`, `dec/sugar.py`,
+   `lifter/state.py`). `textpass._unsafify` spelled every width-less
+   `*(E + N)` as `((byte*)E + N)[0]` -- a 1-byte read in C# where native
+   loads 2/4 bytes (a correctness bug, not only a type error). **134a-d**
+   `_width_mark`: a whole single raw field load `[base+disp]` (no index;
+   base a plain identifier/member chain, not an array/string receiver)
+   whose expression has no type is wrapped as `(__w_T)*(...)` with T from
+   the instruction (`_W134`: MOV r32 -> int, MOV r16 -> short, MOVZX
+   word -> ushort, MOVSX byte/word -> sbyte/short, MOVSXD -> int,
+   CMP/TEST mem32/16 -> int/short) and typed int; byte zero-extends and
+   qwords stay unmarked. `textpass._widen_marked` spells it
+   `((T*)((byte*)E + N))[0]` (byte-addressed displacement, as fix 124
+   stores); leftover markers are stripped. A first version that marked
+   every read form (b7 501,045, net -1) hid index-form reads (interface
+   offset tables) and `*(arr + 0x18)` `.Length` reads from later text
+   folds -- hence the field-form-only scope. **134e** `_member_fold`'s
+   stale-receiver-paren strip `(?<![\w.])\((tok)\)\.` also fired on a
+   generic call's argument paren (pre-existing, b6 already had
+   `FindObjectsOfType<TMP_Dropdown>true.Length`); `(` glued to `>`, `)`
+   or `]` is now left alone. **134f** the oversized-temp spill comment
+   (`var vN = 0; // <expr>`, `state._mk`) is opaque to textpass, so the
+   lifter strips markers there itself.
+   Examples (native-verified): TouchscreenStateEvent OnStateEvent mi
+   32833 (0x18264A0D0) `mov ebx,[rax+14h]; cmp ebx,eax` ->
+   `int num2 = ((int*)((byte*)inputEventPtr2 + 0x14))[0];` compared with
+   `TouchState.Format`; KeybindsManager.Update mi 25872 (0x180547380)
+   `call unbox; mov esi,[rax]` -> `int numN = ((int*)((byte*)objN +
+   0x0))[0];`.
+   **Gate b8 vs b6 501,046: 499,479 (-1,567)**: CS0019 -1,221, CS1503
+   -722, CS0266 -668, CS1061 -142, CS0103 -104, CS1579 -49 (134e),
+   CS0119 -25; up CS0029 +1,310 -- cascade unmasking: temps that were
+   `int* intPtr1 = this._object.Ptr` (Fusion RPC stubs) now type as
+   `NetworkId`, so `RpcHeader.Create(networkId1, ...)` binds and the
+   pre-existing struct-store width error `((byte*)__addr(msg) +
+   0x1c)[0] = RpcHeader.Create(...)` surfaces (RpcHeader->byte +405,
+   int*->struct +464, int->struct +571; embedded-struct stores are a
+   listed follow-up); CS0021 +29, CS0023 +21, CS0165 +18. No parse-code
+   increase; brace audit 0 unbalanced. Tests
+   `tests/test_fix134_load_width.py` (9),
+   `tests/test_game_fix134_load_width.py` (3). Portable 1,294 passed.
+   **Pin moves (review for re-pin)** -- all temp renumbering from a new
+   int temp, plus width-correct reads:
+   `test_game_fix131_block_flags.py::test_restored_operands_do_not_bind_the_loop_bound`
+   (the loop variable is now `num6`; the bound is still
+   `UnityEngine.Object.FindObjectsByType<ChangeTextToKeybind>(FindObjectsSortMode.None).Length`,
+   never `obj`); golden `mi-80548-Execute` (`int num5 = ((int*)((byte*)num4
+   + 0x18))[0];` hoisted and reused for both index reads and the store;
+   the qword `>> 32` reads stay byte-spelled); golden/pin mi 32833
+   (`review80::test_touchscreen_condition_is_recomputed_in_the_loop`: its
+   `num7 = unknown + this.currentStatePtr` marker is now `num8`, and the
+   compare reads `((int*)((byte*)num5 + 0x0))[0]`).
 
 Game suite (run in worktrees; `cli_only`, `decl_gate`, `compile_gate`,
 `parallel_build` fail there for path reasons -- relative `testgame`,
@@ -218,8 +271,10 @@ obj1;` -- the test looks for `obj1 = il2cpp_object_new(`) and
 wt131 game suite: 39 failed = wt129's 37 + those two. With fix 132a-e
 (`work/cg8/game132.out`): 40 failed = those 39 + the fp32_unary pin move
 above (no other changes). With fix 133 (`work/cg8/game133*.out`): 41
-failed = those 40 + the review80 anchor move above. All need a
-user-approved re-pin.
+failed = those 40 + the review80 anchor move above. Fix 134, main
+checkout (`work/cg8/game134.out`): 39 failed = those 41 minus the 5
+path-only tests (they pass in the main checkout) + the 3 fix-134 moves
+above. All need a user-approved re-pin.
 
 **Next-slice probe (CS0019, b3; `work/cg8/cs0019.py`, `objdefs.py`):**
 34,689 CS0019 have an `object` operand. Shapes: 6,443 are
@@ -236,6 +291,7 @@ type error. Options: (a) the lifter spells the load width at the deref
 wide accesses, lines ~2015-2047), then temps typed from it; (b) resolve
 generic-instance fields (`List<T>._size` at 0x18) so the deref never
 exists. Either moves many goldens -- needs a user call on approach.
+(Done: (b) is fix 133, (a) for field-form loads is fix 134.)
 
 Follow-ups seen while landing: CS0019 `object op int` (untyped integer
 temps, 82k); CS0165 phi arms minted under different names; `unknown`

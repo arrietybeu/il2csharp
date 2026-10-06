@@ -5,6 +5,12 @@ from il2cpp.names import repr_f32, repr_f64
 from il2cpp.runtime.meta import IMM_OPS, meta_lit_repr
 from il2cpp.text import _ATOM_PREC, _BIN_PREC, _bin_txt, _fold_bin, _int_lit, _term_up, disp_add, imm_of, reg_name, sdisp, strip_outer
 from il2cpp.x64 import ARG_REGS, RMW_OPS, STORE_MNEMONICS, VOLATILE, _CMOV_AS_J, _SFPF, _reg_size, flag_cond
+try:
+    _MN_NAME = {getattr(Mnemonic, n): n for n in ('MOV', 'MOVZX', 'MOVSX', 'MOVSXD', 'CMP', 'TEST')}
+except Exception:                       # no iced (portable fakes)
+    _MN_NAME = {}
+# fix 134: bases whose raw field reads get a width mark
+_W134_BASE_RX = re.compile(r'^[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*$')
 
 if HAVE_ICED:
     _WIDE_FLOAT_MN = frozenset((Mnemonic.ADDSS, Mnemonic.ADDSD, Mnemonic.SUBSS,
@@ -1529,7 +1535,53 @@ class _InsnMixin:
             return meta_lit_repr(cs)
         return None
 
+    # fix 134: (mnemonic, memory bytes) -> (C# type, element type) of a
+    # load whose width the instruction proves; absent = keep raw
+    _W134 = {
+        ('MOVZX', 2): ('ushort', 0x07), ('MOVSX', 1): ('sbyte', 0x04),
+        ('MOVSX', 2): ('short', 0x06), ('MOVSXD', 4): ('int', 0x08),
+        ('MOV', 2): ('short', 0x06), ('MOV', 4): ('int', 0x08),
+        ('CMP', 2): ('short', 0x06), ('CMP', 4): ('int', 0x08),
+        ('TEST', 2): ('short', 0x06), ('TEST', 4): ('int', 0x08),
+    }
+
     def _read_mem(self, ins, asm) -> Optional[Expr]:
+        return self._read_mem_raw(ins, asm)
+
+    def _width_mark(self, ins, e):
+        """Fix 134: tag a whole raw deref `*(...)` with the width the
+        instruction proves (`(__w_int)*(E + N)`, typed); else `e`."""
+        if e is None or e.ty is not None or e.kind != 'ptr':
+            return e
+        t = e.text or ''
+        if not t.startswith('*(') or not t.endswith(')'):
+            return e
+        depth = 0
+        for k in range(1, len(t)):
+            ch = t[k]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0 and k != len(t) - 1:
+                    return e            # `*(a) + b`: not one deref
+        if '"' in t or "'" in t or '?' in t:
+            return e
+        name = _MN_NAME.get(ins.mnemonic)
+        if name in ('MOV', 'MOVZX', 'MOVSX', 'MOVSXD'):
+            if ins.op_kind(0) != OpKind.REGISTER or _reg_size(ins.op0_register) not in (2, 4, 8):
+                return e
+        elif name in ('CMP', 'TEST'):
+            if not any(ins.op_kind(k) == OpKind.MEMORY for k in range(ins.op_count)):
+                return e
+        else:
+            return e
+        w = self._W134.get((name, MemorySizeExt.size(ins.memory_size) or 0))
+        if w is None:
+            return e
+        return Expr('(__w_%s)%s' % (w[0], t), (0, w[1] << 16), 'int')
+
+    def _read_mem_raw(self, ins, asm) -> Optional[Expr]:
         if hasattr(self.il, '_sf_field_size'):
             packed = self._aggregate_load(ins)
             if packed is not None:
@@ -1692,7 +1744,17 @@ class _InsnMixin:
                 scale, disp_add(disp)), None, 'ptr')
         if be is None:
             return Expr('mem_%x' % disp, None, 'ptr')
-        return self._field_expr(be, disp, size, elem_fold=True)
+        fe = self._field_expr(be, disp, size, elem_fold=True)
+        # fix 134: field-form raw reads spell their native width; arrays
+        # and strings keep the raw text later passes fold (`.Length`)
+        if be.kind not in ('arr', 'str') and _W134_BASE_RX.match(be.text or '') and not (
+                isinstance(be.ty, tuple) and len(be.ty) == 2
+                and ((be.ty[1] >> 16) & 0xFF) in (0x0e, 0x14, 0x1d)):
+            try:
+                fe = self._width_mark(ins, fe)
+            except Exception:
+                pass
+        return fe
 
     def _mem_lvalue(self, ins) -> Optional[str]:
         """Assignable text for a memory destination, or None when the write is
