@@ -1,6 +1,10 @@
 # il2csharp — TODO (open work and historical triage)
 
-## Current work: fixes 126-133 compile-gate slices (2026-10-06, branch chain)
+## Current work: fixes 126-134 compile-gate slices (2026-10-06, on `main`)
+
+**Status: PAUSED by user after fix 134 (2026-10-06; nothing running).
+Next pick-up: user decides on the 39 re-pins, then the next slice from
+the follow-up list in `docs/handoff-2026-10-06.md` "Next, in order".**
 
 **Status: LANDED on `main` and pushed 2026-10-06 (`8b2d724`, fast-forward;
 user call -- one branch, no split branches/worktrees from here on).
