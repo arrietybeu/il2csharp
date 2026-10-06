@@ -14,6 +14,15 @@ codes, brace audit 0. Portable 1,300 passed, game 263 passed. Next:
 float-used temps (`real`), the `objN + 0xK` `__addr` shapes, call-defined
 temps, CS0103 remainder.**
 
+**Fix 136 (CS0019/CS0266 float slice, 2026-10-06): `_numeric_obj_retype`
+now also types float lanes -- float literals (`0.6f`, `1e5f`) and
+float/double locals make the temp `float`/`double` (`realN` family; rank
+int < long < float < double); float temps used with bitwise/shift/% keep
+`object`. Gate b9 -> b10: 494,104 -> 492,867 (-1,237; CS0266 -1,146,
+CS1503 -193, CS0019 -165, CS0029 +285 relabel), no parse codes, brace
+audit 0. Portable 1,302; game 262 + 1 golden re-pinned (mi 23931
+FPSDisplay.Update: `object obj10 = 1000.0f / real11` -> `float real13`).**
+
 **Status: RE-PINNED 2026-10-06 (user-approved). The 39 moved
 goldens/pins (21 goldens in `tests/goldens_review84.json` via
 `work/cg8/repin_goldens.py`, 18 pin assertions in 13 test files) were

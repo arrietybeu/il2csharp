@@ -1694,7 +1694,13 @@ class _HighLevelMixin:
         'sbyte': 'int', 'System.Int32': 'int', 'System.Int16': 'int',
         'System.UInt16': 'int', 'System.Byte': 'int', 'System.SByte': 'int',
         'long': 'long', 'uint': 'long', 'System.Int64': 'long',
-        'System.UInt32': 'long'}
+        'System.UInt32': 'long',
+        # fix 136: float lanes (`obj70 > 0.6f`) -> float/double
+        'float': 'float', 'System.Single': 'float',
+        'double': 'double', 'System.Double': 'double'}
+    _NOBJ_RANK = {'int': 0, 'long': 1, 'float': 2, 'double': 3}
+    _NOBJ_FLT_RX = re.compile(
+        r'^(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?([fFdD]?)$')
     _NOBJ_KW = frozenset(('return', 'throw', 'yield', 'case', 'goto', 'else',
                           'new', 'await', 'using', 'lock', 'fixed'))
     _NOBJ_DECL_RX = re.compile(
@@ -1704,7 +1710,10 @@ class _HighLevelMixin:
     _NOBJ_INCDEC_RX = re.compile(
         r'^\s*(?:([A-Za-z_]\w*)\s*(?:\+\+|--)|(?:\+\+|--)\s*([A-Za-z_]\w*))\s*;\s*$')
     _NOBJ_TOK_RX = re.compile(
-        r'\s+|0[xX][0-9a-fA-F]+[lL]?|\d+[lL]?|<<|>>|[-+*/%&|^~()]|[A-Za-z_]\w*|.')
+        r'\s+|0[xX][0-9a-fA-F]+[lL]?'
+        r'|(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?[fFdD]'
+        r'|(?:\d+\.\d*|\.\d+)(?:[eE][-+]?\d+)?|\d+[eE][-+]?\d+'
+        r'|\d+[lL]?|<<|>>|[-+*/%&|^~()]|[A-Za-z_]\w*|.')
     _NOBJ_OCC_RX = re.compile(r'(?<![\w.@])(obj\d+)(?!\w)')
     _NOBJ_AFTER_BAD_RX = re.compile(
         r'^(?:[.\[(?]|=(?!=)|\+\+|--|(?:\+|-|\*|/|%|&|\||\^|<<|>>)=|(?:is|as)\b)')
@@ -1720,6 +1729,16 @@ class _HighLevelMixin:
         for t in self._NOBJ_TOK_RX.findall(rhs):
             if t.isspace() or t in ('<<', '>>') or (len(t) == 1 and t in '-+*/%&|^~()'):
                 continue
+            if (t[0].isdigit() or t[0] == '.') and not t[:2] in ('0x', '0X') and \
+                    (('.' in t) or t[-1] in 'fFdD' or 'e' in t or 'E' in t):
+                fm = self._NOBJ_FLT_RX.match(t)
+                if fm is None:
+                    return None
+                fk = 'float' if fm.group(1) in ('f', 'F') else 'double'
+                if self._NOBJ_RANK[fk] > self._NOBJ_RANK[kind]:
+                    kind = fk
+                saw = True
+                continue
             if t[0].isdigit():
                 s = t.rstrip('lL')
                 try:
@@ -1728,15 +1747,15 @@ class _HighLevelMixin:
                     return None
                 if v > 0x7FFFFFFFFFFFFFFF:
                     return None
-                if s != t or v > 0x7FFFFFFF:
+                if (s != t or v > 0x7FFFFFFF) and kind == 'int':
                     kind = 'long'
                 saw = True
                 continue
             k = cur.get(t)
             if k is None:
                 return None
-            if k == 'long':
-                kind = 'long'
+            if self._NOBJ_RANK[k] > self._NOBJ_RANK[kind]:
+                kind = k
             saw = True
         return kind if saw else None
 
@@ -1821,10 +1840,11 @@ class _HighLevelMixin:
                 self_rx = re.compile(r'(?<![\w.])%s(?!\w)' % n)
                 kinds = [self._nobj_rhs_kind(r, cur) for r in defs[n]]
                 ok = bool(kinds) and all(k is not None for k in kinds) and any(
-                    k in ('int', 'long') and not self_rx.search(r)
+                    k in self._NOBJ_RANK and not self_rx.search(r)
                     for k, r in zip(kinds, defs[n]))
                 if ok:
-                    nk = 'long' if 'long' in kinds else 'int'
+                    nk = max((k for k in kinds if k in self._NOBJ_RANK),
+                             key=self._NOBJ_RANK.get)
                     if typ.get(n) != nk:
                         typ[n] = nk
                         changed = True
@@ -1836,12 +1856,24 @@ class _HighLevelMixin:
                 break
         if not stable or not typ:
             return lines
-        used = [int(x) for x in re.findall(r'(?<![\w.])num(\d+)(?!\w)', '\n'.join(lines))]
-        k = max(used) if used else 0
+        bitop = re.compile(r'(?:<<|>>|[&|^~%])')
+        for n in [n for n in typ if typ[n] in ('float', 'double')]:
+            occ = re.compile(r'(?<![\w.@])%s(?!\w)' % n)
+            if any(occ.search(mm) and bitop.search(mm.replace('&&', '').replace('||', ''))
+                   for mm in masked):
+                del typ[n]
+        if not typ:
+            return lines
+        joined = '\n'.join(lines)
+        nxt = {}
+        for fam in ('num', 'real'):
+            used = [int(x) for x in re.findall(r'(?<![\w.])%s(\d+)(?!\w)' % fam, joined)]
+            nxt[fam] = max(used) if used else 0
         ren = {}
         for n in sorted(typ, key=lambda s: int(s[3:])):
-            k += 1
-            ren[n] = 'num%d' % k
+            fam = 'real' if typ[n] in ('float', 'double') else 'num'
+            nxt[fam] += 1
+            ren[n] = '%s%d' % (fam, nxt[fam])
         rx = re.compile(r'(?<![\w.@])(' + '|'.join(re.escape(n) for n in ren) + r')(?!\w)')
         out = []
         for st, mm in zip(lines, masked):

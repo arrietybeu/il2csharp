@@ -38,6 +38,20 @@ def test_unproven_defs_keep_object():
         ('object obj6 = Foo();', 'return obj6 + 1;'),
         ('object obj10 = obj11;', 'object obj11 = obj10;'),
         ('object obj12 = "7";', 'return obj12 + 1;'),
-        ('object obj3 = 1.5f;', 'return obj3 + 1;'),
     ):
         assert run(*src) == list(src)
+
+
+def test_float_lanes_become_real():
+    # fix 136: float literals / float locals type the temp float/double
+    assert run('object obj1 = 0.5f;', 'if (obj1 > 0.6f)', 'obj1 = obj1 * 2;') == [
+        'float real1 = 0.5f;', 'if (real1 > 0.6f)', 'real1 = real1 * 2;']
+    assert run('float real3 = 1f;', 'object obj2 = real3 + 1;') == [
+        'float real3 = 1f;', 'float real4 = real3 + 1;']
+    assert run('object obj4 = 1.5;', 'return obj4 / 2;') == [
+        'double real1 = 1.5;', 'return real1 / 2;']
+
+
+def test_float_temp_used_bitwise_keeps_object():
+    src = ('object obj5 = 1.5f;', 'x = obj5 & 3;')
+    assert run(*src) == list(src)
