@@ -77,6 +77,15 @@ CS0266 66k, CS1061 66k, CS0029 52k, CS1503 43k.
    `realN == 0f`); ShouldRankBefore reads `int num1 = Compare(...); if
    (num1 != 0) return num1 > 0;` (was an undeclared `num1`). Test
    `tests/test_game_fix131_block_flags.py`.
+   **131b**: `_restored_pair(None)` raised TypeError (method fell back to
+   unstructured `if (? <= ?) goto`, cg6 517,994 = +2,208 vs cg5 with
+   CS1525 +2.1k / CS1003 +0.7k in Unity.Mathematics); it now returns
+   None, and a block that writes no flag passes its predecessor pair
+   through (`math.uint2(float)` mi 68399 `if (0f <= v)`).
+   Gate `work/cg7/` (chain through 131b, same flags, 11,262 files,
+   0 failed / 0 fallbacks): **513,959 (-1,827 vs cg5; -314,612 / -38.0%
+   vs r_base)**: CS0103 -2,383, CS0019 +441, CS0029 +102 (conditions that
+   were `unknown` now carry real typed operands and surface type errors).
 
 Game suite (run in worktrees; `cli_only`, `decl_gate`, `compile_gate`,
 `parallel_build` fail there for path reasons -- relative `testgame`,
