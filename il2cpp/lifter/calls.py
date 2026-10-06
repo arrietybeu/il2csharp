@@ -4,6 +4,7 @@ from il2cpp.expr import Expr, _BARE_TOKEN_RX, _R4_TY, _R8_TY, _REFARG_RX, _USE_B
 from il2cpp.runtime.meta import IMM_OPS
 from il2cpp.text import _int_lit, _deref_spans_all, _norm_twin, _paren_spans_all, _term_up, disp_add, reg_name, rty_has_value, strip_outer
 from il2cpp.x64 import ARG_REGS, ARG_XMM, KLASS_VTABLE, VOLATILE
+from il2cpp.entrylive import entry_live_args, xmm0_result_width
 
 def _fp32_arg_ok(text):
     """True when an argument text is spellable enough to print.
@@ -2155,6 +2156,51 @@ class _CallsMixin:
         except Exception:
             return None
 
+    def _entry_live_call_args(self, target, gexprs, gtexts, xexprs):
+        """Fix 132: positional argument texts for a plain `sub_` call,
+        or None to keep the register spray.
+
+        Position i carries RCX/RDX/R8/R9 when the callee reads that GPR
+        on entry, XMM0-3 when it reads the XMM; the list ends at the last
+        read position. A dead interior position (the callee provably
+        never reads either register) renders `0`. Declines (None) when
+        the callee has no proof, reads both registers of one position,
+        or reads a register whose value the lifter does not hold.
+        Never raises.
+        """
+        try:
+            if target is None or self.il.addr_candidates.get(target) \
+                    or target in self.bin.exports:
+                return None
+            sig = entry_live_args(self.il, target)
+            if sig is None:
+                return None
+            n = max([i + 1 for i, k in enumerate(sig) if k] or [0])
+            out = []
+            for i in range(n):
+                k = sig[i]
+                if k == '':
+                    out.append('0')
+                elif k == 'g':
+                    e = gexprs[i]
+                    if e is None or e._unk or not gtexts[i] or gtexts[i] == '_':
+                        return None
+                    out.append(gtexts[i])
+                elif k == 'x':
+                    e = xexprs[i]
+                    if e is None or e._unk or not e.text or not e.text.strip():
+                        return None
+                    # 132e: placeholder spellings (`GenericMethod#N`, a
+                    # bare `?`) do not parse; keep the spray instead
+                    if '#' in e.text or not _fp32_arg_ok(e.text):
+                        return None
+                    out.append(e.text)
+                else:
+                    return None
+            return out
+        except Exception:
+            return None
+
     def _call(self, ins, asm):
         target = None
         self.ind_slot = None
@@ -2383,6 +2429,9 @@ class _CallsMixin:
             arg_exprs.append(e)
             unk_slot.append(e is not None and e._unk)
             args.append(self._materialize(e, 110) if e else '_')
+        gpr_texts = list(args)
+        gpr_exprs = list(arg_exprs)
+        xmm_exprs = [self.regs.get(x) for x in ARG_XMM]
         self._xmm_pending = []
         for k, x in enumerate(ARG_XMM):
             e = self.regs.get(x)
@@ -3244,8 +3293,15 @@ class _CallsMixin:
                 return
         if name in self.RT_ARITY and len(args) > self.RT_ARITY[name]:
             args = args[:self.RT_ARITY[name]]
-        elif re.fullmatch(r'sub_[0-9a-f]+', name) and len(args) > 4:
-            args = args[:4]
+        elif re.fullmatch(r'sub_[0-9a-f]+', name):
+            # fix 132: the callee's entry-live registers decide the
+            # positional list (see il2cpp/entrylive.py); no proof keeps
+            # the four-GPR spray.
+            proven = self._entry_live_call_args(target, gpr_exprs, gpr_texts, xmm_exprs)
+            if proven is not None:
+                args = proven
+            elif len(args) > 4:
+                args = args[:4]
         elif getattr(self, 'ind_slot', None) is not None:
             # batch 38b: the indirect vtable-dispatch bound -- same
             # max-arity-across-all-types proof as VIRT_CALL's
@@ -3379,6 +3435,17 @@ class _CallsMixin:
         # exactly where the call instruction sits; a dead result leaves
         # the line in place, which is also correct (the call executes
         # for effect). Dead-var passes keep call-lines.
+        # fix 132b: the caller's own code reads XMM0 -- a volatile
+        # register the call just clobbered -- as the result, with a
+        # scalar width, before touching RAX: the value lives in XMM0.
+        if re.fullmatch(r'sub_[0-9a-f]+', name):
+            fw = xmm0_result_width(self.bin, ins.next_ip)
+            if fw is not None:
+                r = Expr('(%s)%s' % ('float' if fw == 4 else 'double', call),
+                         _R4_TY if fw == 4 else _R8_TY, 'float')
+                self.regs['XMM0'] = r
+                self._bind(r)
+                return
         r = Expr(call, None, '?')
         self.regs['RAX'] = r
         self._bind(r)

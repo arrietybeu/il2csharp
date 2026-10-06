@@ -13,6 +13,44 @@ if HAVE_ICED:
 else:
     _WIDE_FLOAT_MN = frozenset()
 
+
+def _unary_txt(op, text, prec):
+    """Fix 132e: `op text` for a prefix unary operator (`-` / `~`).
+
+    The operand keeps its bare spelling only when it is atomic for a
+    unary prefix: outer-parenthesised, or free of composed precedence
+    (prec None / _ATOM_PREC), not sign-led (`-` + `-x` would print the
+    predecrement `--x`), and without top-level whitespace (a binary,
+    ternary, `as`/`is` or comparison spelled elsewhere). Anything else is
+    wrapped, which only ever adds redundant parentheses.
+    """
+    t = (text or '?').strip()
+    try:
+        from il2cpp.text import _outer_parens
+        if _outer_parens(t):
+            return op + t
+        wrap = (prec is not None and prec < _ATOM_PREC) or t[:1] in '-+~!'
+        if not wrap:
+            depth = 0
+            q = None
+            for ch in t:
+                if q:
+                    if ch == q:
+                        q = None
+                    continue
+                if ch in '"\'':
+                    q = ch
+                elif ch in '([{':
+                    depth += 1
+                elif ch in ')]}':
+                    depth -= 1
+                elif ch.isspace() and depth <= 0:
+                    wrap = True
+                    break
+        return op + ('(' + t + ')' if wrap else t)
+    except Exception:
+        return op + '(' + t + ')'
+
 class _InsnMixin:
     def _lane_value(self, origin, offset, expected):
         """A modeled SIMD lane must be spellable as a binary operand.
@@ -809,7 +847,10 @@ class _InsnMixin:
             dst = reg_name(ins.op0_register)
             a = self.reg(dst)
             self._hint_tok(a, _INT_TY)
-            self.set_reg(dst, self._mk('-%s' % (a.text if a else '?'), self._arty(a), a.kind if a else '?'))
+            # 132e: NOT is the bitwise complement, not negation
+            op = '-' if mn == Mnemonic.NEG else '~'
+            self.set_reg(dst, self._mk(_unary_txt(op, a.text if a else '?', a._prec if a else None),
+                                       self._arty(a), a.kind if a else '?'))
             # NEG writes SF/ZF/CF and nothing here models it; fix 60b's
             # generic `_flags_mn` guard in _insn handles that without
             # disturbing the pair itself (which ordinary je/jne

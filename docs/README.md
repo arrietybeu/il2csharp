@@ -14,6 +14,11 @@ sources are untouched by the move. All repo paths below are root-relative.
 - 2026-09-22 failure-class inventory (formerly root `TODONOW.md`) —
   appendix of `docs/todo.md` (historical, r4c era).
 - `docs/handoff-2026-09-23.md` — 2026-09-23 stop record (historical).
+- `docs/handoff-2026-10-05.md` — fix 125 compile-gate first slice stop
+  record (historical).
+- `docs/handoff-2026-10-06.md` — live handoff: compile-gate chain
+  125-132 state, gate numbers, standard per-slice procedure, e-MCP
+  session mechanics.
 - `docs/reference.md` — working-loop rules (§4), baselines / promotion /
   known artifacts (§6), gotchas (§7), next-up families (§2), Batch 19
   gate methodology (§5). Read §4 and §7 before any nontrivial change.

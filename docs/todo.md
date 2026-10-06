@@ -1,12 +1,16 @@
 # il2csharp — TODO (open work and historical triage)
 
-## Current work: fixes 126-131 compile-gate slices (2026-10-06, branch chain)
+## Current work: fixes 126-132 compile-gate slices (2026-10-06, branch chain)
 
 **Status: local branches only, nothing merged/promoted. Goldens and pins
 NOT re-pinned (user call).** Linear chain, each branch on the previous:
 `fix125-compile-gate-scope` -> `fix126-unknown-phi-copies` ->
 `fix127-publicize` -> `fix128-raw-addr` -> `fix129-vtable-usage-decode`
--> `fix130-init-meta-value` -> `fix131-block-flags`.
+-> `fix130-init-meta-value` -> `fix131-block-flags` ->
+`fix132-entry-live-args` (worktree `%TEMP%\opencode\wt131`).
+Latest gate `work/cg8/b3` (through fix 132e): **505,396 errors (-323,175 /
+-39.0% vs r_base)**. Handoff + standard procedure:
+`docs/handoff-2026-10-06.md`.
 
 Gate (`work/cg5/`, chain through fix 130, `--strict --publicize
 --raw-addr`, 10 groups, 0 failed / 0 fallbacks / 0 type-emit failures,
@@ -86,6 +90,57 @@ CS0266 66k, CS1061 66k, CS0029 52k, CS1503 43k.
    0 failed / 0 fallbacks): **513,959 (-1,827 vs cg5; -314,612 / -38.0%
    vs r_base)**: CS0103 -2,383, CS0019 +441, CS0029 +102 (conditions that
    were `unknown` now carry real typed operands and surface type errors).
+7. **Fix 132 -- entry-live arguments for plain `sub_` callees**
+   (`il2cpp/entrylive.py` new, `lifter/calls.py`, `lifter/insn.py`;
+   branch `fix132-entry-live-args`). A `sub_VA` call with no metadata
+   candidate and no export printed the 4-GPR spray (`sub_1804d05a8(v,
+   obj2, obj3, obj4)`), dropped XMM arguments and assumed an RAX result
+   (`return obj5 * 57.29578f`). Probe: 15,983 CS0103 sat in `sub_`
+   arguments, ~5.7k in positions the callee provably never reads.
+   `entry_live_args(il, va)` walks the callee's extent (iced
+   InstructionInfo) for read-before-write of RCX/RDX/R8/R9/XMM0-3: only
+   full writes define (8/16-bit GPR writes do not; low-lane scalar
+   writes `movss/movsd/cvt*/sqrt*/round` with src != dest define the XMM,
+   132c); direct calls/jumps out of extent recurse (memoized, depth 10,
+   order-independent); an unprovable call makes every still-undefined
+   register live; indirect branches, tail jumps to unprovable targets,
+   falling off the extent, untrackable RSP math and stack-argument reads
+   (entry offset >= 0x28) decline (None). The call prints position i as
+   the GPR or the XMM the callee reads, `0` for a dead interior
+   position, and keeps the spray when a position reads both, the value
+   is unknown, or the text cannot parse (132e: `GenericMethod#N`
+   placeholders, bare `?`). **132b/d** `xmm0_result_width`: the caller's
+   next uses decide a float/double XMM0 result (scalar SS/SD reads, RMW,
+   packed PS/PD sources, whole-register copies followed across a later
+   call into XMM6+; any RAX touch, untyped read, branch or ret
+   declines), giving `float real1 = (float)sub_...(...)`.
+   **132e** (`lifter/insn.py` `_unary_txt`): NEG/NOT shared one
+   `'-%s'` spelling -- NOT printed as negation, `-(-x)` as the
+   predecrement `--x` (FrameRate CS1059), `-(a + b)` as `-a + b`. NOT is
+   now `~`; a composed, sign-led or space-bearing operand is
+   parenthesised.
+   Examples: GetAngleDeg mi 28756 `float real1 = (float)sub_1804d05a8(v.x,
+   v.z); return real1 * 57.29578f;`; PathProcessor
+   CalculatePathsThreaded `path3.duration = real1` from
+   `(float)sub_180001cf0((float)(num3), 0.0001f)` (native `mulss
+   xmm0,xmm1; ret`; was `sub_180001cf0(obj48, obj49, obj50, obj51)` and
+   `= unknown`); EncodingTable `sub_18032f5e0(arr, 57, &obj24)` (native
+   reads RCX/EDX/R8; the junk 4th argument is gone).
+   Gates vs cg7 513,959: b1 (132a-c) 505,586; b2 (+d) 505,230; **b3
+   (+e) 505,396 (-8,563)**: CS0103 -8,790, CS0023 -264, CS0165 -144,
+   CS1059 8 -> 0; up CS0019 +399, CS1503 +244, CS0029 +99 (sampled:
+   newly visible -- e.g. `&obj24` to an `object` stub parameter was
+   masked by the undeclared 4th argument). b1/b2 had +1 CS1026/CS1003/
+   CS1040 (placeholder argument) -- fixed by 132e, back to baseline.
+   b3 gives back ~170 vs b2 by declining unparsable arguments (P4).
+   Tests `tests/test_fix132_entry_live_args.py` (17),
+   `tests/test_fix132e_unary_and_xmm_args.py` (5),
+   `tests/test_game_fix132_entry_live_args.py`.
+   **Pin move (review for re-pin):**
+   `test_game_fp32_unary.py::test_binary_op_keeps_honest_spelling`
+   asserts the old `object objN = sub_180001cf0(` spray. Its intent --
+   never drop the XMM1 input into a wrong unary float -- holds: the call
+   now carries both inputs and a float result, matching native.
 
 Game suite (run in worktrees; `cli_only`, `decl_gate`, `compile_gate`,
 `parallel_build` fail there for path reasons -- relative `testgame`,
@@ -106,8 +161,9 @@ obj1;` -- the test looks for `obj1 = il2cpp_object_new(`) and
 (mi 77946 GetTraceEventType no longer prints an
 `il2cpp_codegen_initialize_runtime_metadata(` statement; still no bare
 `throw;` and still `throw obj3;` of `new ArgumentOutOfRangeException("level")`).
-wt131 game suite: 39 failed = wt129's 37 + those two. All need a
-user-approved re-pin.
+wt131 game suite: 39 failed = wt129's 37 + those two. With fix 132a-e
+(`work/cg8/game132.out`): 40 failed = those 39 + the fp32_unary pin move
+above (no other changes). All need a user-approved re-pin.
 
 Follow-ups seen while landing: CS0019 `object op int` (untyped integer
 temps, 82k); CS0165 phi arms minted under different names; `unknown`
