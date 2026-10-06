@@ -71,5 +71,5 @@ def test_restored_operands_do_not_bind_the_loop_bound(game_decompiler):
     # restored pair must not bind the header's `.Length` load into the body
     il, dec = game_decompiler
     text = _lift(il, dec, 25872, 'Update')
-    assert 'for (int num5 = 0; num5 < obj' not in text
-    assert 'for (int num5 = 0; num5 < UnityEngine.Object.FindObjectsByType' in text
+    assert 'for (int num6 = 0; num6 < obj' not in text  # fix 125/126: num5 -> num6
+    assert 'for (int num6 = 0; num6 < UnityEngine.Object.FindObjectsByType' in text

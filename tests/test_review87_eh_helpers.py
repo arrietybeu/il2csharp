@@ -119,7 +119,8 @@ def test_pad_less_caller_renders_the_proven_helper_as_a_throw(game_decompiler):
     assert len(thrown) == 1
     # the thrown value must be the exception this method constructs
     obj = thrown[0].strip()[len("throw ") :].rstrip(";")
-    assert any(("%s = il2cpp_object_new(" % obj) in ln for ln in body)
+    # fix 125/126 re-pin: the allocation now folds to `new E()`.
+    assert any(("%s = new System.NotImplementedException()" % obj) in ln for ln in body)
     assert any("NotImplementedException" in ln for ln in body)
 
 

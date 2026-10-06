@@ -111,9 +111,10 @@ unproven shape keeps today's spelling; raw is always honest.
   one slice at a time). `final_out/` NOT promoted, goldens/pins NOT
   re-pinned. Fix 134 (raw loads keep native width) landed directly on
   `main`. Real Roslyn gate (`--strict --publicize --raw-addr`, through fix
-  134, `work/cg8/b8`): 828,571 -> 499,479 errors (-39.7%). Game suite
-  (main checkout): 39 moved goldens/pins, all reviewed in the top of
-  `docs/todo.md`; they need a user-approved re-pin. Current state, the standard
+  134, `work/cg8/b8`): 828,571 -> 499,479 errors (-39.7%). The 39 moved
+  goldens/pins were re-pinned (user-approved, 2026-10-06): game suite
+  263 passed / 0 failed, portable 1,294 passed. Next slice: CS0019
+  `object op int`. Current state, the standard
   per-slice procedure (probe -> patchlib patch -> tests -> 10-group
   build -> gate -> delta review -> suites -> docs/commit) and e-MCP
   session mechanics: `docs/handoff-2026-10-06.md`.

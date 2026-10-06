@@ -2,9 +2,17 @@
 
 ## Current work: fixes 126-134 compile-gate slices (2026-10-06, on `main`)
 
-**Status: PAUSED by user after fix 134 (2026-10-06; nothing running).
-Next pick-up: user decides on the 39 re-pins, then the next slice from
-the follow-up list in `docs/handoff-2026-10-06.md` "Next, in order".**
+**Status: RE-PINNED 2026-10-06 (user-approved). The 39 moved
+goldens/pins (21 goldens in `tests/goldens_review84.json` via
+`work/cg8/repin_goldens.py`, 18 pin assertions in 13 test files) were
+updated to the reviewed fix 125-134 output, with each test's intent kept.
+Notable: the fp32 binary-op pin now requires both operands
+(`(float)sub_180001cf0((float)(numN), 0.0001f)`); review87 accepts
+`new System.NotImplementedException()`; review88 drops the
+no-longer-emitted metadata-init check and keeps the no-bare-`throw;`
+guard plus the concrete `ArgumentOutOfRangeException("level")`. Suites:
+game 263 passed / 0 failed (11:36), portable 1,294 passed. Next slice:
+CS0019 `object op int` (untyped integer temps).**
 
 **Status: LANDED on `main` and pushed 2026-10-06 (`8b2d724`, fast-forward;
 user call -- one branch, no split branches/worktrees from here on).

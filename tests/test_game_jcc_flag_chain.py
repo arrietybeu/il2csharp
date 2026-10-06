@@ -22,7 +22,8 @@ def test_audio_volume_parity_then_not_equal(game_decompiler, mi, name, label):
     assert 'unknown != unknown' not in body
     assert 'float real1 = volume;' in body
     assert 'real1.ToString("0.0")' in body
-    assert 'float real2 = (float)sub_1804cdb00(volume);' in body
+    assert 'float real2;' in body  # fix 125/126 re-pin: hoisted declaration
+    assert 'real2 = (float)sub_1804cdb00(volume);' in body
     assert 'real3 = real2 * 20.0f;' in body
     assert 'real3 = -80.0f;' in body
     assert 'this.audioMixer.SetFloat("' + label + '", real3)' in body

@@ -222,6 +222,9 @@ def test_metadata_init_is_not_flattened_to_a_throw(game_decompiler):
     il, _ = game_decompiler
     dec = _fresh(il)
     body = _body(dec, il, TRACE_EVENT_TYPE)
-    assert any("il2cpp_codegen_initialize_runtime_metadata(" in ln for ln in body)
+    # fix 125/126 re-pin (reviewed): the init statement itself is no longer
+    # emitted, so the guard is now that nothing became a bare `throw;` and the
+    # one genuine throw keeps its concrete exception.
     assert [ln for ln in body if ln.strip() == "throw;"] == []
     assert any(ln.strip().startswith("throw ") for ln in body)
+    assert any("new System.ArgumentOutOfRangeException(\"level\")" in ln for ln in body)

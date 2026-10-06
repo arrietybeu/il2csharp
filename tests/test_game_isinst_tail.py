@@ -21,7 +21,9 @@ def test_tail_typeof_folds_to_as(game_decompiler):
     assert m.name == 'GetCustomAttributes'
     text = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
     assert 'sub_180434690' not in text
-    assert '(obj9 as System.Attribute[])' in text
+    # fix 125/126 re-pin: the temp copy is dropped, so the `as` wraps the call.
+    assert ('(element.GetCustomAttributes(System.Type.GetTypeFromHandle('
+            'typeof(System.Attribute)), inherit) as System.Attribute[])') in text
 
 
 def test_field_klass_tail_declines(game_decompiler):

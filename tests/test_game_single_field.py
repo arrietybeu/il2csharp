@@ -11,7 +11,8 @@ def test_timespan_assign_folds_to_whole(game_decompiler):
     m = il.meta.methods[1741]
     assert "FormatCustomized" in m.name
     text = "\n".join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
-    assert "System.TimeSpan timeSpan2 = offset;" in text
+    assert "System.TimeSpan timeSpan2;" in text  # fix 125/126: hoisted declaration
+    assert "timeSpan2 = offset;" in text
     assert "timeSpan2 = offset._ticks" not in text
 
 

@@ -48,7 +48,7 @@ def test_resolved_string_result_null_tests_null(game_decompiler):
     assert m.name == 'AppendFormatHelper'
     text = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
     assert 'sub_180328e30' not in text
-    assert 'customFormatter12.Format(obj171, obj75, provider)' in text
+    assert 'customFormatter12.Format(obj163, obj80, provider)' in text  # fix 125/126 renumber
     assert 'text5 != null' in text
 
 

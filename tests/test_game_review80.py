@@ -15,7 +15,7 @@ def body(game_decompiler, mi):
 def test_direction_dispatch_is_not_dropped_from_draw_curved_loop(game_decompiler):
     text = body(game_decompiler, 23566)
     start = text.index("while (true)")
-    end = text.index("if (((byte*)this.pathPoint", start)
+    end = text.index("if (this.pathPoint._size >= 2)", start)  # fix 125/126 re-pin
     loop = text[start:end]
 
     for direction in ("Forward", "Backward", "HugLeft", "HugRight",
@@ -47,11 +47,11 @@ def test_receive_loop_shared_entry_is_a_legal_short_circuit_gate(game_decompiler
 
 def test_touchscreen_condition_is_recomputed_in_the_loop(game_decompiler):
     text = body(game_decompiler, 32833)
-    marker = "num7 = unknown + this.currentStatePtr;"
+    marker = "num8 = unknown + this.currentStatePtr;"  # fix 125/126: num7 -> num8
     tail = text[text.index(marker):]
 
     assert "bool flag" not in tail.split("while (true)", 1)[0]
-    assert "if (num7.isNoneEndedOrCanceled)" in tail.split("while (true)", 1)[1]
+    assert "if (num8.isNoneEndedOrCanceled)" in tail.split("while (true)", 1)[1]
 
 
 def test_viscosity_job_keeps_pair_loads_inside_iteration(game_decompiler):

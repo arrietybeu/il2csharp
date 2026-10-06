@@ -21,7 +21,10 @@ def test_audio_log10_leaf(game_decompiler, mi, name, label):
     m = il.meta.methods[mi]
     assert m.name == name
     body = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
-    assert 'float real2 = (float)sub_1804cdb00(volume);' in body
+    # fix 125/126 re-pin: real2 is now hoisted (`float real2;`) and assigned
+    # in both log10 arms; the float leaf spelling is unchanged.
+    assert 'float real2;' in body
+    assert 'real2 = (float)sub_1804cdb00(volume);' in body
     assert 'real3 = real2 * 20.0f;' in body
     assert 'this.audioMixer.SetFloat("' + label + '", real3)' in body
     assert 'real2 = 0f * 20.0f' not in body
@@ -72,5 +75,8 @@ def test_binary_op_keeps_honest_spelling(game_decompiler):
     m = il.meta.methods[104653]
     assert m.name == 'CalculatePathsThreaded'
     body = '\n'.join(dec.lift_method(m, il.meta.typedefs[m.declaring]))
-    assert re.search(r'object obj\d+ = sub_180001cf0\(', body) is not None
-    assert '(float)sub_180001cf0' not in body
+    # fix 125/126 re-pin (reviewed): the binary call now carries BOTH inputs
+    # and a float result. What must still hold is that no argument is dropped:
+    # it is never rendered as a confidently-wrong unary float.
+    assert re.search(r'float real\d+ = \(float\)sub_180001cf0\(\(float\)\(num\d+\), 0\.0001f\);', body) is not None
+    assert re.search(r'\(float\)sub_180001cf0\([^,()]*\);', body) is None

@@ -64,7 +64,10 @@ def test_as_refined_array_declines(game_decompiler):
 
 def test_unknown_provenance_declines(game_decompiler):
     text = _body(game_decompiler, 7021)
-    assert '(System.Runtime.Remoting.Messaging.IMethodCallMessage)sub_180434690(obj87, obj85)' in text
+    # fix 125/126 re-pin: the klass operand now prints as typeof(...); the
+    # call still declines to fold to `as` (unknown provenance).
+    assert ('(System.Runtime.Remoting.Messaging.IMethodCallMessage)sub_180434690(obj75, '
+            'typeof(System.Runtime.Remoting.Messaging.IMethodCallMessage))') in text
     text = _body(game_decompiler, 32342)
     assert '((byte*)this.touchControlArray.getClass() + 0x40)[0]' in text
 
