@@ -165,6 +165,22 @@ wt131 game suite: 39 failed = wt129's 37 + those two. With fix 132a-e
 (`work/cg8/game132.out`): 40 failed = those 39 + the fp32_unary pin move
 above (no other changes). All need a user-approved re-pin.
 
+**Next-slice probe (CS0019, b3; `work/cg8/cs0019.py`, `objdefs.py`):**
+34,689 CS0019 have an `object` operand. Shapes: 6,443 are
+`__addr((objN + 0x80))` frame/struct bases (`objN := &local | (objN +
+0x80)`); ~25k are `object objN` temps used as numbers. By definition
+(12,098 distinct method/temp pairs): raw deref 3,016 (e.g.
+`((byte*)__addr(this.m_Items) + 0x18)[0]` -- a List `_size` read),
+arith 2,061, call 847, temp copy 703, int literal 601, mixed rest.
+Root cause worth fixing first: `textpass._unsafify` spells every
+width-less `*(E + N)` as `((byte*)E + N)[0]`, which in C# is a 1-byte
+read while native loads 4/8 bytes -- a correctness bug, not only a
+type error. Options: (a) the lifter spells the load width at the deref
+(`((int*)((byte*)E + N))[0]`; insn.py already does this for typed
+wide accesses, lines ~2015-2047), then temps typed from it; (b) resolve
+generic-instance fields (`List<T>._size` at 0x18) so the deref never
+exists. Either moves many goldens -- needs a user call on approach.
+
 Follow-ups seen while landing: CS0019 `object op int` (untyped integer
 temps, 82k); CS0165 phi arms minted under different names; `unknown`
 SIMD lane placeholders (`unpcklps` + `movsd` into Vector3 fields);
