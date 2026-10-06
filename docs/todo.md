@@ -1,15 +1,16 @@
 # il2csharp — TODO (open work and historical triage)
 
-## Current work: fixes 126-132 compile-gate slices (2026-10-06, branch chain)
+## Current work: fixes 126-133 compile-gate slices (2026-10-06, branch chain)
 
 **Status: local branches only, nothing merged/promoted. Goldens and pins
 NOT re-pinned (user call).** Linear chain, each branch on the previous:
 `fix125-compile-gate-scope` -> `fix126-unknown-phi-copies` ->
 `fix127-publicize` -> `fix128-raw-addr` -> `fix129-vtable-usage-decode`
 -> `fix130-init-meta-value` -> `fix131-block-flags` ->
-`fix132-entry-live-args` (worktree `%TEMP%\opencode\wt131`).
-Latest gate `work/cg8/b3` (through fix 132e): **505,396 errors (-323,175 /
--39.0% vs r_base)**. Handoff + standard procedure:
+`fix132-entry-live-args` -> `fix133-generic-class-layout` (worktree
+`%TEMP%\opencode\wt131`). Latest gate `work/cg8/b6` (through fix 133):
+**501,046 errors (-327,525 / -39.5% vs r_base)**; b3 (through 132e)
+505,396. Handoff + standard procedure:
 `docs/handoff-2026-10-06.md`.
 
 Gate (`work/cg5/`, chain through fix 130, `--strict --publicize
@@ -141,6 +142,57 @@ CS0266 66k, CS1061 66k, CS0029 52k, CS1503 43k.
    asserts the old `object objN = sub_180001cf0(` spray. Its intent --
    never drop the XMM1 input into a wrong unary float -- holds: the call
    now carries both inputs and a float result, matching native.
+8. **Fix 133 -- open generic class layouts** (`runtime/fields.py`,
+   `lifter/values.py`; branch `fix133-generic-class-layout`, from
+   `fix132-entry-live-args`). IL2CPP stores all-zero instance offsets for
+   an open generic definition, so `instance_field_chain(List`1)` was
+   `{0x0: _items}`: the object header was misnamed and `_size` (0x18)
+   never resolved -- 105,592 `((byte*)__addr(B) + off)[0]` raw derefs in
+   b3, many of them collection reads. **133a** `_class_level_offsets`:
+   an all-zero class level whose instance fields are argument-invariant
+   (primitives, string, pointers, class/array/object references, class
+   GENERICINST, byref) is laid out the IL2CPP way -- parent instance end,
+   declaration order, natural alignment; by-value VAR/struct fields or
+   explicit layout decline (the level then names nothing, never offset
+   0). Validated (`work/cg8/layoutval.py`): 4,984/4,985 non-generic
+   classes and 4,732/4,743 value types reproduce their real offsets
+   (misses: Pack=4 structs, excluded by the rule); 6,179 recorded class
+   sizes equal the reconstructed end. List`1 = {0x10 _items, 0x18 _size,
+   0x1c _version, 0x20 _syncRoot}. **133b** `_recv_member_ty`: the
+   chain carries the definition's field type (`T[]`), which leaked an
+   unbound `T` into caller declarations (b4: CS0246 'T' +322). A member
+   type mentioning class parameters is kept only when all belong to the
+   receiver typedef's own container -- closed through a GENERICINST
+   receiver (`_subst_closed`; `T[]` reuses the binary's closed array
+   row, or `object[]` for a reference element with no row -- array
+   covariance), or left in scope for the definition's own `this`; base
+   level parameters, MVARs and unclosable arguments drop the type but
+   keep the member and its kind (`T[]` stays 'arr'; a dropped type
+   once fell through to 'int' and printed `int num2 = x._items`).
+   Examples: AudiencePath.SpawnPeople mi 23555 (0x1804FEDF0) `int num1 =
+   list11._size - 1;` (native `mov ebx,[rdi+18h]`); TMP_FontAsset
+   TryAddCharacters mi 95397 `UnityEngine.TextCore.Glyph[] glyphArray1 =
+   this.m_GlyphTable._items;`; ObiColliderWorld `object[] objectArray1 =
+   this.implementations._items;`.
+   Gates vs b3 505,396: b4 (133a) 501,289; b5 (+133b) 501,289 (CS0246
+   -360, but CS0029 +186 from the 'int' kind fall-through); **b6 (+kind
+   fix, object[] fallback) 501,046 (-4,350; -327,525 vs r_base, -39.5%)**.
+   b6 vs b3: CS0019 -3,008, CS1503 -949, CS1061 -475, CS0266 -315,
+   CS0246 -7; up CS0214 +367 (a method whose raw derefs are now named
+   loses its `unsafe` cover while a leftover `&local` still needs it --
+   `textpass` keys unsafe wrapping on raw derefs, not on `&`; follow-up),
+   CS0103 +30, CS0021 +19 (newly typed arrays indexed with pre-existing
+   junk indices, e.g. `obj19[num2 * 3]`). Brace audit 0 unbalanced; no
+   parse-code increase. Tests `tests/test_fix133_generic_class_layout.py`
+   (5), `tests/test_fix133b_member_type_scope.py` (8),
+   `tests/test_game_fix133_generic_class_layout.py` (3). Portable 1,285
+   passed.
+   **Pin move (review for re-pin):**
+   `test_game_review80.py::test_direction_dispatch_is_not_dropped_from_draw_curved_loop`
+   anchors its loop slice on `if (((byte*)this.pathPoint`; mi 23566
+   (PeopleWalkPath.DrawCurved) now reads `if (this.pathPoint._size >=
+   2)`. Loop content unchanged (all six direction strings, both
+   `this._forward[num2] = true/false`, no goto).
 
 Game suite (run in worktrees; `cli_only`, `decl_gate`, `compile_gate`,
 `parallel_build` fail there for path reasons -- relative `testgame`,
@@ -163,7 +215,9 @@ obj1;` -- the test looks for `obj1 = il2cpp_object_new(`) and
 `throw;` and still `throw obj3;` of `new ArgumentOutOfRangeException("level")`).
 wt131 game suite: 39 failed = wt129's 37 + those two. With fix 132a-e
 (`work/cg8/game132.out`): 40 failed = those 39 + the fp32_unary pin move
-above (no other changes). All need a user-approved re-pin.
+above (no other changes). With fix 133 (`work/cg8/game133*.out`): 41
+failed = those 40 + the review80 anchor move above. All need a
+user-approved re-pin.
 
 **Next-slice probe (CS0019, b3; `work/cg8/cs0019.py`, `objdefs.py`):**
 34,689 CS0019 have an `object` operand. Shapes: 6,443 are

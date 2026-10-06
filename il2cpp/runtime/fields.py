@@ -545,6 +545,11 @@ class _FieldsMixin:
         while cur is not None and 0 <= cur < len(self.meta.typedefs) and hops < 16:
             td = self.meta.typedefs[cur]
             fo = self.field_offsets[cur] if cur < len(self.field_offsets) else None
+            if fo and not td.is_valuetype:
+                # fix 133: an open generic class level stores all-zero
+                # instance offsets; lay it out (or skip it) instead of
+                # naming the object header after its first field
+                fo = self._class_level_offsets(cur, fo)
             if fo:
                 for k, off in enumerate(fo):
                     fi = td.field_start + k
@@ -578,6 +583,135 @@ class _FieldsMixin:
             hops += 1
         self._chain_cache[td_index] = merged or None
         return merged or None
+
+    # element types whose storage never depends on generic arguments:
+    # primitives, string, pointers, class/array references, object
+    _LAYOUT_INVARIANT_TE = frozenset((0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                                      0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                                      0x0e, 0x0f, 0x12, 0x14, 0x18, 0x19,
+                                      0x1b, 0x1c, 0x1d))
+
+    def _inst_field_ks(self, td):
+        """Local indices of a typedef's instance (non-static) fields."""
+        out = []
+        for k in range(td.field_count):
+            fi = td.field_start + k
+            if fi < len(self.meta.fields) and not (
+                    field_attrs(self, self.meta.fields[fi]) & (FA_STATIC | FA_LITERAL)):
+                out.append(k)
+        return out
+
+    def _class_field_size_align(self, ty):
+        """(size, align) of an argument-invariant class field type, else None."""
+        if ty is None:
+            return None
+        if (ty[1] >> 29) & 1:
+            return 8, 8
+        te = (ty[1] >> 16) & 0xFF
+        if te == 0x15:
+            g = self.td_of_ty(ty)
+            if g is None or self.meta.typedefs[g].is_valuetype:
+                return None
+            return 8, 8
+        if te in self._LAYOUT_INVARIANT_TE:
+            sa = self._sf_ty_size_align(ty, (), 1)
+            if sa is None:
+                return None
+            return sa[0], max(1, min(sa[1], 8))
+        return None                     # VAR / struct by value: arg-dependent
+
+    def _class_level_offsets(self, td_index, fo):
+        """Fix 133: one class level's offsets -- the binary's, or rebuilt.
+
+        Returns `fo` itself when any instance offset is non-zero (the
+        real table) or the level has no instance fields. An all-zero
+        table is an open generic definition: returns a rebuilt list
+        (static entries untouched) when the level is argument-invariant
+        and its parent's instance size is known, else None -- the level
+        then names nothing, never offset 0 (the object header).
+        """
+        try:
+            td = self.meta.typedefs[td_index]
+            inst = [k for k in self._inst_field_ks(td) if k < len(fo)]
+            if not inst or any(fo[k] for k in inst):
+                return fo
+            cache = self.__dict__.setdefault('_class_level_cache', {})
+            if td_index in cache:
+                return cache[td_index]
+            cache[td_index] = None      # cycle guard
+            if (getattr(td, 'flags', 0) & 0x18) == 0x10:
+                return None             # explicit layout
+            cur = self._class_instance_end(td.parent, 0)
+            if cur is None:
+                return None
+            out = list(fo)
+            for k in inst:
+                sa = self._class_field_size_align(
+                    self.types[self.meta.fields[td.field_start + k].type])
+                if sa is None:
+                    return None
+                sz, al = sa
+                cur = (cur + al - 1) & ~(al - 1)
+                out[k] = cur
+                cur += sz
+            cache[td_index] = out
+            return out
+        except Exception:
+            return None
+
+    def _class_instance_end(self, parent_type_index, depth):
+        """Fix 133: header-inclusive instance size of a parent, or None.
+
+        No parent / System.Object -> 0x10. A class with a real offset
+        table -> its recorded instance size (type_sizes is
+        header-excluded). A class without instance fields -> its own
+        parent's end. A rebuilt generic level -> its last field's end,
+        rounded to 8 like every IL2CPP class instance size.
+        """
+        try:
+            if depth > 8:
+                return None
+            if parent_type_index < 0 or parent_type_index >= len(self.types):
+                return 0x10
+            t = self.types[parent_type_index]
+            if not t:
+                return 0x10
+            te = (t[1] >> 16) & 0xFF
+            if te == 0x1c:
+                return 0x10
+            if te == 0x12:
+                ptd = t[0]
+            elif te == 0x15:
+                ptd = self.td_of_ty(t)
+            else:
+                return None
+            if ptd is None or not (0 <= ptd < len(self.meta.typedefs)):
+                return None
+            row = self.meta.typedefs[ptd]
+            inst = self._inst_field_ks(row)
+            if not inst:
+                return self._class_instance_end(row.parent, depth + 1)
+            pfo = self.field_offsets[ptd] if ptd < len(self.field_offsets) else None
+            if not pfo:
+                return None
+            lvl = self._class_level_offsets(ptd, pfo)
+            if lvl is None:
+                return None
+            if lvl is pfo:
+                ts = self.type_sizes[ptd] if ptd < len(self.type_sizes) else None
+                return ts + 0x10 if ts else None
+            end = 0
+            for k in inst:
+                if k >= len(lvl):
+                    return None
+                sa = self._class_field_size_align(
+                    self.types[self.meta.fields[row.field_start + k].type])
+                if sa is None:
+                    return None
+                end = max(end, lvl[k] + sa[0])
+            return (end + 7) & ~7
+        except Exception:
+            return None
 
     _bases_cache: Dict[int, Tuple[int, ...]] = {}
 

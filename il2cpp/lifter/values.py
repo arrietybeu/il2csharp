@@ -723,8 +723,9 @@ class _ValuesMixin:
                 _sep = '->' if _ptr_base else '.'
                 if not _vt and disp in chain:
                     fname, ftype_idx = chain[disp]
-                    fty = self.il.types[ftype_idx] if 0 <= ftype_idx < len(self.il.types) else None
-                    fte = self.il._type_enum(fty)
+                    fty0 = self.il.types[ftype_idx] if 0 <= ftype_idx < len(self.il.types) else None
+                    fty = self._recv_member_ty(td_idx, ty, fty0)
+                    fte = self.il._type_enum(fty if fty is not None else fty0)
                     fkind = 'arr' if fte in (0x1d, 0x14) else (
                         'str' if fte == 0x0e else (
                             'float' if fte in (0x0c, 0x0d) else (
@@ -736,8 +737,9 @@ class _ValuesMixin:
                     return fe
                 if _vt and (disp + 0x10) in chain:
                     fname, ftype_idx = chain[disp + 0x10]
-                    fty = self.il.types[ftype_idx] if 0 <= ftype_idx < len(self.il.types) else None
-                    fte = self.il._type_enum(fty)
+                    fty0 = self.il.types[ftype_idx] if 0 <= ftype_idx < len(self.il.types) else None
+                    fty = self._recv_member_ty(td_idx, ty, fty0)
+                    fte = self.il._type_enum(fty if fty is not None else fty0)
                     fkind = 'arr' if fte in (0x1d, 0x14) else ('obj' if fte >= 0x10 else 'int')
                     if _ptr_base and fte in (0x0c, 0x0d):
                         fkind = 'float'
@@ -1011,6 +1013,100 @@ class _ValuesMixin:
                 if m.name == 'Invoke' and not m.is_static:
                     return mi
         return None
+
+    def _type_param_owners(self, ty, out, depth=0):
+        """Fix 133b: collect the generic-container owner of every VAR in
+        `ty` into `out`; False when an MVAR occurs or a shape is
+        unreadable (the caller then declines)."""
+        if depth > 8 or ty is None or not isinstance(ty, tuple) or len(ty) != 2:
+            return False
+        te = self.il._type_enum(ty)
+        if te == 0x1e:
+            return False
+        if te == 0x13:
+            gi = ty[0]
+            if not (0 <= gi < len(self.meta.generic_parameters)):
+                return False
+            out.add(self.meta.generic_parameters[gi][0])
+            return True
+        if te == 0x15:
+            args = self._generic_class_args(ty)
+            if not args:
+                return False
+            return all(self._type_param_owners(a, out, depth + 1) for a in args)
+        if te in (0x1d, 0x14):
+            return self._type_param_owners(self._elem_type(ty), out, depth + 1)
+        if te in (0x0f, 0x10):
+            return self._type_param_owners(self.il.type_from_ptr(ty[0]), out, depth + 1)
+        return True
+
+    def _recv_member_ty(self, td_idx, recv_ty, fty):
+        """Fix 133b: a member's field type as seen through its receiver.
+
+        Closed field types pass through. An open one (`T[]`) is kept
+        only when all its parameters belong to the receiver typedef's
+        own container: closed through a GENERICINST receiver's
+        arguments, or left in scope for the definition's own `this`.
+        Otherwise None -- the member keeps its name, not a foreign `T`.
+        """
+        try:
+            if fty is None or not self._open_generic(fty):
+                return fty
+            owners = set()
+            if not self._type_param_owners(fty, owners) or not owners:
+                return None
+            gc = self.meta.typedefs[td_idx].generic_container
+            if gc < 0 or owners != {gc}:
+                return None
+            if recv_ty is None or self.il._type_enum(recv_ty) != 0x15:
+                return fty
+            args = self._generic_class_args(recv_ty)
+            if not args or any(a is None for a in args):
+                return None
+            if self.il._type_enum(fty) == 0x1d and not (fty[1] >> 29) & 1:
+                se = self.il._subst_closed(self.il.type_from_ptr(fty[0]), tuple(args), None)
+                row = self._closed_szarray_row(se)
+                if row is None and se is not None and self._is_ref_elem(se):
+                    row = self._closed_szarray_row((0, 0x1c << 16))
+                return row
+            return self.il._subst_closed(fty, tuple(args), None)
+        except Exception:
+            return None
+
+    def _is_ref_elem(self, ty):
+        """Fix 133b: a non-byref reference type (class, string, object,
+        array, class GENERICINST) -- covariant into `object[]`."""
+        if ty is None or (ty[1] >> 29) & 1:
+            return False
+        te = self.il._type_enum(ty)
+        if te in (0x0e, 0x12, 0x1c, 0x1d, 0x14):
+            return True
+        if te == 0x15:
+            return not self._byval_struct(ty)
+        return False
+
+    def _closed_szarray_row(self, elem):
+        """Fix 133b: the binary's non-byref SZARRAY row whose element is
+        structurally `elem` (closed), else None. Index built once."""
+        if elem is None:
+            return None
+        ek = self.il._closed_type_key(elem)
+        if ek is None:
+            return None
+        idx = self.il.__dict__.get('_szarray_by_elem')
+        if idx is None:
+            idx = {}
+            for t in self.il.types:
+                if not t or ((t[1] >> 16) & 0xFF) != 0x1d or (t[1] >> 29) & 1:
+                    continue
+                try:
+                    k = self.il._closed_type_key(self.il.type_from_ptr(t[0]))
+                except Exception:
+                    k = None
+                if k is not None:
+                    idx.setdefault(k, t)
+            self.il.__dict__['_szarray_by_elem'] = idx
+        return idx.get(ek)
 
     def _generic_class_args(self, ty):
         """Concrete Il2CppType arguments of a GENERICINST, if readable."""
