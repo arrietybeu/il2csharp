@@ -1,5 +1,101 @@
 # il2csharp — TODO (open work and historical triage)
 
+## Current work: fixes 126-131 compile-gate slices (2026-10-06, branch chain)
+
+**Status: local branches only, nothing merged/promoted. Goldens and pins
+NOT re-pinned (user call).** Linear chain, each branch on the previous:
+`fix125-compile-gate-scope` -> `fix126-unknown-phi-copies` ->
+`fix127-publicize` -> `fix128-raw-addr` -> `fix129-vtable-usage-decode`
+-> `fix130-init-meta-value` -> `fix131-block-flags`.
+
+Gate (`work/cg5/`, chain through fix 130, `--strict --publicize
+--raw-addr`, 10 groups, 0 failed / 0 fallbacks / 0 type-emit failures,
+11,262 files): **828,571 (r_base) -> 515,786 errors (-312,785, -37.7%)**,
+declaration-tier 1,232 -> 739. Step counts (whole-tree gates):
+cg2 fix 125 727,579; cg3 +fix 126 699,602 (-27,977); cg4 +fix 127
+`--publicize` 633,078 (-66,524); cg4r = cg4 post-processed with the fix
+128 rewrite 554,297 (-78,781, estimate); cg5 real build 515,786 (-38,511
+vs cg4r: CS0103 -15.5k, CS1061 -9.5k, CS0191 -6.7k (readonly drop),
+CS0149 -4.4k, CS1955 -2.6k). Remaining top: CS0103 128k, CS0019 82k,
+CS0266 66k, CS1061 66k, CS0029 52k, CS1503 43k.
+
+1. **Fix 126 -- phi copies never read an unknown register**
+   (`dec/analyze.py` `_unknown_phis`, greatest fixed point): an in-edge
+   whose value is `_unk` or an all-unknown phi gets no copy (`phi = vN;`
+   read a name nothing defines). The phi stays unassigned on that path
+   and the compiler says so (CS0165) only if a read can see it. cg3:
+   CS0103 -24.8k, CS0165 -1.4k. Tests `tests/test_fix126_unknown_phi_copies.py`.
+2. **Fix 127 -- opt-in `--publicize`** (emitter): every member public,
+   fields drop `readonly` (CS0122 87.5k -> 300; CS0191 then 0). Gate mode
+   only; default output byte-identical.
+3. **Fix 128 -- opt-in `--raw-addr`** (`il2cpp/rawaddr.py`): `(byte*)E`
+   outside literals/comments becomes `(byte*)__addr(E)`; `__RawAddr.cs`
+   (internal static unsafe overloads for void*/long/ulong/IntPtr/UIntPtr,
+   `object` throws NotSupportedException) is written per assembly when
+   used. CS0030 112.8k -> 3.5k. Tests `tests/test_fix128_raw_addr.py`.
+4. **Fix 129 -- vtable rows are metadata usages** (`runtime/types.py`
+   `vtable_method`/`slot_max_arity`): usage-6 (MethodRef) rows index
+   methodSpecs (8,846 rows were decoded as MethodDefs; 64 agreed), empty
+   rows (1,523) name the unique instance method carrying that metadata
+   `slot` on the type or an ancestor (0 ambiguous). System.Xml A/B:
+   `/*vtable slot N*/` sites 2,330 -> 100. **129b** (`lifter/calls.py`):
+   a slot declared on the receiver's own generic definition binds class
+   VARs from the receiver's GENERICINST args, so `Comparer<float>.Compare
+   (T, T)` reads XMM1/XMM2 (Computer.ShouldRankBefore). Tests
+   `tests/test_fix129_vtable_usage_decode.py`, `tests/test_game_fix129_generic_slot_args.py`.
+5. **Fix 130 -- the initialize_runtime_metadata jmp thunk returns its
+   slot item** (`lifter/calls.py`; disasm EnumBuilder.GetMembers
+   0x181BD4E80: `lea rcx,[slot]; call 0x180435420; mov rcx,rax; call
+   il2cpp_object_new`): RAX carries the slot expression, so allocations
+   read `new T()` instead of `il2cpp_object_new(objN)`. The name-path
+   `il2cpp_array_new` result now binds one identity via
+   `_array_allocation` (was re-printing `new object[1]` at every use).
+   Test `tests/test_game_fix130_init_meta_value.py` (System.IO.__Error.WinIOError).
+6. **Fix 131 -- per-block condition flags** (`dec/analyze.py`,
+   `lifter/values.py`; branch `fix131-block-flags`): `L.flags` was
+   lifter-global, so a pass-2 block opened with the flags of whichever
+   block executed last (Computer.ShouldRankBefore mi 24622 0x18069C7A0
+   `setg al` printed `return num1 >> 31 > 0` instead of
+   `Compare(...) > 0`). Each block now records its end flags (a jcc
+   stashes the pair it consumed in `L._jcc_flags`); a block restores a
+   pair only when it reads a flag before defining one (`_flags_live_in`,
+   iced `rflags_read`/`rflags_modified`) and every done predecessor
+   agrees (`_flags_key`); entry / orphan blocks start with None. The
+   restored operands are private copies (`_restored_pair`) unless the
+   operand is one whole call (`_top_call`), so a successor's reads never
+   bind a loop-header Expr into the body (KeybindsManager.Update `for (i
+   = 0; i < objN; ...)` with objN assigned inside) while `Compare(...)`
+   still binds once. A register write that kills a carried pair drops
+   it instead of materializing an `object objN = <cond>` twin
+   (`L._carried_flags`, `_kill_stale`); `_kill_stale` also never freezes
+   the `!flags` merge sentinel (its `lhs<0x01>rhs` text became an
+   `object objN = op_Implicit(...)` twin). Without the live-in gate the
+   extra sentinels drew pass-2 phi numbers and shifted clobber
+   placeholders against pass 1 (undeclared `sub_180434660(..., obj36,
+   obj37)` in AudiencePath.DrawCurved).
+   Assembly-CSharp A/B: `unknown == unknown` conditions -111 (now e.g.
+   `realN == 0f`); ShouldRankBefore reads `int num1 = Compare(...); if
+   (num1 != 0) return num1 > 0;` (was an undeclared `num1`). Test
+   `tests/test_game_fix131_block_flags.py`.
+
+Game suite (run in worktrees; `cli_only`, `decl_gate`, `compile_gate`,
+`parallel_build` fail there for path reasons -- relative `testgame`,
+no `final_out/` -- and pass in the main checkout): beyond fix 125's 22
+known failures, fix 126 moves goldens mi 0, 21027, 128953 and pins
+`elemclass::test_unknown_provenance_declines`,
+`iface_param::test_resolved_string_result_null_tests_null`,
+`interface_dispatch` x2, `null_zero::test_object_zero_keeps_zero` --
+reviewed: temp renumbering and dropped unknown copies only. Fix 129 moves
+golden mi 83647 (`type.AssemblyQualifiedName` for a `/*vtable slot 25*/`
+call) and pin `isinst_tail::test_tail_typeof_folds_to_as` (mi 3446 now
+`element.GetCustomAttributes(...) as Attribute[]` and `element.MemberType`
+compares). All need a user-approved re-pin.
+
+Follow-ups seen while landing: CS0019 `object op int` (untyped integer
+temps, 82k); CS0165 phi arms minted under different names; `unknown`
+SIMD lane placeholders (`unpcklps` + `movsd` into Vector3 fields);
+indirect calls `X[0]() /*indirect*/(args)` (CS0149 9.4k).
+
 ## Current work: fix 125 compile-gate first slice (2026-10-05, branch `fix125-compile-gate-scope`)
 
 **Status: on branch, not merged/promoted. Goldens NOT re-pinned (user call).**

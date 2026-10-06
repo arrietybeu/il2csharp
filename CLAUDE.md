@@ -480,7 +480,15 @@ python il2csharp.py <game-dir-or-metadata> -o <outdir> [options]   # or: python 
   --decls-only     signatures only, skip body lifting
   --max-methods N  cap lifted bodies (debug)
   --probe          diagnostics: registrations + modules, no output files
+  --publicize      compile-gate mode (fix 127): every member public, fields
+                   lose `readonly`; default output unchanged
+  --raw-addr       compile-gate mode (fix 128): `(byte*)E` bases route through
+                   a declared `__addr(E)` helper (`__RawAddr.cs` per assembly)
 ```
+
+The two compile-gate flags are opt-in and never part of the promoted tree;
+they exist so the Roslyn gate (`work/cgate/`) measures lifting errors
+instead of accessibility/raw-pointer noise (see `docs/todo.md` top).
 
 Requires `iced-x86` (`pip install iced-x86`). Syntax-check a change with
 `python -c "import compileall,sys; sys.exit(0 if compileall.compile_dir('il2cpp', quiet=1) else 1)"`

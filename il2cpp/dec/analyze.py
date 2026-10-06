@@ -80,6 +80,7 @@ class _AnalyzeMixin:
         def exec_block(b, dry):
             L.out = _Sink(b)
             L.dry = dry
+            L._jcc_flags = None
             carried = jcc_fallthrough_flags.get(b.bid)
             if carried is not None:
                 L.flags, L._flags_mn = carried
@@ -126,6 +127,7 @@ class _AnalyzeMixin:
                     continue
                 if fc == FlowControl.CONDITIONAL_BRANCH and ins.op0_kind == OpKind.NEAR_BRANCH64:
                     lhs, rhs = (L.flags or (Expr('?', None, '?'), Expr('?', None, '?')))
+                    L._jcc_flags = (L.flags, getattr(L, '_flags_mn', None))
                     L._note_use(lhs)
                     L._note_use(rhs)
                     next_bid = bmap.get(ins.next_ip)
@@ -473,6 +475,64 @@ class _AnalyzeMixin:
         L.var_n = 1000
         entry_state = dict(L.regs)
         merge_locs = {}
+        # fix 131: pass-1 twin of the pass-2 flags carry (see there)
+        end_flags1 = {}
+
+        def _flags_key1(fl):
+            if not fl:
+                return None
+            return tuple((e.text if e is not None else None) for e in fl)
+
+        _fl_live = {}
+
+        def _flags_live_in(b):
+            # fix 131: restore a predecessor's pair only into a block that
+            # reads a flag before defining it (`setg`/`jp`/`cmovcc` right
+            # after a jcc split).  A block that rewrites the flags first
+            # never needs them, and handing it the pair anyway exposed the
+            # operands to bounds/use-count readers (KeybindsManager.Update:
+            # a loop body re-read `FOBT.Length` and the bound became a phi).
+            v = _fl_live.get(b.bid)
+            if v is None:
+                v, done = False, 0
+                for ins in b.insns:
+                    if ins.rflags_read & ~done:
+                        v = True
+                        break
+                    done |= ins.rflags_modified
+                _fl_live[b.bid] = v
+            return v
+
+        def _top_call(t):
+            # `recv.M(args)` / `T.M<A, B>(args)`: the whole text is one call
+            t = t.strip() if t else ''
+            if not t.endswith(')') or t[0] in '*(!-~&':
+                return False
+            depth = 0
+            for j in range(len(t) - 1, -1, -1):
+                c = t[j]
+                if c == ')':
+                    depth += 1
+                elif c == '(':
+                    depth -= 1
+                    if depth == 0:
+                        break
+            head = re.sub(r'<[^<>]*>|\[[^\[\]]*\]', '', t[:j])
+            return bool(head) and ' ' not in head and '(' not in head \
+                and (head[-1].isalnum() or head[-1] == '_')
+
+        def _restored_pair(fl):
+            # fix 131: the successor gets private copies of the operands, so
+            # its reads (bounds checks, `jae` after `cmp; jge`) never count
+            # toward binding the predecessor's Expr -- a loop-header bound
+            # bound that way landed in the body (`for (i = 0; i < objN;
+            # ...)` with objN assigned inside).  A whole-call operand stays
+            # shared: re-rendering it would duplicate the call, and binding
+            # it once is the honest render (`int num1 = Compare(...); ...
+            # return num1 > 0;`).
+            return tuple((e if (e is None or _top_call(e.text))
+                          else Expr(e.text, e.ty, e.kind)) for e in fl)
+
         for bid in rpo:
             b = blocks[bid]
             if not b.is_entry and not b.preds and bid not in self._pad_bids:
@@ -539,9 +599,21 @@ class _AnalyzeMixin:
                 # carried TEXT, so which instruction set it is genuinely
                 # unknown -- never inherit some other block's mnemonic
                 L._flags_mn = None
+            if not b.is_entry and preds_done and _flags_live_in(b):
+                _pf = [end_flags1.get(p.bid) for p in preds_done]
+                if all(x is not None for x in _pf) \
+                        and len({_flags_key1(x[0]) for x in _pf}) == 1:
+                    L.flags = _restored_pair(_pf[0][0])
+                    _mns = {x[1] for x in _pf}
+                    L._flags_mn = next(iter(_mns)) if len(_mns) == 1 else None
+            L._carried_flags = L.flags
             narrow_null_edge(b, preds_done)
             exec_block(b, dry=True)
             b.end_state = dict(L.regs)
+            _fl, _fmn = L.flags, getattr(L, '_flags_mn', None)
+            if _fl is None and getattr(L, '_jcc_flags', None) is not None:
+                _fl, _fmn = L._jcc_flags
+            end_flags1[b.bid] = (_fl, _fmn)
             ft = flags_text()
             if ft:
                 b.end_state[FLAGS] = Expr('%s%s' % ft, None, '?')
@@ -556,6 +628,19 @@ class _AnalyzeMixin:
         L.var_n = 1000
         entry_state = dict(L.regs)
         phi: Dict[Tuple[int, str], str] = {}
+        # fix 131: the flags pair each pass-2 block ended with.  `L.flags`
+        # is lifter-global, so without a per-edge restore a block opened
+        # with whatever block rpo executed last -- a `setg al` after
+        # `test eax,eax; jne` read a sibling path's `shr eax,1Fh`
+        # (Computer.ShouldRankBefore 0x18069C7A0: `return num1 >> 31 > 0`
+        # for `return Compare(a, b) > 0`).
+        end_flags = {}
+
+        def _flags_key(fl):
+            if not fl:
+                return None
+            return tuple((e.text if e is not None else None) for e in fl)
+
         for bid in rpo:
             b = blocks[bid]
             if not b.is_entry and not b.preds and bid not in self._pad_bids:
@@ -675,12 +760,30 @@ class _AnalyzeMixin:
                     if pre:
                         self.phi_pre.setdefault(bid, []).extend(pre)
                 L.regs = L._new_regs(merged)
+            # fix 131: open the block with its predecessors' flags when
+            # every predecessor already ran in this pass and they agree;
+            # an entry/orphan block has none.  Disagreeing or back-edge
+            # predecessors keep the legacy carry (follow-up).
+            if b.is_entry or not preds_done:
+                L.flags, L._flags_mn = None, None
+            elif _flags_live_in(b):
+                _pf = [end_flags.get(p.bid) for p in preds_done]
+                if all(x is not None for x in _pf) \
+                        and len({_flags_key(x[0]) for x in _pf}) == 1:
+                    L.flags = _restored_pair(_pf[0][0])
+                    _mns = {x[1] for x in _pf}
+                    L._flags_mn = next(iter(_mns)) if len(_mns) == 1 else None
+            L._carried_flags = L.flags
             ft = flags_text()
             if ft:
                 L.regs[FLAGS] = Expr('%s%s' % ft, None, '?')
             narrow_null_edge(b, preds_done)
             exec_block(b, dry=False)
             b.end_state = dict(L.regs)
+            _fl, _fmn = L.flags, getattr(L, '_flags_mn', None)
+            if _fl is None and getattr(L, '_jcc_flags', None) is not None:
+                _fl, _fmn = L._jcc_flags
+            end_flags[b.bid] = (_fl, _fmn)
 
         # ---- SSA destruction: materialize each phi as a copy on its in-edges
         self.phi_names = set(phi.values())

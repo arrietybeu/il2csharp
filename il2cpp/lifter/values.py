@@ -521,7 +521,22 @@ class _ValuesMixin:
             # settles the token boundary on actual substring hits
             if e is None or not e.text or e.text == '?' or lv not in e.text:
                 continue
+            if r == '!flags':
+                # fix 131: the cross-block flags sentinel is a merge token
+                # (`lhs<0x01>rhs`), not a value; freezing it emitted an
+                # `object objN = <cond operand>` twin. The pair itself is
+                # handled below.
+                continue
             self.regs[r] = self._kill_one(e, lv, seen)
+        if self.flags is not None \
+                and self.flags is getattr(self, '_carried_flags', None):
+            # fix 131: a pair inherited from the predecessor's jcc was
+            # already rendered there; freezing it here would evaluate its
+            # text a second time (`object objN = call(...)` twins). The
+            # later reader, if any, sees no flags -- the honest unknown.
+            _lhs, _rhs = self.flags
+            if any(x is not None and x.text and lv in x.text for x in (_lhs, _rhs)):
+                self.flags = None
         if self.flags is not None:
             lhs, rhs = self.flags
             nl = lhs if (lhs is None or not lhs.text or lv not in lhs.text) \
