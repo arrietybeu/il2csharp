@@ -103,7 +103,14 @@ unproven shape keeps today's spelling; raw is always honest.
   without an explicit user call. Stash-prove-clean before attributing a
   break to your change.
 
-## In flight (2026-10-04)
+## In flight (2026-10-06)
+
+- Compile-gate slices 125-131 sit on a linear chain of local branches
+  (`fix125-compile-gate-scope` -> `fix126-*` ... -> `fix131-block-flags`),
+  none merged, promoted or re-pinned. Real Roslyn gate (`--strict
+  --publicize --raw-addr`, chain through fix 130): 828,571 -> 515,786
+  errors. Goldens/pins that moved are listed (with review notes) at the
+  top of `docs/todo.md`; they need a user-approved re-pin before merge.
 
 - Fix 124 (wide raw stores byte-address their displacement) is complete
   on branch `fix124-wide-store-byte-offsets`, not merged or promoted:

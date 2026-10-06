@@ -503,6 +503,18 @@ class _AnalyzeMixin:
                 _fl_live[b.bid] = v
             return v
 
+        _fl_touch = {}
+
+        def _flags_touched(b):
+            # any flag write, or a call (the callee clobbers them)
+            v = _fl_touch.get(b.bid)
+            if v is None:
+                v = any(ins.rflags_modified or ins.flow_control in (
+                    FlowControl.CALL, FlowControl.INDIRECT_CALL)
+                    for ins in b.insns)
+                _fl_touch[b.bid] = v
+            return v
+
         def _top_call(t):
             # `recv.M(args)` / `T.M<A, B>(args)`: the whole text is one call
             t = t.strip() if t else ''
@@ -529,7 +541,11 @@ class _AnalyzeMixin:
             # ...)` with objN assigned inside).  A whole-call operand stays
             # shared: re-rendering it would duplicate the call, and binding
             # it once is the honest render (`int num1 = Compare(...); ...
-            # return num1 > 0;`).
+            # return num1 > 0;`).  Predecessors agreeing on "no pair"
+            # (math.uint2(float): both arms of `comiss; jbe` end without a
+            # flag write) restore None.
+            if not fl:
+                return None
             return tuple((e if (e is None or _top_call(e.text))
                           else Expr(e.text, e.ty, e.kind)) for e in fl)
 
@@ -599,13 +615,16 @@ class _AnalyzeMixin:
                 # carried TEXT, so which instruction set it is genuinely
                 # unknown -- never inherit some other block's mnemonic
                 L._flags_mn = None
-            if not b.is_entry and preds_done and _flags_live_in(b):
+            _thru = None
+            if not b.is_entry and preds_done:
                 _pf = [end_flags1.get(p.bid) for p in preds_done]
                 if all(x is not None for x in _pf) \
                         and len({_flags_key1(x[0]) for x in _pf}) == 1:
-                    L.flags = _restored_pair(_pf[0][0])
                     _mns = {x[1] for x in _pf}
-                    L._flags_mn = next(iter(_mns)) if len(_mns) == 1 else None
+                    _thru = (_pf[0][0], next(iter(_mns)) if len(_mns) == 1 else None)
+                    if _flags_live_in(b):
+                        L.flags = _restored_pair(_thru[0])
+                        L._flags_mn = _thru[1]
             L._carried_flags = L.flags
             narrow_null_edge(b, preds_done)
             exec_block(b, dry=True)
@@ -613,6 +632,11 @@ class _AnalyzeMixin:
             _fl, _fmn = L.flags, getattr(L, '_flags_mn', None)
             if _fl is None and getattr(L, '_jcc_flags', None) is not None:
                 _fl, _fmn = L._jcc_flags
+            if _thru is not None and not _flags_touched(b):
+                # fix 131: a block that never writes the flags passes its
+                # predecessors' pair through (math.uint2(float): both arms
+                # of `comiss; jbe` join on a second `jbe`)
+                _fl, _fmn = _thru
             end_flags1[b.bid] = (_fl, _fmn)
             ft = flags_text()
             if ft:
@@ -764,15 +788,18 @@ class _AnalyzeMixin:
             # every predecessor already ran in this pass and they agree;
             # an entry/orphan block has none.  Disagreeing or back-edge
             # predecessors keep the legacy carry (follow-up).
+            _thru = None
             if b.is_entry or not preds_done:
                 L.flags, L._flags_mn = None, None
-            elif _flags_live_in(b):
+            else:
                 _pf = [end_flags.get(p.bid) for p in preds_done]
                 if all(x is not None for x in _pf) \
                         and len({_flags_key(x[0]) for x in _pf}) == 1:
-                    L.flags = _restored_pair(_pf[0][0])
                     _mns = {x[1] for x in _pf}
-                    L._flags_mn = next(iter(_mns)) if len(_mns) == 1 else None
+                    _thru = (_pf[0][0], next(iter(_mns)) if len(_mns) == 1 else None)
+                    if _flags_live_in(b):
+                        L.flags = _restored_pair(_thru[0])
+                        L._flags_mn = _thru[1]
             L._carried_flags = L.flags
             ft = flags_text()
             if ft:
@@ -783,6 +810,8 @@ class _AnalyzeMixin:
             _fl, _fmn = L.flags, getattr(L, '_flags_mn', None)
             if _fl is None and getattr(L, '_jcc_flags', None) is not None:
                 _fl, _fmn = L._jcc_flags
+            if _thru is not None and not _flags_touched(b):
+                _fl, _fmn = _thru
             end_flags[b.bid] = (_fl, _fmn)
 
         # ---- SSA destruction: materialize each phi as a copy on its in-edges

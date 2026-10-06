@@ -54,6 +54,17 @@ def test_flags_phi_keeps_pass_numbering(game_decompiler):
     assert '(object[,])sub_180434660(typeof(object[,]), &vector31);' in text
 
 
+def test_flagless_arms_pass_the_pair_through(game_decompiler):
+    # math.uint2(float) 0x182701340: `comiss xmm1,xmm0; jbe A` -> both arms
+    # (`cvttss2si; jmp J` / `cvttss2si`) write no flags -> `J: ...; jbe`
+    # re-reads the comiss. All predecessors agreeing on "no pair" used to
+    # crash the restore (TypeError -> unstructured `if (? <= ?) goto`).
+    il, dec = game_decompiler
+    text = _lift(il, dec, 68399, 'uint2')
+    assert 'if (0f <= v)' in text
+    assert '?' not in text and 'unknown' not in text
+
+
 def test_restored_operands_do_not_bind_the_loop_bound(game_decompiler):
     # 0x18054786C `cmp ebx,[rsi+18h]; jge exit` then `movsxd; jae throw`
     # (the bounds check reuses the loop test). The body's read of the
