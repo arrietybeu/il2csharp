@@ -98,7 +98,16 @@ reviewed: temp renumbering and dropped unknown copies only. Fix 129 moves
 golden mi 83647 (`type.AssemblyQualifiedName` for a `/*vtable slot 25*/`
 call) and pin `isinst_tail::test_tail_typeof_folds_to_as` (mi 3446 now
 `element.GetCustomAttributes(...) as Attribute[]` and `element.MemberType`
-compares). All need a user-approved re-pin.
+compares). Fix 130 moves pins
+`review87_eh_helpers::test_pad_less_caller_renders_the_proven_helper_as_a_throw`
+(mi 106196 now `object obj1 = new System.NotImplementedException(); throw
+obj1;` -- the test looks for `obj1 = il2cpp_object_new(`) and
+`review88_eh_helper_set::test_metadata_init_is_not_flattened_to_a_throw`
+(mi 77946 GetTraceEventType no longer prints an
+`il2cpp_codegen_initialize_runtime_metadata(` statement; still no bare
+`throw;` and still `throw obj3;` of `new ArgumentOutOfRangeException("level")`).
+wt131 game suite: 39 failed = wt129's 37 + those two. All need a
+user-approved re-pin.
 
 Follow-ups seen while landing: CS0019 `object op int` (untyped integer
 temps, 82k); CS0165 phi arms minted under different names; `unknown`
