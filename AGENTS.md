@@ -105,10 +105,11 @@ unproven shape keeps today's spelling; raw is always honest.
 
 ## In flight (2026-10-06)
 
-- Compile-gate slices 125-133 sit on a linear chain of local branches
-  (`fix125-compile-gate-scope` -> `fix126-*` ... -> `fix132-entry-live-args`
-  -> `fix133-generic-class-layout`), none merged, promoted or re-pinned.
-  Real Roslyn gate (`--strict --publicize --raw-addr`, chain through fix
+- Compile-gate slices 125-133 are fast-forwarded onto `main` and pushed
+  (2026-10-06, `8b2d724`, user call: one branch, no split branches or
+  worktrees -- work each slice directly on `main` in the main checkout,
+  one slice at a time). `final_out/` NOT promoted, goldens/pins NOT
+  re-pinned. Real Roslyn gate (`--strict --publicize --raw-addr`, chain through fix
   133, `work/cg8/b6`): 828,571 -> 501,046 errors (-39.5%). Game suite:
   41 moved goldens/pins, all reviewed in the top of `docs/todo.md`; they
   need a user-approved re-pin before merge. Current state, the standard

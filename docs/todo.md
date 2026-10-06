@@ -2,8 +2,10 @@
 
 ## Current work: fixes 126-133 compile-gate slices (2026-10-06, branch chain)
 
-**Status: local branches only, nothing merged/promoted. Goldens and pins
-NOT re-pinned (user call).** Linear chain, each branch on the previous:
+**Status: LANDED on `main` and pushed 2026-10-06 (`8b2d724`, fast-forward;
+user call -- one branch, no split branches/worktrees from here on).
+`final_out/` not promoted; goldens and pins NOT re-pinned (user call).**
+Historical chain (branches deleted after the fast-forward):
 `fix125-compile-gate-scope` -> `fix126-unknown-phi-copies` ->
 `fix127-publicize` -> `fix128-raw-addr` -> `fix129-vtable-usage-decode`
 -> `fix130-init-meta-value` -> `fix131-block-flags` ->
