@@ -1,0 +1,68 @@
+{
+  "format": 1,
+  "restore": {
+    "E:\\Project\\Tool\\il2csharp\\validation_reports\\review80\\csharp_smoke\\UnsafeSmoke\\UnsafeSmoke.csproj": {}
+  },
+  "projects": {
+    "E:\\Project\\Tool\\il2csharp\\validation_reports\\review80\\csharp_smoke\\UnsafeSmoke\\UnsafeSmoke.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "E:\\Project\\Tool\\il2csharp\\validation_reports\\review80\\csharp_smoke\\UnsafeSmoke\\UnsafeSmoke.csproj",
+        "projectName": "UnsafeSmoke",
+        "projectPath": "E:\\Project\\Tool\\il2csharp\\validation_reports\\review80\\csharp_smoke\\UnsafeSmoke\\UnsafeSmoke.csproj",
+        "packagesPath": "C:\\Users\\admin\\.nuget\\packages\\",
+        "outputPath": "E:\\Project\\Tool\\il2csharp\\validation_reports\\review80\\csharp_smoke\\UnsafeSmoke\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "E:\\Project\\Tool\\il2csharp\\validation_reports\\review80\\csharp_smoke\\NuGet.Config",
+          "C:\\Users\\admin\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "netstandard2.1"
+        ],
+        "frameworks": {
+          "netstandard2.1": {
+            "framework": "netstandard2.1",
+            "targetAlias": "netstandard2.1",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "10.0.400"
+      },
+      "frameworks": {
+        "netstandard2.1": {
+          "framework": "netstandard2.1",
+          "targetAlias": "netstandard2.1",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "NETStandard.Library": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.401\\RuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

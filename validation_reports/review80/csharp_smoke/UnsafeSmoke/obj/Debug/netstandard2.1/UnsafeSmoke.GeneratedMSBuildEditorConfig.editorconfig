@@ -1,0 +1,8 @@
+is_global = true
+build_property.RootNamespace = UnsafeSmoke
+build_property.ProjectDir = E:\Project\Tool\il2csharp\validation_reports\review80\csharp_smoke\UnsafeSmoke\
+build_property.EnableComHosting = 
+build_property.EnableGeneratedComInterfaceComImportInterop = 
+build_property.CsWinRTUseWindowsUIXamlProjections = false
+build_property.EffectiveAnalysisLevelStyle = 
+build_property.EnableCodeStyleSeverity = 
